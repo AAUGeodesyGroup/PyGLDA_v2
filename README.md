@@ -35,7 +35,7 @@ PyGLDA_v2/
 
 PyGLDA v2 requires two minimal modifications to the WaterGAP 2.2e source, both confined to a single file each. All other WaterGAP 2.2e files remain unmodified.
 
-1. **`src_GHM/ReWaterGAP/model/land_surfacewater_fraction.py`** — A new `update_setting()` function was added to allow PyGLDA to refresh WaterGAP's run-mode globals (`anthropogenic`, `reservoir_operation`) between ensemble iterations without reloading the module.
+1. **`src_GHM/ReWaterGAP/model/land_surfacewater_fraction.py`** — A new `update_setting()` function was added to allow PyGLDA to refresh WaterGAP's configuration with new setting file.
 
 2. **`src_GHM/ReWaterGAP/controller/configuration_module.py`** — Rewritten to expose WaterGAP's configuration parameters to PyGLDA's assimilation interface. The original file is preserved in the git history.
 
