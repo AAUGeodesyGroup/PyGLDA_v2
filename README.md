@@ -9,7 +9,7 @@ PyGLDA v2 extends the original PyGLDA system by coupling it with the [WaterGAP 2
 ### Key features
 
 - Ensemble Kalman Filter (EnKF) data assimilation
-- Integration with WaterGAP 2.2e hydrological model (kept as an untouched submodule)
+- Integration with WaterGAP 2.2e hydrological model
 - Support for GRACE mascon and spherical harmonic solutions
 - MPI-based parallelism for ensemble runs
 - Basin-averaged time series extraction and post-processing
@@ -19,7 +19,7 @@ PyGLDA v2 extends the original PyGLDA system by coupling it with the [WaterGAP 2
 ```
 PyGLDA_v2/
 ├── src_GHM/
-│   ├── ReWaterGAP/        # Original WaterGAP 2.2e (untouched)
+│   ├── ReWaterGAP/        # WaterGAP 2.2e (see modifications note below)
 │   ├── Extension/         # PyGLDA extensions to WaterGAP
 │   └── Interface/         # Bridge between PyGLDA and WaterGAP
 ├── src_DA/                # Data assimilation algorithms (EnKF, EnSQRA, etc.)
@@ -31,6 +31,14 @@ PyGLDA_v2/
 └── settings/              # Configuration files
 ```
 
+## Modifications to WaterGAP 2.2e
+
+PyGLDA v2 requires two minimal modifications to the WaterGAP 2.2e source, both confined to a single file each. All other WaterGAP 2.2e files remain unmodified.
+
+1. **`src_GHM/ReWaterGAP/model/land_surfacewater_fraction.py`** — A new `update_setting()` function was added to allow PyGLDA to refresh WaterGAP's run-mode globals (`anthropogenic`, `reservoir_operation`) between ensemble iterations without reloading the module.
+
+2. **`src_GHM/ReWaterGAP/controller/configuration_module.py`** — Rewritten to expose WaterGAP's configuration parameters to PyGLDA's assimilation interface. The original file is preserved in the git history.
+
 ## Requirements
 
 - Python >= 3.8
@@ -40,7 +48,26 @@ PyGLDA_v2/
 
 ## Installation
 
-*To be added.*
+### 1. Clone this repository
+
+```bash
+git clone https://github.com/AAUGeodesyGroup/PyGLDA_v2.git
+cd PyGLDA_v2
+```
+
+### 2. Download WaterGAP data files
+
+The `src_GHM/ReWaterGAP/` directory in this repository contains only the **source code** of WaterGAP 2.2e. Large input data files (`.nc`, `.h5`, etc.) required to run the model are not included due to their size.
+
+You must download the complete WaterGAP 2.2e package separately and copy the missing data files into the corresponding directories under `src_GHM/ReWaterGAP/`. Do **not** overwrite the Python source files, as they contain the PyGLDA-specific modifications described above.
+
+- ReWaterGAP releases: https://github.com/HydrologyFrankfurt/ReWaterGAP/releases
+
+### 3. Install Python dependencies
+
+```bash
+pip install numpy scipy xarray h5py pandas tqdm termcolor mpi4py
+```
 
 ## Usage
 
@@ -48,7 +75,7 @@ PyGLDA_v2/
 
 ## Acknowledgements
 
-PyGLDA v2 is built upon the **WaterGAP 2.2e** global hydrological model, developed by the Hydrology Frankfurt group at Goethe University Frankfurt. WaterGAP 2.2e is used as the forward model in the data assimilation system and is included in this repository in its original, unmodified form.
+PyGLDA v2 is built upon the **WaterGAP 2.2e** global hydrological model, developed by the Hydrology Frankfurt group at Goethe University Frankfurt. WaterGAP 2.2e is used as the forward model in the data assimilation system.
 
 - WaterGAP project webpage: https://www.watergap.de
 - ReWaterGAP (Python implementation): https://github.com/HydrologyFrankfurt/ReWaterGAP
