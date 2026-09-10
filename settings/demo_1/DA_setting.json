@@ -1,0 +1,47 @@
+{
+    "basic": {
+        "fromdate": "2002-01-01",
+        "todate": "2005-04-30",
+        "ensemble": 4,
+        "case": "test",
+        "basin": "Brahmaputra",
+        "basin_shp": "/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp",
+        "basin_mask": "/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5",
+        "res_permanent": "/media/user/My Book/Fan/WaterGap/Res",
+        "OL_output_temp_dir": "/media/user/My Book/Fan/WaterGap/OL_output",
+        "DA_output_temp_dir": "/media/user/My Book/Fan/WaterGap/DA_output",
+        "Ensemble_ini_dir": "/media/user/My Book/Fan/WaterGap/Ensemble_Initialization",
+        "Ensemble_input_dir": "/media/user/My Book/Fan/WaterGap/Ensemble_input",
+        "Auxiliary_dir": "/media/user/My Book/Fan/WaterGap/Auxiliary"
+    },
+    "obs": {
+        "name": "src_OBS",
+        "dir": "/media/user/My Book/Fan/WaterGap/GRACE/obs",
+        "GRACE": {
+            "EWH_grid_dir": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon",
+            "cov_dir": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/sample_DDK3",
+            "preprocess_res": "/media/user/My Book/Fan/WaterGap/GRACE/output",
+            "OL_mean": "/media/user/My Book/Fan/WaterGap/GRACE/OLmean",
+            "aux_for_time_epochs": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon",
+            "kind": "Mascon_monthly"
+        }
+    },
+    "model": {
+        "name": "WaterGap",
+        "layer": {
+            "groundwstor": true,
+            "soilmoist": true,
+            "swe": true,
+            "locallakestor": false,
+            "localwetlandstor": false,
+            "globallakestor": false,
+            "globalwetlandstor": false,
+            "riverstor": false,
+            "reservoirstor": false,
+            "canopystor": false
+        }
+    },
+    "method": {
+        "fusion_method": "EnKF_v0"
+    }
+}

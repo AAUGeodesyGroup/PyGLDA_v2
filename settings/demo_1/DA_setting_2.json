@@ -1,0 +1,41 @@
+{
+    "basic": {
+        "fromdate": "2012-03-01",
+        "todate": "2018-12-31",
+        "basin": "Europe",
+        "basin_shp": "../data/basin/shp/Europe/Grid_3/Europe_subbasins.shp",
+        "NaNmaskStatesDir": "/work/data_for_w3/w3ra/states_sample",
+        "ensemble": 30,
+        "layer": {
+            "groundwstor": true,
+            "soilmoist": true,
+            "locallakestor": true,
+            "localwetlandstor": true,
+            "globallakestor": true,
+            "globalwetlandstor": true,
+            "riverstor": true,
+            "reservoirstor": true,
+            "swe": true,
+            "canopystor": true
+
+        }
+    },
+    "obs": {
+        "name": "GRACE",
+        "dir": "/media/user/My Book/Fan/WaterGap/GRACE/obs",
+        "GRACE": {
+            "EWH_grid_dir": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon",
+            "cov_dir": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/sample_DDK3",
+            "preprocess_res": "/media/user/My Book/Fan/WaterGap/GRACE/output",
+            "OL_mean": "/media/user/My Book/Fan/WaterGap/GRACE/OLmean",
+            "aux_for_time_epochs": "/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon",
+            "kind": "Mascon_monthly"
+        }
+    },
+    "model": {
+        "name": "w3ra_v0"
+    },
+    "method": {
+        "fusion_method": "EnKF_v0"
+    }
+}

@@ -1,0 +1,299 @@
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+# from OpenLoop import OpenLoop
+# from src_OBS.prepare_GRACE import GRACE_preparation
+from src_DA.configure_DA import config_DA
+# from src_OBS.GRACE_perturbation_old import GRACE_perturbed_obs
+from src_DA.ObsDesignMatrix import DM_basin_average
+import h5py
+import numpy as np
+import sys
+import json
+import xarray as xr
+from src_FlowControl.OpenLoop import OpenLoop
+from src_GHM.Interface.DailyStepRun import DailyModelRun
+from src_auxiliary.shp2mask import load_mask
+from src_DA.ExtractStates import EnsStates
+from src_auxiliary.banner import print_pyglda_banner
+
+
+class ensemble_model_daily_step(OpenLoop):
+    """
+    This can only be used for model resume mode
+    """
+
+    def __init__(self, configDA: config_DA, setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/',
+                 ensemble_id: int = 3):
+        case = configDA.basic.case
+        super().__init__(setting_dir=setting_dir, case=case, ensemble_id=ensemble_id)
+
+        self.configDA = configDA
+
+        self.__internal_configuration()
+
+        box_crop, _ = load_mask(mask_path=configDA.basic.basin_mask)
+
+        self.__model_instance = DailyModelRun(is_crop_save=True,
+                                              **box_crop)  # this is produced based on the CM configuration.
+        pass
+
+    def __internal_configuration(self):
+        """This is very important! All the configuration has been done here so that the others do not need to
+        configure the CM again"""
+        configDA = self.configDA
+        self.configure_time(begin_time=configDA.basic.fromdate, end_time=configDA.basic.todate)
+
+        pp = Path(configDA.basic.DA_output_temp_dir) / configDA.basic.case
+        pp.mkdir(parents=False, exist_ok=True)
+        self.configure_Ens_output(output_dir=pp)
+        self.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
+        self.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
+                                      read_init_dir=configDA.basic.Ensemble_ini_dir)
+
+        pass
+
+    def get_model_instance(self):
+        return self.__model_instance
+
+
+class DA_GRACE:
+
+    def __init__(self, case='test', setting_dir='../settings/DA_local', ens_size=3):
+        self.ens_size = ens_size
+        self.case = case
+        self.setting_dir = Path(setting_dir)
+        dp_dir = self.setting_dir / 'DA_setting.json'
+        self.configDA = config_DA.loadjson(dp_dir).process()
+        pass
+
+    def configure_setting(self, ens_size, case_name, basin_name, basin_dir):
+        self.configDA.basic.ensemble = ens_size
+        self.configDA.basic.case = case_name
+        self.configDA.basic.basin = basin_name
+        self.configDA.basic.basin_shp = str(Path(basin_dir) / 'shp' / basin_name / ('%s.shp' % basin_name))
+        self.configDA.basic.basin_mask = str(Path(basin_dir) / 'mask' / basin_name / ('%s_res_0.5.h5' % basin_name))
+        return self
+
+    def configure_date(self, begin_date="2002-01-01", end_date='2005-04-30'):
+        self.configDA.basic.fromdate = begin_date
+        self.configDA.basic.todate = end_date
+        return self
+
+    def save_configuration(self):
+        self.configDA.save_json(save_path=Path(self.setting_dir) / 'DA_setting.json')
+        pass
+
+    def reload_setting(self):
+        dp_dir = self.setting_dir / 'DA_setting.json'
+        self.configDA = config_DA.loadjson(dp_dir).process()
+        pass
+
+    def gather_OLmean(self):
+        """gather the OL mean to be reduced from GRACE to acquire the TWS anomaly"""
+        # TODO: this is obs-specific and one should think about how to compute the mean. from DA or OL?
+
+        self.start_date = np.datetime64(self.configDA.basic.fromdate)
+        self.end_date = np.datetime64(self.configDA.basic.todate)
+
+        # getting time range from time input (including the first day).
+        timerange_main = round((self.end_date - self.start_date + 1) / np.timedelta64(1, 'D'))
+
+        ens_TWS = []
+        for ens_id in range(self.configDA.basic.ensemble + 1):
+            ens_dir = Path(self.configDA.basic.res_permanent) / self.configDA.basic.case / 'OL' / ('Ens_%s' % ens_id)
+            mm = h5py.File(str(ens_dir / 'basin_ts_OL.h5'), 'r')['tws']
+            # assert len(mm['basin']) == timerange_main, 'Temporal mean inconsistency!'
+            subbasin_num = len(list(mm.keys())) - 1
+
+            basin_tws = []
+            for subbasin in range(1, subbasin_num + 1):
+                nn = mm['sub_basin_%s' % subbasin][:]
+
+                tws_temporal_mean = np.mean(nn)
+
+                basin_tws.append(tws_temporal_mean)
+
+                pass
+
+            ens_TWS.append(basin_tws)
+
+        ens_TWS = np.array(ens_TWS)
+
+        mean_0 = ens_TWS[0]
+        mean_1 = np.mean(ens_TWS[1:], axis=0)
+
+        fn = Path(self.configDA.obs.GRACE['OL_mean']) / (
+                '%s_%s.hdf5' % (self.configDA.basic.case, self.configDA.basic.basin))
+        ww = h5py.File(fn, 'w')
+        ww.create_dataset(data=mean_0, name='mean_unperturbed')
+        ww.create_dataset(data=mean_1, name='mean_ensemble')
+        ww.close()
+
+        pass
+
+    def prepare_design_matrix(self):
+        dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)
+        dm.configure_mask(mask_path=self.configDA.basic.basin_mask)
+        dm.vertical_aggregation().horizontal_aggregation()
+        # dm.saveDM(out_path=)
+        self.dm_included = dm
+
+        dm2 = DM_basin_average(layer=self.configDA.model.layer, is_residual=True)
+
+        dm2.configure_mask(mask_path=self.configDA.basic.basin_mask)
+        dm2.vertical_aggregation().horizontal_aggregation()
+        # dm.saveDM(out_path=)
+        self.dm_excluded = dm2
+        pass
+
+    def generate_perturbed_GRACE_obs(self):
+        from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_GRACE_SH_monthly, aux_GRACE_mascon_monthly, \
+            aux_ESM3_5daily
+        from src_OBS.GRACE_perturbation import GRACE_perturbed_obs
+
+        configDA = self.configDA
+        begin_day = configDA.basic.fromdate
+        end_day = configDA.basic.todate
+
+        ob = GRACE_perturbed_obs(ens=configDA.basic.ensemble, basin_name=configDA.basic.basin)
+        ob.configure_dir(input_dir=configDA.obs.GRACE['preprocess_res'], obs_dir=configDA.obs.dir)
+
+        if configDA.obs.GRACE['kind'] == 'SH_monthly':
+            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
+            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
+            obs_aux = aux_GRACE_SH_monthly().setTimeReference(month_begin=t1, month_end=t2,
+                                                              dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        elif configDA.obs.GRACE['kind'] == 'ESA_SING':
+            obs_aux = aux_ESAsing_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                            dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        elif configDA.obs.GRACE['kind'] == 'ESA_SING_ESM3':
+            obs_aux = aux_ESM3_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                         dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+
+        elif configDA.obs.GRACE['kind'] == 'Mascon_monthly':
+            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
+            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
+            obs_aux = aux_GRACE_mascon_monthly().setTimeReference(month_begin=t1, month_end=t2,
+                                                                  dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+
+        ob.configure_obs_aux(obs_aux=obs_aux)
+        ob.perturb_TWS().remove_temporal_mean()
+        fn = Path(configDA.obs.GRACE['OL_mean']) / ('%s_%s.hdf5' % (configDA.basic.case, configDA.basic.basin))
+        ob.add_temporal_mean(fn=str(fn))
+        ob.save()
+
+        pass
+
+    def run_DA(self, rank: int):
+        """The main entrance to the data assimilation experiment"""
+        import json
+        from src_DA.observations import GRACE_obs
+        from src_DA.EnKF import EnKF, EnKF_localization_v1, EnKF_localization_v2, EnKF_domain_localization
+        # from src_DA.EnSQRA import EnSQRA, EnSQRA_V2
+
+        if rank != 1:
+            log_dir = "./parallel_logs"
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, f"rank_{rank}.log")
+            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
+            # sys.stdout = TqdmLogFilter(log_path)
+            sys.stderr = sys.stdout
+
+        # print('\n================ Configure DA experiment ===================')
+
+        '''configure DA'''
+        configDA = self.configDA
+
+        '''configure model'''
+        model_instance = ensemble_model_daily_step(configDA=self.configDA, setting_dir=str(self.setting_dir),
+                                                   ensemble_id=rank).get_model_instance()
+
+        '''obtain the GRACE observation'''
+        gr = GRACE_obs(basin=self.configDA.basic.basin, dir_obs=configDA.obs.dir, ens_id=rank)
+
+        '''states extract operator'''
+        sv_included = EnsStates(DM=self.dm_included, configDA=configDA, ensemble_id=rank)
+        sv_excluded = EnsStates(DM=self.dm_excluded, configDA=configDA, ensemble_id=rank)
+
+        '''DA experiment'''
+        # # da = DataAssimilation(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = DataAssimilation_monthly(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        da = EnKF(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
+        # # da = EnSQRA(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = EnSQRA_V2(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = EnKF_localization_v1(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = EnKF_domain_localization(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = EnKF_localization_v2(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        # # da = DataAssimilation_monthlymean_dailyupdate(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        da.configure_design_matrix(DM=self.dm_included)
+        #
+        '''running with MPI parallelization'''
+        print('User case: %s' % self.case)
+        print()
+        da.run_mpi()
+
+        pass
+
+
+def demo1():
+    da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
+    da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',
+                         basin_dir='/media/user/My Book/Fan/WaterGap/Basin')
+    da.configure_date(begin_date='2002-01-01', end_date='2005-04-30')
+    da.save_configuration()
+    da.reload_setting()
+
+    da.prepare_design_matrix()
+
+    da.gather_OLmean()
+
+    da.generate_perturbed_GRACE_obs()
+    pass
+
+
+def demo2():
+    from mpi4py import MPI
+    """Parallel execution using MPI. Each rank will have its own log file."""
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    # if rank != 0:
+    #     log_dir = "./parallel_logs"
+    #     os.makedirs(log_dir, exist_ok=True)
+    #
+    #     log_path = os.path.join(log_dir, f"rank_{rank}.log")
+    #
+    #     sys.stdout = open(log_path, 'w', encoding='utf-8')
+    #     # sys.stdout = TqdmLogFilter(log_path)
+    #     sys.stderr = sys.stdout
+
+    if rank == 0:
+        print_pyglda_banner()
+        from misc.time_checker_and_ascii_image import check_time
+        pass
+    # rank=1
+
+    da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
+    da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',
+                         basin_dir='/media/user/My Book/Fan/WaterGap/Basin')
+    da.configure_date(begin_date='2002-01-01', end_date='2005-04-30')
+    # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
+    if rank == 0:
+        da.save_configuration()
+    comm.barrier()
+
+    da.reload_setting()
+
+    if rank == 0:
+        da.gather_OLmean()
+    comm.barrier()
+
+    da.prepare_design_matrix()
+
+    da.run_DA(rank=rank)
+
+
+if __name__ == '__main__':
+    demo2()

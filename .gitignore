@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyCharm / IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+temp/
+parallel_logs/
+settings/*.json
+
+# NetCDF / HDF / large data files
+*.nc
+*.h5
+*.hdf5
+*.h5df
+*.mat
+*.npy
+*.npz
+*.zarr
+
+# Logs
+*.log
+
+# MPI output
+*.out
+*.err
