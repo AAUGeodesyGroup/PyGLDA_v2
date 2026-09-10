@@ -29,8 +29,6 @@ Thumbs.db
 
 # Project-specific
 temp/
-parallel_logs/
-settings/*.json
 
 # NetCDF / HDF / large data files
 *.nc
