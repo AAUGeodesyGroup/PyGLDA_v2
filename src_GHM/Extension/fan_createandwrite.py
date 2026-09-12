@@ -17,7 +17,7 @@ import concurrent.futures
 import platform
 import numpy as np
 from controller import configuration_module as cm
-from Extensions import fan_data_output_handler as doh
+from src_GHM.Extension import fan_data_output_handler as doh
 # from view import data_output_handler as doh
 
 #  write_to_netcdf (used together with save_netcdf_parallel function

@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from src_GHM.Interface.Spinup import run as sp_run
-from src_GHM.ReWaterGAP.controller import configuration_module as cm
+from controller import configuration_module as cm
 from src_GHM.Interface.DailyStepRun import DailyModelRun
 from termcolor import colored
 
@@ -40,6 +40,9 @@ class SingleModel:
         """
         cm.config_file['RuntimeOptions'][2]['SimulationPeriod']['spinup_years']= spinup_years
         cm.init_config(config_input=cm.config_file)
+        import sys
+        # print('controller cm id:', id(sys.modules.get('controller.configuration_module')))
+        # print('full path cm id:', id(sys.modules.get('src_GHM.ReWaterGAP.controller.configuration_module')))
         sp_run()
         pass
 

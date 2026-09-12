@@ -1,8 +1,8 @@
 {
     "ensemble": 4,
     "dir": {
-        "in": "/media/user/My Book/Fan/WaterGap/Input_data",
-        "out": "/media/user/My Book/Fan/WaterGap/Ensemble_input"
+        "in": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Input_data",
+        "out": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Ensemble_input"
     },
     "correlation": {
         "forcing": {
@@ -72,8 +72,16 @@
             "is_perturbed": true,
             "error_distribution": "triangle",
             "coefficients": {
-                "humid":[0.885, 1.26, 1.65],
-                "arid": [1.365,1.74,2.115]
+                "humid": [
+                    0.885,
+                    1.26,
+                    1.65
+                ],
+                "arid": [
+                    1.365,
+                    1.74,
+                    2.115
+                ]
             }
         },
         "snow_freeze_temp": {
@@ -100,7 +108,7 @@
             "coefficients": [
                 0.004,
                 0.006,
-                0.010
+                0.01
             ]
         },
         "runoff_frac_builtup": {

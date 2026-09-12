@@ -10,7 +10,7 @@ import os
 import sys
 import xarray as xr
 import numpy as np
-from src_GHM.ReWaterGAP.controller.climateforcing_handler import ClimateForcing, cm, log, cli, modname, args
+from controller.climateforcing_handler import ClimateForcing, cm, log, cli, modname, args
 
 
 from datetime import datetime

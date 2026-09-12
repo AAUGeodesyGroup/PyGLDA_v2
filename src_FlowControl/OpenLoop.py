@@ -1,7 +1,7 @@
 from src_FlowControl.SingleModel import SingleModel
 from pathlib import Path
 import numpy as np
-from src_GHM.ReWaterGAP.controller import configuration_module as cm
+from controller import configuration_module as cm
 from mpi4py import MPI
 
 
@@ -127,7 +127,7 @@ if __name__ == '__main__':
     size = comm.Get_size()
 
     if rank != 0:
-        log_dir = "./parallel_logs"
+        log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'OL')
         os.makedirs(log_dir, exist_ok=True)
 
         log_path = os.path.join(log_dir, f"rank_{rank}.log")

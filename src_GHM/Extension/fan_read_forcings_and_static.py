@@ -20,7 +20,7 @@
 import numpy as np
 from termcolor import colored
 # from controller import climateforcing_handler as cf
-from Extensions import fan_climateforcing_handler as cf
+from src_GHM.Extension import fan_climateforcing_handler as cf
 from controller import staticdata_handler as sd
 from controller import configuration_module as cm
 

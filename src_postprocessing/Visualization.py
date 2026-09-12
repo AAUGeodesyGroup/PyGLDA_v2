@@ -1,5 +1,5 @@
 from src_DA.configure_DA import config_DA
-from src_DA.statistical_analysis import BasinAverageAnalysis_post
+from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post
 from src_DA.EnumDA import WaterGap_storage_variables, Stage
 from pathlib import Path
 import numpy as np

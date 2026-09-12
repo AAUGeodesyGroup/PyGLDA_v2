@@ -3,15 +3,15 @@ from tqdm import tqdm
 import pandas as pd
 from termcolor import colored
 # from misc.time_checker_and_ascii_image import check_time
-from src_GHM.ReWaterGAP.controller import configuration_module as cm
+from controller import configuration_module as cm
 # from controller import read_forcings_and_static as rd
 from src_GHM.Extension import fan_read_forcings_and_static as rd
-from src_GHM.ReWaterGAP.controller import wateruse_handler as wateruse
-from src_GHM.ReWaterGAP.model import parameters as pm
-from src_GHM.ReWaterGAP.model import land_surfacewater_fraction_init as lwf
-from src_GHM.ReWaterGAP.model.lateralwaterbalance import waterbalance_lateral as lb
+from controller import wateruse_handler as wateruse
+from model import parameters as pm
+from model import land_surfacewater_fraction_init as lwf
+from model.lateralwaterbalance import waterbalance_lateral as lb
 # from model.utility import restart_watergap as restartwatergap
-from src_GHM.ReWaterGAP.model.utility import get_upstream_basin as get_basin
+from model.utility import get_upstream_basin as get_basin
 # from model.verticalwaterbalance import waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_createandwrite as cw

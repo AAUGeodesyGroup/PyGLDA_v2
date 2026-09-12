@@ -3,14 +3,35 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 
+# ── controller alias: bare-path ↔ full-path ────────────────────────────────
+# WaterGAP's internals import controller.* via bare path; our Interface files
+# import via src_GHM.ReWaterGAP.controller.*. Without this block Python creates
+# two separate module objects so configure_time's updates never reach WaterGAP.
+# Fix: load everything via bare path first, then register under the full path
+# so both spellings resolve to the same object in sys.modules.
+# import sys, importlib, pkgutil
+# from pathlib import Path as _Path
+#
+# _rewatergap = str(_Path(__file__).resolve().parent.parent / 'src_GHM' / 'ReWaterGAP')
+# if _rewatergap not in sys.path:
+#     sys.path.insert(0, _rewatergap)
+#
+# import controller as _ctrl
+# sys.modules.setdefault('src_GHM.ReWaterGAP.controller', _ctrl)
+# for _mi in pkgutil.iter_modules(_ctrl.__path__):
+#     _bare_mod = importlib.import_module(f'controller.{_mi.name}')
+#     sys.modules[f'src_GHM.ReWaterGAP.controller.{_mi.name}'] = _bare_mod
+# # ───────────────────────────────────────────────────────────────────────────
+
+
 class RDA:
-    setting_dir = '/media/user/My Book/Fan/WaterGap/Extensions/DA_settings (copy)'
+    setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_1'
     ens = 4
 
-    external_data_path = '/media/user/My Book/Fan/WaterGap'
-    case = 'RDA_test'
+    external_data_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data'
+    case = 'demo_1'
     basin = 'Brahmaputra'
-    shp_path = '/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp'
+    shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Brahmaputra/Brahmaputra.shp'
 
     '''for spin-up'''
     spin_up_start = '2000-01-01'
@@ -87,7 +108,7 @@ class RDA:
 
     @staticmethod
     def config_basin_mask():
-        from src_DA.shp2mask import basin_shp_process
+        from src_auxiliary.shp2mask import basin_shp_process
 
         '''for WaterGAP'''
         basin_shp = basin_shp_process(save_dir=Path(RDA.external_data_path) / 'Basin/mask',
@@ -133,10 +154,11 @@ class RDA:
     def model_perturbation():
         """This is global-wise perturbation"""
 
-        from Perturbation import perturbation
+        from src_DA.Perturbation import perturbation
         dp = Path(RDA.setting_dir) / 'perturbation.json'
 
-        t1 = datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').strftime('%Y-%m')
+        '''the begin time should cover the spin-up period, and the end time should cover the simulation period'''
+        t1 = datetime.strptime(RDA.spin_up_start, '%Y-%m-%d').strftime('%Y-%m')
         t2 = datetime.strptime(RDA.sim_end_time, '%Y-%m-%d').strftime('%Y-%m')
 
         pp = perturbation(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2)
@@ -149,8 +171,7 @@ class RDA:
     def spin_up():
         from mpi4py import MPI
         import sys, os
-        from OpenLoop import OpenLoop
-        from src_DA.merge_standardize import yearly_merge, Stage
+        from src_FlowControl.OpenLoop import OpenLoop
         from src_DA.configure_DA import config_DA
 
         """Parallel execution using MPI. Each rank will have its own log file."""
@@ -161,34 +182,35 @@ class RDA:
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
         if rank != 0:
-            log_dir = "./parallel_logs"
+            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'spin_up')
             os.makedirs(log_dir, exist_ok=True)
 
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
 
-            sys.stdout = open(log_path, 'w', encoding='utf-8')
-            # sys.stdout = TqdmLogFilter(log_path)
+            # buffering=1 enables line-buffering so every print is flushed
+            # immediately — errors are captured even if comm.Abort(1) fires
+            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
             sys.stderr = sys.stdout
 
-        from misc.time_checker_and_ascii_image import check_time
-
-        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
-
-        OL = OpenLoop(ensemble_id=rank, setting_dir=RDA.setting_dir)
-        OL.configure_time(begin_time=RDA.spin_up_start, end_time=RDA.spin_up_end)
-        OL.configure_Ens_output(output_dir=configDA.basic.OL_output_temp_dir)
-        OL.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
-        OL.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
-                                    read_init_dir=configDA.basic.Ensemble_ini_dir)
-
         try:
-            OL.model_spinup()
-        except Exception as e:
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            import traceback
-            traceback.print_exc()
+            from misc.time_checker_and_ascii_image import check_time
 
-            # force exist= 1
+            configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+
+            OL = OpenLoop(ensemble_id=rank, setting_dir=RDA.setting_dir)
+            OL.configure_time(begin_time=RDA.spin_up_start, end_time=RDA.spin_up_end)
+            OL.configure_Ens_output(output_dir=configDA.basic.OL_output_temp_dir)
+            OL.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
+            OL.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
+                                        read_init_dir=configDA.basic.Ensemble_ini_dir)
+
+            OL.model_spinup()
+
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
+            traceback.print_exc()
+            sys.stdout.flush()
             comm.Abort(1)
 
         pass
@@ -197,8 +219,7 @@ class RDA:
     def OL_run():
         from mpi4py import MPI
         import sys, os
-        from OpenLoop import OpenLoop
-        from src_DA.merge_standardize import yearly_merge, Stage
+        from src_FlowControl.OpenLoop import OpenLoop
         from src_DA.configure_DA import config_DA
 
         """Parallel execution using MPI. Each rank will have its own log file."""
@@ -209,34 +230,33 @@ class RDA:
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
         if rank != 0:
-            log_dir = "./parallel_logs"
+            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'OL')
             os.makedirs(log_dir, exist_ok=True)
 
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
 
-            sys.stdout = open(log_path, 'w', encoding='utf-8')
-            # sys.stdout = TqdmLogFilter(log_path)
+            # buffering=1 enables line-buffering so every print is flushed
+            # immediately — errors are captured even if comm.Abort(1) fires
+            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
             sys.stderr = sys.stdout
 
-        from misc.time_checker_and_ascii_image import check_time
-
-        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
-
-        OL = OpenLoop(ensemble_id=rank, setting_dir=RDA.setting_dir)
-        OL.configure_time(begin_time=RDA.sim_begin_time, end_time=RDA.sim_end_time)
-        OL.configure_Ens_output(output_dir=configDA.basic.OL_output_temp_dir)
-        OL.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
-        OL.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
-                                    read_init_dir=configDA.basic.Ensemble_ini_dir)
-
         try:
-            OL.model_resume()
-        except Exception as e:
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            import traceback
-            traceback.print_exc()
+            configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
 
-            # force exist= 1
+            OL = OpenLoop(ensemble_id=rank, setting_dir=RDA.setting_dir)
+            OL.configure_time(begin_time=RDA.sim_begin_time, end_time=RDA.sim_end_time)
+            OL.configure_Ens_output(output_dir=configDA.basic.OL_output_temp_dir)
+            OL.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
+            OL.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
+                                        read_init_dir=configDA.basic.Ensemble_ini_dir)
+
+            OL.model_resume()
+
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
+            traceback.print_exc()
+            sys.stdout.flush()
             comm.Abort(1)
 
         pass
@@ -257,7 +277,7 @@ class RDA:
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
         if rank != 1:
-            log_dir = "./parallel_logs"
+            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'collect')
             os.makedirs(log_dir, exist_ok=True)
 
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
@@ -315,7 +335,7 @@ class RDA:
     @staticmethod
     def DA_run():
         from mpi4py import MPI
-        from DA_GRACE import DA_GRACE
+        from src_FlowControl.DA_GRACE import DA_GRACE
 
         """Parallel execution using MPI. Each rank will have its own log file."""
         comm = MPI.COMM_WORLD
@@ -324,7 +344,6 @@ class RDA:
 
         if rank == 1:
             print_pyglda_banner()
-            from misc.time_checker_and_ascii_image import check_time
             pass
 
         da = DA_GRACE(setting_dir=Path(RDA.setting_dir))
@@ -388,7 +407,7 @@ class RDA:
 
     @staticmethod
     def visualization():
-        from Visualization import visualization
+        from src_postprocessing.Visualization import visualization
         from src_DA.configure_DA import config_DA
         from src_DA.EnumDA import WaterGap_storage_variables
 
@@ -403,38 +422,40 @@ class RDA:
 
 
 def demo1():
+
+    '''Before open loop'''
     # RDA.config_external_data()
     # RDA.read_config_and_save()
-    # RDA.model_perturbation()
+    RDA.model_perturbation()
 
-    # RDA.config_basin_mask()
-    # RDA.prepare_GRACE_Mascon(is_diagonal=False)
+    '''before data assimilation'''
+    # RDA.config_basin_mask()  # pygmt
+    # RDA.get_GRACE_obs(is_diagonal=False) # pygmt
 
+    '''after data assimilation'''
     # RDA.post_processing()
-
-    RDA.visualization()
+    # RDA.visualization()
 
     pass
 
 
 def demo2():
     from src_DA.EnumDA import Stage
-    from mpi4py import MPI
 
-    # RDA.spin_up()
+    RDA.spin_up()
     #
     # RDA.OL_run()
 
     # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
-    try:
-        RDA.DA_run()  # or whatever your entry point is
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        MPI.COMM_WORLD.Abort(1)
-
-    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    # try:
+    #     RDA.DA_run()  # or whatever your entry point is
+    # except Exception:
+    #     import traceback
+    #     traceback.print_exc()
+    #     MPI.COMM_WORLD.Abort(1)
+    #
+    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
 
@@ -457,7 +478,6 @@ def demo3():
     #     sys.stderr = sys.stdout
 
     print_pyglda_banner()
-    from misc.time_checker_and_ascii_image import check_time
 
     da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
     da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',

@@ -193,7 +193,7 @@ class DA_GRACE:
         # from src_DA.EnSQRA import EnSQRA, EnSQRA_V2
 
         if rank != 1:
-            log_dir = "./parallel_logs"
+            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'DA')
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
             sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
