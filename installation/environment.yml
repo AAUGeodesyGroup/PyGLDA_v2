@@ -1,0 +1,43 @@
+name: pyglda_v2
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  # ── Python: must stay <= 3.10 (numba 0.56.4 has no 3.11 support,
+  #    numpy 1.23.5 has no 3.12 wheels) ──────────────────────────────────────
+  - python=3.10
+
+  # ── WaterGAP pinned stack (numba ABI locks numpy to 1.23.x) ──────────────
+  - numpy=1.23.5
+  - numba=0.56.4
+  - pandas=1.5.3
+  - xarray=2023.2.0
+  - netcdf4=1.6.3=nompi_*
+  - dask=2023.3.1
+  - tqdm=4.66.1
+  - termcolor=2.3.0
+  - matplotlib=3.7.2
+  - scikit-learn=1.4.0
+  - coverage=7.6.9
+
+  # ── PyGLDA additions ──────────────────────────────────────────────────────
+  # MPI: this machine has no system MPI (checked 2026-09-13), so the env's own
+  # launcher is used. mpich chosen to match the other working envs (WaterGap,
+  # Exp). Always launch with THIS env's mpirun; mixing envs gives rank 0 twice.
+  - mpich=4.1
+  - mpi4py=3.1
+  - h5py=3.9=nompi_*      # HDF5 / .h5 state files (nompi build: netCDF and h5py share libhdf5)
+  - scipy>=1.9            # EnKF block_diag and linear algebra
+  - shapely>=2.0          # Geometry; geopandas dependency
+  - geopandas>=0.13       # Basin shapefile processing
+  - libgdal=3.7.0         # geopandas/pyogrio backend; version built against hdf5 1.14.0
+
+  # ── Binary anchors ────────────────────────────────────────────────────────
+  # Without these the solver explores the whole hdf5 x libnetcdf x MPI-flavour
+  # matrix and does not finish (>20 min). Values are taken from the working
+  # miniforge3/envs/WaterGap environment, which runs the same WaterGAP pins.
+  - hdf5=1.14.0=nompi_*
+  - libnetcdf=4.9.2=nompi_*
+  # pygmt (src_postprocessing only) is deliberately NOT in this env: with the
+  # numpy 1.23.5 pin the solve did not finish. Visualization needs its own
+  # small env (e.g. the existing `pygmt` env).
