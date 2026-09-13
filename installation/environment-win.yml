@@ -1,0 +1,47 @@
+# Windows (win-64) variant of environment.yml. Same pins; only the MPI block differs.
+# Solved for win-64 on 2026-09-13 (dry-run). Linux: use environment.yml instead.
+name: pyglda_v2
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  # ── Python: must stay <= 3.10 (numba 0.56.4 has no 3.11 support,
+  #    numpy 1.23.5 has no 3.12 wheels) ──────────────────────────────────────
+  - python=3.10
+
+  # ── WaterGAP pinned stack (numba ABI locks numpy to 1.23.x) ──────────────
+  - numpy=1.23.5
+  - numba=0.56.4
+  - pandas=1.5.3
+  - xarray=2023.2.0
+  - netcdf4=1.6.3=nompi_*
+  - dask=2023.3.1
+  - tqdm=4.66.1
+  - termcolor=2.3.0
+  - matplotlib=3.7.2
+  - scikit-learn=1.4.0
+  - coverage=7.6.9
+
+  # ── PyGLDA additions ──────────────────────────────────────────────────────
+  # MPI on Windows: conda-forge has no mpich/openmpi for win-64; mpi4py is built
+  # against Microsoft MPI. `msmpi` provides the libraries only. The LAUNCHER
+  # (mpiexec.exe) comes from Microsoft's MS-MPI runtime installer
+  # (msmpisetup.exe, https://learn.microsoft.com/message-passing-interface/microsoft-mpi)
+  # and must be installed once system-wide. Launch with: mpiexec -n <N> python ...
+  - msmpi
+  - mpi4py=3.1
+  - h5py=3.9=nompi_*      # HDF5 / .h5 state files (nompi build: netCDF and h5py share libhdf5)
+  - scipy>=1.9            # EnKF block_diag and linear algebra
+  - shapely>=2.0          # Geometry; geopandas dependency
+  - geopandas>=0.13       # Basin shapefile processing
+  - libgdal=3.7.0         # geopandas/pyogrio backend; version built against hdf5 1.14.0
+
+  # ── Binary anchors ────────────────────────────────────────────────────────
+  # Without these the solver explores the whole hdf5 x libnetcdf x MPI-flavour
+  # matrix and does not finish (>20 min). Values are taken from the working
+  # miniforge3/envs/WaterGap environment, which runs the same WaterGAP pins.
+  - hdf5=1.14.0=nompi_*
+  - libnetcdf=4.9.2=nompi_*
+  # pygmt (src_postprocessing only) is deliberately NOT in this env: with the
+  # numpy 1.23.5 pin the solve did not finish. Visualization needs its own
+  # small env (e.g. the existing `pygmt` env).
