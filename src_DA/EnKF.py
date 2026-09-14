@@ -130,7 +130,7 @@ class EnKF:
 
         '''update the states'''
         states_update = ens_states_inf + K @ (obs - HX)
-        print(obs-HX)
+        # print(obs-HX)
 
         return states_update
 

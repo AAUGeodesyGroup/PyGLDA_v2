@@ -200,6 +200,10 @@ class DA_GRACE:
             # sys.stdout = TqdmLogFilter(log_path)
             sys.stderr = sys.stdout
 
+        # banner AFTER the redirect: rank 1 -> terminal (colour), every other rank -> top of its own log (plain)
+        print_pyglda_banner()
+        from misc.time_checker_and_ascii_image import check_time
+
         # print('\n================ Configure DA experiment ===================')
 
         '''configure DA'''

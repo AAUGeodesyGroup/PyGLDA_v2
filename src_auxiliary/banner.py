@@ -40,9 +40,14 @@ def print_pyglda_banner(version="2.0.0", model='ReWaterGap 2.2.e'):
     """
     Prints the stylized PyGLDA banner with True Color RGB gradients,
     dynamically calculated borders, perfectly aligned metadata, and MPI status.
+
+    Prints on whichever rank calls it - the caller decides which rank(s) should
+    print (e.g. every rank after its stdout has been redirected to its own log).
+    Colour is used only when stdout is the real terminal stream; when stdout has
+    been swapped for a log file the banner is written as plain text.
     """
-    if env() != 0 and env() != -1:
-        return
+    # if env() != 0 and env() != -1:
+    #     return
 
     mpi_size = 1
     try:
@@ -52,7 +57,9 @@ def print_pyglda_banner(version="2.0.0", model='ReWaterGap 2.2.e'):
     except ImportError:
         pass
 
-    use_color = True
+    # the untouched stdout object reports name '<stdout>' whatever fd 1 is (tty or
+    # mpiexec pipe); a stdout swapped for a log file reports the file's path
+    use_color = getattr(sys.stdout, "name", "<stdout>") in ("<stdout>", "<stderr>")
 
     def c(text, code):
         return f"\033[{code}m{text}\033[0m" if use_color else text

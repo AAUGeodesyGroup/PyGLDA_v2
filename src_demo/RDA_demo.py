@@ -32,7 +32,7 @@ def demo1():
 
     '''before data assimilation'''
     # RDA.config_basin_mask()
-    # RDA.get_GRACE_obs(is_diagonal=False)
+    RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after data assimilation'''
     # RDA.post_processing()
@@ -49,16 +49,16 @@ def demo2():
     #
     # RDA.OL_run()
 
-    RDA.collect_and_statistics(Stage.OL, skip_collect=False)
+    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
-    # try:
-    #     RDA.DA_run()  # or whatever your entry point is
-    # except Exception:
-    #     import traceback
-    #     traceback.print_exc()
-    #     MPI.COMM_WORLD.Abort(1)
-    #
-    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    try:
+        RDA.DA_run()  # or whatever your entry point is
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        MPI.COMM_WORLD.Abort(1)
+
+    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
 

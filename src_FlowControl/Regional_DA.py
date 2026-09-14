@@ -49,8 +49,7 @@ class RDA:
 
         def reformulate(st: str):
             new = None
-            for keyword in ['/Input_data', '/Ensemble_input', '/output_data', '/Initialization', '/ReWaterGAP', '/Basin'
-                                                                                                                '/Res',
+            for keyword in ['/Input_data', '/Ensemble_input', '/output_data', '/Initialization', '/ReWaterGAP', '/Basin', '/Res',
                             '/OL_output', '/DA_output', '/Ensemble_Initialization', '/Auxiliary',
                             '/GRACE']:
                 if keyword in st:
@@ -345,11 +344,10 @@ class RDA:
         rank = comm.Get_rank()
         size = comm.Get_size()
 
-        if rank == 1:
-            print_pyglda_banner()
-            pass
+        # banner is printed inside da.run_DA(), after each rank's stdout redirect,
+        # so it reaches the terminal (rank 1) and the top of every rank log
 
-        da = DA_GRACE(setting_dir=Path(RDA.setting_dir))
+        da = DA_GRACE(setting_dir=Path(RDA.setting_dir), case=RDA.case)
         da.configure_setting(ens_size=RDA.ens, case_name=RDA.case, basin_name=RDA.basin,
                              basin_dir=Path(RDA.external_data_path) / 'Basin')
         da.configure_date(begin_date=RDA.sim_begin_time, end_date=RDA.sim_end_time)
@@ -362,6 +360,9 @@ class RDA:
 
         if rank == 0:
             da.gather_OLmean()
+
+            da.generate_perturbed_GRACE_obs()
+
         comm.barrier()
 
         da.prepare_design_matrix()
