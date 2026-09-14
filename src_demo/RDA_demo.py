@@ -35,7 +35,7 @@ def demo1():
     # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after data assimilation'''
-    # RDA.post_processing()
+    RDA.post_processing()
     RDA.visualization()
 
     pass
@@ -64,5 +64,5 @@ def demo2():
 
 
 if __name__ == '__main__':
-    # demo1()
-    demo2()
+    demo1()
+    # demo2()

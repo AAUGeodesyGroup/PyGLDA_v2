@@ -67,11 +67,28 @@ class DA_GRACE:
         self.configDA = config_DA.loadjson(dp_dir).process()
         pass
 
-    def configure_setting(self, ens_size, case_name, basin_name, basin_dir):
+    def configure_setting(self, ens_size, case_name, basin_name, basin_dir, basin_shp=None):
+        """
+        basin_shp : path of the basin shapefile. If None, the shapefile is looked for in
+                    <basin_dir>/shp/<basin_name>/ (whatever *.shp is there - the file is not
+                    necessarily called <basin_name>.shp, e.g. Danube3subbasins_subbasins.shp);
+                    only if nothing is found does it fall back to <basin_name>.shp.
+        The mask always follows the convention <basin_dir>/mask/<basin_name>/<basin_name>_res_0.5.h5
+        (it is written that way by RDA.config_basin_mask).
+        """
         self.configDA.basic.ensemble = ens_size
         self.configDA.basic.case = case_name
         self.configDA.basic.basin = basin_name
-        self.configDA.basic.basin_shp = str(Path(basin_dir) / 'shp' / basin_name / ('%s.shp' % basin_name))
+        shp_dir = Path(basin_dir) / 'shp' / basin_name
+        if basin_shp is None:
+            found = sorted(shp_dir.glob('*.shp')) if shp_dir.is_dir() else []
+            if len(found) > 1:
+                print(f"[configure_setting] {len(found)} shapefiles in {shp_dir}, using {found[0].name}; "
+                      f"pass basin_shp explicitly to choose")
+            basin_shp = found[0] if found else shp_dir / ('%s.shp' % basin_name)
+        if not Path(basin_shp).exists():
+            print(f"[configure_setting] WARNING: basin shapefile not found: {basin_shp}")
+        self.configDA.basic.basin_shp = str(basin_shp)
         self.configDA.basic.basin_mask = str(Path(basin_dir) / 'mask' / basin_name / ('%s_res_0.5.h5' % basin_name))
         return self
 

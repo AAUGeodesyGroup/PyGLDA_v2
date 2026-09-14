@@ -63,6 +63,11 @@ class RDA:
     sim_begin_time = '2002-05-01'
     sim_end_time = '2005-04-30'
 
+    '''for visualization of the 2-D harmonic maps: 'smooth' (interpolated, clipped to the basin
+    polygon) or 'pixel' (one cell per 0.5-degree node); or a list/tuple to produce both'''
+    map_style = 'smooth'
+    # map_style = 'pixel'
+
     @staticmethod
     def config_external_data():
         import json
@@ -315,7 +320,6 @@ class RDA:
             if not skip_collect:
                 if stage == Stage.OL:
                     ps.merge_and_crop_by_year_with_mask()
-                    pass
                 else:
                     ps.merge_by_year()
                 pass
@@ -356,7 +360,7 @@ class RDA:
 
         da = DA_GRACE(setting_dir=Path(RDA.setting_dir), case=RDA.case)
         da.configure_setting(ens_size=RDA.ens, case_name=RDA.case, basin_name=RDA.basin,
-                             basin_dir=Path(RDA.external_data_path) / 'Basin')
+                             basin_dir=Path(RDA.external_data_path) / 'Basin', basin_shp=RDA.shp_path)
         da.configure_date(begin_date=RDA.sim_begin_time, end_date=RDA.sim_end_time)
         # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
         if rank == 0:
@@ -392,7 +396,7 @@ class RDA:
         """
 
         from src_DA.configure_DA import config_DA
-        from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post, Stage
+        from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post, HarmonicMapAnalysis, Stage
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
 
@@ -407,6 +411,17 @@ class RDA:
 
         bp.get_GRACE(obs_dir=configDA.obs.dir)
         bp.save_GRACE(prefix=RDA.basin, save_dir=Path(configDA.basic.res_permanent)/RDA.case)
+
+        '''per-grid-cell harmonic analysis (trend, annual / semi-annual cycle) of the OL and DA
+        yearly files -> 2-D maps saved to Res/<case>/Harmonic_<stage>.nc (see src_auxiliary.ts)'''
+        hm = HarmonicMapAnalysis(res_dir=configDA.basic.res_permanent, case=RDA.case, ens=RDA.ens,
+                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time)
+        for stage in [Stage.OL, Stage.DA]:
+            hm.run(stage)
+        '''... and of the gridded GRACE TWS prepared by get_GRACE_obs (grid_TWS) -> Harmonic_GRACE.nc'''
+        hm.run_GRACE(grace_dir=configDA.obs.GRACE['preprocess_res'], basin=RDA.basin,
+                     basin_mask_path=configDA.basic.basin_mask,
+                     land_mask_path=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
 
         pass
 
@@ -423,6 +438,11 @@ class RDA:
         vv.basin_ensemble(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case)
         vv.GRACE_OL_DA(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
                        signal=WaterGap_storage_variables.tws.name)
+        '''2-D maps of trend / annual amplitude / annual peak day: OL | DA | GRACE'''
+        styles = RDA.map_style if isinstance(RDA.map_style, (list, tuple)) else [RDA.map_style]
+        for style in styles:
+            vv.harmonic_maps(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
+                             variable=WaterGap_storage_variables.tws.name, style=style)
 
 
 
