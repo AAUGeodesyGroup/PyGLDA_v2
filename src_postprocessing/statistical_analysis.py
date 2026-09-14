@@ -241,7 +241,7 @@ class BasinAverageAnalysis_post:
     def save_states(self, save_dir='../temp', prefix='1'):
         ff = self.__states
 
-        hf = h5py.File(Path(save_dir) / ('Res_%s.h5df' % prefix), 'w')
+        hf = h5py.File(Path(save_dir) / ('Res_%s.h5' % prefix), 'w')
 
         for ii, jj in ff.items():
             if ii == 'time':
@@ -262,7 +262,7 @@ class BasinAverageAnalysis_post:
 
         ff = self.__GRACE
 
-        hf = h5py.File(Path(save_dir) / ('GRACE_%s.h5df' % prefix), 'w')
+        hf = h5py.File(Path(save_dir) / ('GRACE_%s.h5' % prefix), 'w')
 
         for ii, jj in ff.items():
             if ii == 'time':
@@ -283,7 +283,7 @@ class BasinAverageAnalysis_post:
         """
         ff = {}
 
-        hf = h5py.File(Path(load_dir) / ('Res_%s.h5df' % prefix), 'r')
+        hf = h5py.File(Path(load_dir) / ('Res_%s.h5' % prefix), 'r')
 
         for ii, jj in hf.items():
             if ii == 'time':
@@ -306,7 +306,7 @@ class BasinAverageAnalysis_post:
         """
         ff = {}
 
-        hf = h5py.File(Path(load_dir) / ('GRACE_%s.h5df' % prefix), 'r')
+        hf = h5py.File(Path(load_dir) / ('GRACE_%s.h5' % prefix), 'r')
 
         for ii, jj in hf.items():
             if ii == 'time':
