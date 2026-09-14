@@ -4,13 +4,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src_FlowControl.Regional_DA import RDA
 
-RDA.setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_1'
+RDA.setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_2'
 RDA.ens = 4
 
 RDA.external_data_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data'
-RDA.case = 'demo_1'
-RDA.basin = 'Brahmaputra'
-RDA.shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Brahmaputra/Brahmaputra.shp'
+RDA.case = 'demo_2'
+RDA.basin = 'Danube'
+RDA.shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Danube/Danube3subbasins_subbasins.shp'
 
 '''for spin-up'''
 RDA.spin_up_start = '2000-01-01'
@@ -31,12 +31,12 @@ def demo1():
     # RDA.model_perturbation()
 
     '''before data assimilation'''
-    # RDA.config_basin_mask()  # pygmt
-    # RDA.get_GRACE_obs(is_diagonal=False) # pygmt
+    # RDA.config_basin_mask()
+    # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after data assimilation'''
-    RDA.post_processing()
-    RDA.visualization()
+    # RDA.post_processing()
+    # RDA.visualization()
 
     pass
 
@@ -49,20 +49,20 @@ def demo2():
     #
     # RDA.OL_run()
 
-    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
+    RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
-    try:
-        RDA.DA_run()  # or whatever your entry point is
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        MPI.COMM_WORLD.Abort(1)
-
-    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    # try:
+    #     RDA.DA_run()  # or whatever your entry point is
+    # except Exception:
+    #     import traceback
+    #     traceback.print_exc()
+    #     MPI.COMM_WORLD.Abort(1)
+    #
+    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
 
 
 if __name__ == '__main__':
-    demo1()
-    # demo2()
+    # demo1()
+    demo2()

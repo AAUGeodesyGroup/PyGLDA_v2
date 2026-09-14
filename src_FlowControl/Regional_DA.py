@@ -101,6 +101,7 @@ class RDA:
         configDA.basic.basin = RDA.basin
         configDA.basic.basin_shp = RDA.shp_path
         configDA.basic.ensemble = RDA.ens
+        configDA.basic.basin_mask = str(Path(RDA.external_data_path) / 'Basin/mask' / RDA.basin / ('%s_res_0.5.h5' % RDA.basin))
 
         configDA.save_json(save_path=Path(RDA.setting_dir) / 'DA_setting.json')
 
@@ -265,9 +266,9 @@ class RDA:
     def collect_and_statistics(stage, skip_collect= False):
         from mpi4py import MPI
         import sys, os
-        from src_DA.merge_standardize import yearly_merge, Stage
+        from src_postprocessing.merge_standardize import yearly_merge, Stage
         from src_DA.configure_DA import config_DA
-        from src_DA.statistical_analysis import BasinAverageAnalysis
+        from src_postprocessing.statistical_analysis import BasinAverageAnalysis
 
         """Parallel execution using MPI. Each rank will have its own log file."""
         comm = MPI.COMM_WORLD
@@ -282,7 +283,9 @@ class RDA:
 
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
 
-            sys.stdout = open(log_path, 'w', encoding='utf-8')
+            # buffering=1 enables line-buffering so every print is flushed
+            # immediately - otherwise the log is empty if the process is killed
+            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
             # sys.stdout = TqdmLogFilter(log_path)
             sys.stderr = sys.stdout
 

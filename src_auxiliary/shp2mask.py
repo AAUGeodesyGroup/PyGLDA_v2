@@ -15,6 +15,8 @@ class basin_shp_process:
         self._basin_name = basin_name
         self.save_dir = Path(save_dir) / basin_name
 
+        self.save_dir.mkdir(parents=False, exist_ok=True)
+
         self.collect_mask = None
         self.NaN_mask = None
 
