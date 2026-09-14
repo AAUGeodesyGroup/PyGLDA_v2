@@ -68,252 +68,110 @@ class yearly_merge:
 
     def merge_and_crop_by_year_with_mask(self):
         """
-        Merge daily .nc files into yearly files based on a specific date range,
-        embed a mask, crop the spatial extent, and save with Zlib compression.
-
-        Parameters:
-        - data_dir: Directory containing the original daily files.
-        - output_dir: Directory to save the processed yearly files.
-        - mask_matrix: 0/1 matrix (numpy array) indicating the region of interest.
-        - lat_coords: Latitude array corresponding to the mask.
-        - lon_coords: Longitude array corresponding to the mask.
-        - start_date: Starting date (e.g., '2000-01-01').
-        - end_date: Ending date (e.g., '2019-12-31').
+        OL stage. The daily files are GLOBAL: crop each one to the basin bounding box while
+        reading, concatenate the year, mask everything outside the basin (NaN) and save the
+        masked, compressed yearly file with the basin mask embedded.
         """
+        self._merge_year_files(apply_mask=True)
 
-        # ========================================================
-        # 1. Auto-calculate the Bounding Box for early slicing
-        # ========================================================
-        # drop=True automatically removes all completely False (0) outer edges
+    def merge_by_year(self):
+        """
+        DA stage. The daily files are already cropped to the basin bounding box by the DA
+        run (DailyModelRun(is_crop_save=True)). Concatenate the year, mask everything outside
+        the basin (NaN) and save the compressed yearly file with the basin mask embedded -
+        the same form as the OL stage, so both can be read identically downstream.
+        The crop is still applied - on a file that already spans exactly the box it is a
+        no-op, and it protects against a DA run configured without is_crop_save.
+        """
+        self._merge_year_files(apply_mask=True)
+
+    # ------------------------------------------------------------------------------------
+    def _merge_year_files(self, apply_mask: bool):
+        """
+        Shared implementation for both stages.
+
+        Memory design (this replaced an open_mfdataset version that kept up to 128 global
+        files open at once and, across several MPI ranks, ran the machine out of memory):
+          * daily files are opened ONE AT A TIME
+          * each is cropped to the bounding box while still lazy, so only the box is read
+          * only then is it loaded, closed, and given its time coordinate
+          * the year is concatenated from these small in-memory frames
+        ORDER MATTERS inside `_read_one_day`: expand_dims() on a lazily opened (non-dask)
+        dataset forces the FULL global grid of every variable into memory, and a later
+        .sel() returns views into those arrays, so every "small" frame would pin a whole
+        daily file. Crop first, load, then add the time axis.
+        """
+        # 1. bounding box of the basin, for the early crop
         mask_bbox = self.__mask.where(self.__mask, drop=True)
-
-        # Extract the exact min/max coordinates of the target region
         lat_min, lat_max = float(mask_bbox.lat.min()), float(mask_bbox.lat.max())
         lon_min, lon_max = float(mask_bbox.lon.min()), float(mask_bbox.lon.max())
 
-        # Live bar for the rank whose output reaches the screen; a quiet bar
-        # (redraw every 10 s) for ranks whose stdout Regional_DA has swapped for
-        # a log file, so the file does not fill with carriage returns.
-        # The untouched stdout object always reports name '<stdout>' regardless of
-        # whether fd 1 is a tty, a pipe (mpiexec) or a file - so test the name.
+        # progress bar: live for the rank whose output reaches the screen, quiet (one redraw
+        # every 10 s) for ranks whose stdout Regional_DA has swapped for a log file. The
+        # untouched stdout object reports name '<stdout>' whatever fd 1 is (tty or mpiexec
+        # pipe); a redirected one reports the log path.
         to_logfile = getattr(sys.stdout, "name", "<stdout>") not in ("<stdout>", "<stderr>")
 
-        print(f"Merging daily output into yearly files | Ens_{self.__ens_id} | "
+        print(f"Merging daily output into yearly files | {self.__stage.name} | Ens_{self.__ens_id} | "
               f"{self.begin_date} to {self.end_date} | "
-              f"crop {mask_bbox.sizes['lat']}x{mask_bbox.sizes['lon']} cells")
+              f"crop {mask_bbox.sizes['lat']}x{mask_bbox.sizes['lon']} cells"
+              f"{' | mask outside basin' if apply_mask else ''}")
         print(f"  -> {self.__output_dir}")
 
-        for year in self.__years_to_process:
-
-            # 2. Construct the date range and gather available file paths for the current year
-            year_start = f"{year}-01-01"
-            year_end = f"{year}-12-31"
-
-            if year == self.__years_to_process[0]:
-                year_start = self.begin_date
-            if year == self.__years_to_process[-1]:
-                year_end = self.end_date
-
-            date_range = pd.date_range(start=year_start, end=year_end)
-
-            file_paths = []
-            for date in date_range:
-                filename = f"daily_output_{date.strftime('%Y-%m-%d')}.nc"
-                full_path = os.path.join(self.__state_dir, filename)
-                # print(full_path)
-                if os.path.exists(full_path):
-                    file_paths.append(full_path)
-
-            # Skip the year if no files are found
-            if not file_paths:
-                print(f"  {year}: no daily files found, skipped")
-                continue
-
-            # 3. Preprocess function: Coarse Crop (Bounding Box) -> load -> Time Injection
-            #    ORDER MATTERS. On a lazily opened (non-dask) dataset, expand_dims()
-            #    forces the FULL global grid of every variable into memory, and a
-            #    later .sel() only returns views into those global arrays - so each
-            #    "small" cropped frame silently pins the whole daily file (~tens of MB
-            #    x 365 days x every rank). Crop first while still lazy so only the
-            #    bounding box is read from disk, load that, then add the time axis.
-            def preprocess(ds):
-                # Extract the file path from xarray encoding
-                path = ds.encoding.get("source")
-                # Parse the date string from the filename
-                date_str = os.path.basename(path).replace("daily_output_", "").replace(".nc", "")
-                time_val = pd.to_datetime(date_str)
-
-                # EARLY SLICING while lazy: reads only the bounding box from disk
-                # Check if latitude is ascending or descending to apply slice correctly
+        def _read_one_day(path):
+            """crop (lazy) -> load -> close -> add time. Returns a small in-memory Dataset."""
+            date_str = os.path.basename(path).replace("daily_output_", "").replace(".nc", "")
+            time_val = pd.to_datetime(date_str)
+            with xr.open_dataset(path, cache=False) as ds:
                 if ds.lat[0] < ds.lat[-1]:
                     ds = ds.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
                 else:
                     ds = ds.sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
+                ds = ds.load()
+            if "time" not in ds.dims:
+                ds = ds.expand_dims(time=[time_val])
+            return ds
 
-                ds = ds.load()  # bbox only: a few hundred cells per variable
+        for year in self.__years_to_process:
 
-                # Add the time dimension AFTER loading the cropped data
-                if "time" not in ds.dims:
-                    ds = ds.expand_dims(time=[time_val])
+            # 2. daily files of this year that exist on disk
+            year_start = self.begin_date if year == self.__years_to_process[0] else f"{year}-01-01"
+            year_end = self.end_date if year == self.__years_to_process[-1] else f"{year}-12-31"
+            file_paths = [os.path.join(self.__state_dir, f"daily_output_{d.strftime('%Y-%m-%d')}.nc")
+                          for d in pd.date_range(start=year_start, end=year_end)]
+            file_paths = [f for f in file_paths if os.path.exists(f)]
+            if not file_paths:
+                print(f"  {year}: no daily files found, skipped")
+                continue
 
-                return ds
-
-            # 4. Read the daily files ONE AT A TIME (crop -> load -> close), then
-            #    concatenate the year. open_mfdataset on ~365 global files kept up
-            #    to 128 files open at once, each with its own HDF5 chunk cache, plus
-            #    a large dask graph; with several MPI ranks doing this concurrently
-            #    the machine ran out of memory and the kernel killed a rank (signal 9).
+            # 3. read one day at a time and concatenate
             frames = []
             bar = tqdm(total=len(file_paths), desc=f"  {year}", unit="file", colour="cyan",
                        file=sys.stdout, mininterval=10.0 if to_logfile else 0.5)
             for fp in file_paths:
-                with xr.open_dataset(fp, cache=False) as ds_day:
-                    frames.append(preprocess(ds_day))
+                frames.append(_read_one_day(fp))
                 bar.update(1)
             ds_year = xr.concat(frames, dim="time", coords="minimal", compat="override")
             del frames
 
-            # 5. Attach the mask and crop
-            # Embed the mask as a variable in the dataset for future reference
+            # 4. embed the mask and blank everything outside the basin (both stages)
             ds_year['region_mask'] = self.__mask.copy()
+            ds_out = ds_year.where(self.__mask, drop=True) if apply_mask else ds_year
 
-            # Use .where() to crop. drop=True removes outer rows/cols that are entirely NaN
-            ds_masked = ds_year.where(self.__mask, drop=True)
-
-            # ========================================================
-            # 8. Save: Fast writing with low-level Zlib compression
-            # ========================================================
+            # 5. save with zlib compression (level 1: good ratio, fast)
             output_filename = os.path.join(self.__output_dir, f"daily_output_{year}.nc")
-
-            # Configure Zlib compression for all data variables (including the mask)
-            # complevel=5 provides a good balance between compression ratio and speed
-            encoding = {var: {"zlib": True, "complevel": 1} for var in ds_masked.data_vars}
-
+            encoding = {var: {"zlib": True, "complevel": 1} for var in ds_out.data_vars}
             bar.set_postfix_str("writing...")
-            ds_masked.to_netcdf(output_filename, encoding=encoding)
+            ds_out.to_netcdf(output_filename, encoding=encoding)
             bar.set_postfix_str(f"{os.path.basename(output_filename)}  "
                                 f"{os.path.getsize(output_filename) / 1e6:.1f} MB")
             bar.close()
 
-            # Close datasets and release memory explicitly so nothing carries over to the next year
+            # 6. release memory explicitly so nothing carries over to the next year
             ds_year.close()
-            ds_masked.close()
-            del ds_year, ds_masked
+            ds_out.close()
+            del ds_year, ds_out
             gc.collect()
-
-    def merge_by_year(self):
-        """
-        Merge daily .nc files into yearly files based on a specific date range,
-        embed a mask, crop the spatial extent, and save with Zlib compression.
-
-        Parameters:
-        - data_dir: Directory containing the original daily files.
-        - output_dir: Directory to save the processed yearly files.
-        - mask_matrix: 0/1 matrix (numpy array) indicating the region of interest.
-        - lat_coords: Latitude array corresponding to the mask.
-        - lon_coords: Longitude array corresponding to the mask.
-        - start_date: Starting date (e.g., '2000-01-01').
-        - end_date: Ending date (e.g., '2019-12-31').
-        """
-
-        # ========================================================
-        # 1. Auto-calculate the Bounding Box for early slicing
-        # ========================================================
-        # drop=True automatically removes all completely False (0) outer edges
-        mask_bbox = self.__mask.where(self.__mask, drop=True)
-
-        # Extract the exact min/max coordinates of the target region
-        lat_min, lat_max = float(mask_bbox.lat.min()), float(mask_bbox.lat.max())
-        lon_min, lon_max = float(mask_bbox.lon.min()), float(mask_bbox.lon.max())
-
-        for year in self.__years_to_process:
-            print(f"--- Processing year: {year} ---")
-
-            # 2. Construct the date range and gather available file paths for the current year
-            year_start = f"{year}-01-01"
-            year_end = f"{year}-12-31"
-
-            if year == self.__years_to_process[0]:
-                year_start = self.begin_date
-            if year == self.__years_to_process[-1]:
-                year_end = self.end_date
-
-            date_range = pd.date_range(start=year_start, end=year_end)
-
-            file_paths = []
-            for date in date_range:
-                filename = f"daily_output_{date.strftime('%Y-%m-%d')}.nc"
-                full_path = os.path.join(self.__state_dir, filename)
-                # print(full_path)
-                if os.path.exists(full_path):
-                    file_paths.append(full_path)
-
-            # Skip the year if no files are found
-            if not file_paths:
-                print(f"No files found for year {year}. Skipping.")
-                continue
-
-            # 3. Preprocess function: Coarse Crop (Bounding Box) & Time Injection
-            def preprocess(ds):
-                # Extract the file path from xarray encoding
-                path = ds.encoding.get("source")
-                # Parse the date string from the filename
-                date_str = os.path.basename(path).replace("daily_output_", "").replace(".nc", "")
-                time_val = pd.to_datetime(date_str)
-
-                # Add the time dimension if it doesn't exist
-                if "time" not in ds.dims:
-                    ds = ds.expand_dims(time=[time_val])
-
-                # # EARLY SLICING: Dramatically reduces I/O bottleneck
-                # # Check if latitude is ascending or descending to apply slice correctly
-                # if ds.lat[0] < ds.lat[-1]:
-                #     ds = ds.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
-                # else:
-                #     ds = ds.sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
-
-                return ds
-
-            # 4. Open and concatenate all daily files for the year using Dask
-            # parallel=True speeds up the loading process significantly
-            ds_year = xr.open_mfdataset(
-                file_paths,
-                preprocess=preprocess,
-                combine="nested",
-                concat_dim="time",
-                compat="override",
-                coords="minimal",
-                parallel=False
-            )
-
-            # 5. Attach the mask and crop
-            # Embed the mask as a variable in the dataset for future reference
-            ds_year['region_mask'] = self.__mask.copy()
-
-            # Use .where() to crop. drop=True removes outer rows/cols that are entirely NaN
-            ds_masked = ds_year.where(self.__mask, drop=True)
-
-            # ========================================================
-            # 7. Execution: Load data into memory (Real disk I/O happens here)
-            # ========================================================
-            # print(f"Reading and computing data from disk for {year} (this takes time)...")
-            # ds_masked.load()
-
-            # ========================================================
-            # 8. Save: Fast writing with low-level Zlib compression
-            # ========================================================
-            output_filename = os.path.join(self.__output_dir, f"daily_output_{year}.nc")
-
-            # Configure Zlib compression for all data variables (including the mask)
-            # complevel=5 provides a good balance between compression ratio and speed
-            encoding = {var: {"zlib": True, "complevel": 1} for var in ds_year.data_vars}
-
-            print(f"Saving cropped and compressed dataset to: {output_filename} ...")
-            ds_year.to_netcdf(output_filename, encoding=encoding)
-
-            # Close datasets to free up memory
-            ds_year.close()
-            print(f"Year {year} completed successfully.\n")
 
 
 def demo1():

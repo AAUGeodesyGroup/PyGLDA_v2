@@ -72,6 +72,11 @@ class BasinAverageAnalysis:
                 dict_group.create_dataset(key, data=np.array(vv))
         hf.close()
 
+        # close the (dask-backed) dataset explicitly: deleting the reference alone leaves the
+        # netCDF handles in xarray's file cache until interpreter exit, where they race the
+        # library teardown and print "Exception ignored in CachingFileManager.__del__ ...
+        # NetCDF: Not a valid ID" on whichever rank loses the race
+        self.ds.close()
         del self.ds
         pass
 

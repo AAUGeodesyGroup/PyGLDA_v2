@@ -39,7 +39,7 @@ class model_state_threshold:
         bounds = {
             'swe': {
                 'min': 0.0,  # Snow water equivalent lower bound cannot be negative
-                'max': 5000.0  # Upper limit to handle extreme accumulation zones
+                'max': 1000.0  # Upper limit to handle extreme accumulation zones
             },
             'groundwstor': {
                 'min': -50000.0,  # Minimum threshold allowing for groundwater deficit/overdraft

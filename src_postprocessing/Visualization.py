@@ -16,7 +16,6 @@ class visualization:
         # Implement visualization logic here
         import pygmt
 
-
         cg = self._config
 
         ens_size = cg.basic.ensemble

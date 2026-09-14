@@ -24,6 +24,26 @@ from datetime import datetime, timedelta
 # # ───────────────────────────────────────────────────────────────────────────
 
 
+def _abort_with_report(comm, rank, stage):
+    """
+    Call from an `except` block inside an MPI stage.
+    Writes the full traceback to this rank's current stdout (its log file, or the terminal
+    for the rank that owns it), then - if this rank's output has been redirected to a log -
+    echoes a one-line summary to the real terminal (sys.__stderr__) so a failure on any
+    rank is visible without opening the log files. Finally aborts the whole MPI job.
+    """
+    import sys, traceback
+    exc_type, exc, _ = sys.exc_info()
+    print(f"[ERROR] Rank {rank} encountered an exception: {exc}")
+    traceback.print_exc()
+    sys.stdout.flush()
+    if sys.stdout is not sys.__stdout__:          # output redirected -> terminal has seen nothing yet
+        print(f"[ERROR] rank {rank} ({stage}): {exc_type.__name__}: {exc}  "
+              f"-- full traceback in parallel_logs/{stage}/rank_{rank}.log",
+              file=sys.__stderr__, flush=True)
+    comm.Abort(1)
+
+
 class RDA:
     setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_1'
     ens = 4
@@ -206,12 +226,8 @@ class RDA:
 
             OL.model_spinup()
 
-        except Exception as e:
-            import traceback
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            traceback.print_exc()
-            sys.stdout.flush()
-            comm.Abort(1)
+        except Exception:
+            _abort_with_report(comm, rank, 'spin_up')
 
         pass
 
@@ -252,12 +268,8 @@ class RDA:
 
             OL.model_resume()
 
-        except Exception as e:
-            import traceback
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            traceback.print_exc()
-            sys.stdout.flush()
-            comm.Abort(1)
+        except Exception:
+            _abort_with_report(comm, rank, 'OL')
 
         pass
 
@@ -303,17 +315,15 @@ class RDA:
             if not skip_collect:
                 if stage == Stage.OL:
                     ps.merge_and_crop_by_year_with_mask()
+                    pass
                 else:
                     ps.merge_by_year()
                 pass
 
-        except Exception as e:
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            _abort_with_report(comm, rank, 'collect')
 
-            # force exist= 1
-            comm.Abort(1)
+        comm.barrier()
 
         '''the second stage: do statistical analysis and save it'''
         analysis = BasinAverageAnalysis(
@@ -324,13 +334,10 @@ class RDA:
             analysis.load_nc_files(start_date=RDA.sim_begin_time, end_date=RDA.sim_end_time).\
                 select_variables().get_basin_average()
             pass
-        except Exception as e:
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            _abort_with_report(comm, rank, 'collect')
 
-            # force exist= 1
-            comm.Abort(1)
+        comm.barrier()
 
         pass
 
@@ -370,13 +377,8 @@ class RDA:
         try:
             da.run_DA(rank=rank)
             pass
-        except Exception as e:
-            print(f"[ERROR] Rank {rank} encountered an exception: {e}")
-            import traceback
-            traceback.print_exc()
-
-            # force exist= 1
-            comm.Abort(1)
+        except Exception:
+            _abort_with_report(comm, rank, 'DA')
 
         pass
 
@@ -390,7 +392,7 @@ class RDA:
         """
 
         from src_DA.configure_DA import config_DA
-        from src_DA.statistical_analysis import BasinAverageAnalysis_post, Stage
+        from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post, Stage
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
 
@@ -462,45 +464,6 @@ def demo2():
     # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
-
-
-def demo3():
-    from mpi4py import MPI
-    """Parallel execution using MPI. Each rank will have its own log file."""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-
-    # if rank != 0:
-    #     log_dir = "./parallel_logs"
-    #     os.makedirs(log_dir, exist_ok=True)
-    #
-    #     log_path = os.path.join(log_dir, f"rank_{rank}.log")
-    #
-    #     sys.stdout = open(log_path, 'w', encoding='utf-8')
-    #     # sys.stdout = TqdmLogFilter(log_path)
-    #     sys.stderr = sys.stdout
-
-    print_pyglda_banner()
-
-    da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
-    da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',
-                         basin_dir='/media/user/My Book/Fan/WaterGap/Basin')
-    da.configure_date(begin_date='2002-01-01', end_date='2005-04-30')
-    # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
-    if rank == 0:
-        da.save_configuration()
-    comm.barrier()
-
-    da.reload_setting()
-
-    if rank == 0:
-        da.gather_OLmean()
-    comm.barrier()
-
-    da.prepare_design_matrix()
-
-    # da.run_DA(rank=rank)
 
 
 if __name__ == '__main__':
