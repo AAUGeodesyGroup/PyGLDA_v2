@@ -4,13 +4,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src_FlowControl.Regional_DA import RDA
 
-RDA.setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_2'
+RDA.setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_3'
 RDA.ens = 4
 
 RDA.external_data_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data'
-RDA.case = 'demo_2'
-RDA.basin = 'Danube'
-RDA.shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Danube/Danube3subbasins_subbasins.shp'
+RDA.case = 'demo_3'
+RDA.basin = 'Amazon'
+RDA.shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Amazon/Amazon.shp'
 
 '''for spin-up'''
 RDA.spin_up_start = '2000-01-01'
@@ -20,7 +20,8 @@ RDA.spin_up_years = 5
 
 '''for open-loop and data assimilation'''
 RDA.sim_begin_time = '2002-01-01'
-RDA.sim_end_time = '2005-04-30'
+# RDA.sim_end_time = '2005-04-30'
+RDA.sim_end_time = '2016-04-30'
 
 
 def demo1():
@@ -35,8 +36,8 @@ def demo1():
     # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after data assimilation'''
-    RDA.post_processing()
-    RDA.visualization()
+    # RDA.post_processing()
+    # RDA.visualization()
 
     pass
 
@@ -45,11 +46,11 @@ def demo2():
     from src_DA.EnumDA import Stage
     from mpi4py import MPI
 
-    # RDA.spin_up()
+    RDA.spin_up()
     #
-    # RDA.OL_run()
+    RDA.OL_run()
 
-    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
+    RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
     # try:
     #     RDA.DA_run()  # or whatever your entry point is
@@ -58,11 +59,11 @@ def demo2():
     #     traceback.print_exc()
     #     MPI.COMM_WORLD.Abort(1)
     #
-    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
 
 
 if __name__ == '__main__':
-    demo1()
-    # demo2()
+    # demo1()
+    demo2()

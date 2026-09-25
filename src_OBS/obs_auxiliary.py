@@ -236,6 +236,71 @@ class aux_ESM3_5daily(obs_auxiliary):
         return self
 
 
+class aux_TUD_5daily(obs_auxiliary):
+    """
+    Time reference for the TU Delft 5-daily (to weekly) hybrid GRACE L3 product.
+    The netCDF 'time' axis holds integer days since 2002-04-07T12:00 at irregular 4-7 day spacing and
+    marks the CENTRE of each solution; the product carries no window bounds. The averaging window of
+    epoch i is therefore reconstructed symmetrically from the spacing to its neighbours:
+        half_i = min(gap_prev - 1, gap_next - 1) // 2  (whole days, capped at max_half_window_days)
+        duration_i = [t_i - half_i, t_i + half_i]   (inclusive, 'YYYY-MM-DD_YYYY-MM-DD')
+    which guarantees non-overlapping windows (required by EnKF.helper_resolve_time); days in between
+    windows simply receive no observation. getDataIndex() returns, for every kept epoch, its index on the
+    netCDF time axis so that the preparation class reads exactly these records.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._data_index = None
+        self._time_days = None
+        pass
+
+    def setTimeReference(self, day_begin='2002-01-01', day_end='2030-01-01',
+                         dir_in='/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/Miguel_Tudelft',
+                         filename='TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc', max_half_window_days=3):
+        day_begin = datetime.strptime(day_begin, '%Y-%m-%d')
+        day_end = datetime.strptime(day_end, '%Y-%m-%d')
+
+        ds = nc.Dataset(Path(dir_in) / filename)
+        tv = ds.variables['time']
+        units = tv.units                                    # 'days since 2002-04-07T12:00:00'
+        ref = datetime.strptime(units.split('since')[1].strip().replace('T', ' ')[:19], '%Y-%m-%d %H:%M:%S')
+        days = np.array(tv[:]).astype(float)
+        ds.close()
+
+        centres = [ref + timedelta(days=float(d)) for d in days]
+        gaps = np.diff(days)
+        time_epoch, duration, index = [], [], []
+        for i, c in enumerate(centres):
+            gp = gaps[i - 1] if i > 0 else gaps[0]
+            gn = gaps[i] if i < len(gaps) else gaps[-1]
+            half = int(min(gp - 1, gn - 1) // 2)              # (gap-1)//2 -> windows never overlap
+            half = max(0, min(half, int(max_half_window_days)))
+            first = (c - timedelta(days=half)).date()
+            last = (c + timedelta(days=half)).date()
+            if datetime.combine(first, datetime.min.time()) < day_begin or \
+                    datetime.combine(last, datetime.min.time()) > day_end:
+                continue
+            time_epoch.append(c.strftime('%Y-%m-%d'))
+            duration.append(first.strftime('%Y-%m-%d') + '_' + last.strftime('%Y-%m-%d'))
+            index.append(i)
+
+        self._TimeRef['duration'] = duration
+        self._TimeRef['time_epoch'] = time_epoch
+        self._data_index = np.array(index, dtype=int)
+        self._time_days = days
+        return self
+
+    def getDataIndex(self):
+        """index of every kept epoch on the netCDF time axis (aligned with getTimeReference())"""
+        return self._data_index
+
+    def selectSubTimePeriod(self, day_begin='2003-09-01', day_end='2006-12-31'):
+        """same as the base class, but returns positions so that getDataIndex()[a:b] stays aligned"""
+        x, a, b = super().selectSubTimePeriod(day_begin=day_begin, day_end=day_end)
+        return x, a, b
+
+
 def demo1():
     # aux = aux_ESAsing_5daily()
     # aux = aux_GRACE_SH_monthly()

@@ -166,7 +166,7 @@ class DA_GRACE:
 
     def generate_perturbed_GRACE_obs(self):
         from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_GRACE_SH_monthly, aux_GRACE_mascon_monthly, \
-            aux_ESM3_5daily
+            aux_ESM3_5daily, aux_TUD_5daily
         from src_OBS.GRACE_perturbation import GRACE_perturbed_obs
 
         configDA = self.configDA
@@ -193,6 +193,14 @@ class DA_GRACE:
             t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
             obs_aux = aux_GRACE_mascon_monthly().setTimeReference(month_begin=t1, month_end=t2,
                                                                   dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        elif configDA.obs.GRACE['kind'] == 'TUD_5daily':
+            '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
+            obs_aux = aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                        dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
+                                                        filename=configDA.obs.GRACE.get(
+                                                            'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
+        else:
+            raise ValueError('unknown observation kind: %s' % configDA.obs.GRACE['kind'])
 
         ob.configure_obs_aux(obs_aux=obs_aux)
         ob.perturb_TWS().remove_temporal_mean()
