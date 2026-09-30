@@ -261,7 +261,7 @@ class DA_GRACE:
         print('User case: %s' % self.case)
         print()
         da.run_mpi()
-        print('\nDA finished!\n' % rank)
+        print('\nDA finished (rank %s)!\n' % rank)
 
         pass
 

@@ -68,6 +68,9 @@ class RDA:
     map_style = 'smooth'
     # map_style = 'pixel'
 
+    '''optional (date_begin, date_end) for a daily close-up in the DA evaluation figure; None = no zoom'''
+    eval_zoom = None
+
     @staticmethod
     def config_external_data():
         import json
@@ -369,6 +372,32 @@ class RDA:
         pass
 
     @staticmethod
+    def clean_temp_output(stage, dry_run=True, force=False):
+        """
+        Remove the temporary daily output (daily_output_YYYY-MM-DD.nc) of a finished stage.
+        The folders are taken from DA_setting.json of the current case:
+            Stage.OL -> configDA.basic.OL_output_temp_dir / Ens_k
+            Stage.DA -> configDA.basic.DA_output_temp_dir / <case> / Ens_k
+        The stage must already be collected (Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5 present for
+        every member), otherwise nothing is deleted unless force=True.
+        dry_run=True (default) only reports the files and their size. Run it as a single process
+        (not under mpiexec), e.g. from demo1() after collect_and_statistics() has finished.
+        """
+        from src_DA.configure_DA import config_DA
+        from src_DA.EnumDA import Stage
+        from src_auxiliary.clean_temp_output import clean_daily_output
+
+        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        stage_name = stage.name if isinstance(stage, Stage) else str(stage)
+        assert stage_name in ('OL', 'DA'), 'stage must be Stage.OL or Stage.DA'
+        temp_dir = configDA.basic.OL_output_temp_dir if stage_name == 'OL' else configDA.basic.DA_output_temp_dir
+        res_dir = Path(configDA.basic.res_permanent) / RDA.case
+
+        print('Cleaning temporary %s output of case %s' % (stage_name, RDA.case))
+        return clean_daily_output(temp_dir=temp_dir, res_dir=res_dir, stage_name=stage_name, case=RDA.case,
+                                  dry_run=dry_run, force=force)
+
+    @staticmethod
     def DA_run():
         from mpi4py import MPI
         from src_FlowControl.DA_GRACE import DA_GRACE
@@ -453,14 +482,21 @@ class RDA:
     def visualization():
         from src_postprocessing.Visualization import visualization
         from src_DA.configure_DA import config_DA
-        from src_DA.EnumDA import WaterGap_storage_variables
+        from src_DA.EnumDA import WaterGap_storage_variables, Stage
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
         vv = visualization(configDA=configDA)
 
-        vv.basin_ensemble(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case)
-        vv.GRACE_OL_DA(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
-                       signal=WaterGap_storage_variables.tws.name)
+        fig_path = Path(configDA.basic.res_permanent) / RDA.case
+        '''ensemble time series of the storage compartments, one figure per stage (Components_<stage>.png);
+        panels with a range below min_range [mm] (e.g. constant global lakes) are skipped, ncol sets the layout'''
+        for stage in [Stage.OL, Stage.DA]:
+            vv.basin_ensemble(allow_pop_up=True, fig_path=fig_path, stage=stage, ncol=2, min_range=1.0)
+        vv.GRACE_OL_DA(allow_pop_up=True, fig_path=fig_path, signal=WaterGap_storage_variables.tws.name)
+        '''evaluation on the observation windows: OL vs DA vs GRACE, innovation/residual with sigma, spread;
+        basin_id=0 is the whole basin, k a sub-basin; zoom adds a daily close-up (figures/DA_eval_*.png,
+        statistics for all sub-basins in figures/DA_eval_stats.json)'''
+        vv.DA_evaluation(fig_path=fig_path, basin_id=0, zoom=RDA.eval_zoom)
         '''2-D maps of trend / annual amplitude / annual peak day: OL | DA | GRACE'''
         styles = RDA.map_style if isinstance(RDA.map_style, (list, tuple)) else [RDA.map_style]
         for style in styles:

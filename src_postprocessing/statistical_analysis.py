@@ -112,6 +112,10 @@ class BasinAverageAnalysis:
             # combine='by_coords' automatically concatenates the datasets along the coordinate dimensions (like time)
             ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=True, chunks={"time": 365})
 
+            # restrict to the requested period: the yearly files may extend beyond end_date (e.g. an OL run
+            # that is longer than the DA period), and the basin time series must match the date range exactly
+            ds = ds.sel(time=slice(start_date, end_date))
+
             # print("Successfully loaded and merged dataset:")
 
             self.ds = ds
