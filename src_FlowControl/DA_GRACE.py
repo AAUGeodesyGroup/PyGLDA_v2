@@ -149,6 +149,19 @@ class DA_GRACE:
 
         pass
 
+    def make_state_envelope(self, variables=('riverstor',), force=False):
+        """
+        Per-cell min/max of selected storages over the collected open loop (Res/<case>/OL/Ens_1..N), written to
+        <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage in the analysis
+        within [env_low*min, env_high*max] of what the model produced. Like gather_OLmean it needs the OL to be
+        collected; it is skipped when the file exists unless force=True (recompute after a new open loop).
+        """
+        from src_DA.state_envelope import make_state_envelope
+        cfg = self.configDA
+        return make_state_envelope(res_dir=cfg.basic.res_permanent, case=cfg.basic.case, ens=cfg.basic.ensemble,
+                                   basin=cfg.basic.basin, out_dir=cfg.basic.Auxiliary_dir, variables=variables,
+                                   force=force)
+
     def prepare_design_matrix(self):
         dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)
         dm.configure_mask(mask_path=self.configDA.basic.basin_mask)

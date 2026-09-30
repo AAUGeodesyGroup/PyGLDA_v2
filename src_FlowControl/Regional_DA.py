@@ -68,9 +68,6 @@ class RDA:
     map_style = 'smooth'
     # map_style = 'pixel'
 
-    '''optional (date_begin, date_end) for a daily close-up in the DA evaluation figure; None = no zoom'''
-    eval_zoom = None
-
     @staticmethod
     def config_external_data():
         import json
@@ -426,6 +423,10 @@ class RDA:
 
             da.generate_perturbed_GRACE_obs()
 
+            '''open-loop envelope for the storages bounded by it (see src_DA.Threshold); built once per open loop'''
+            if da.configDA.model.layer.get('riverstor', False):
+                da.make_state_envelope(force=False)
+
         comm.barrier()
 
         da.prepare_design_matrix()
@@ -496,7 +497,7 @@ class RDA:
         '''evaluation on the observation windows: OL vs DA vs GRACE, innovation/residual with sigma, spread;
         basin_id=0 is the whole basin, k a sub-basin; zoom adds a daily close-up (figures/DA_eval_*.png,
         statistics for all sub-basins in figures/DA_eval_stats.json)'''
-        vv.DA_evaluation(fig_path=fig_path, basin_id=0, zoom=RDA.eval_zoom)
+        vv.DA_evaluation(fig_path=fig_path, basin_id=0, zoom=None)
         '''2-D maps of trend / annual amplitude / annual peak day: OL | DA | GRACE'''
         styles = RDA.map_style if isinstance(RDA.map_style, (list, tuple)) else [RDA.map_style]
         for style in styles:

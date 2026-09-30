@@ -33,7 +33,8 @@ class EnKF:
         self._sv = sv
         self._sv_excluded = sv_excluded
         self._today = '2000-01-01'
-        self.threshold = model_state_threshold(configDA=DA_setting).threshold
+        self._thresholder = model_state_threshold(configDA=DA_setting)
+        self.threshold = self._thresholder.threshold
 
         '''obtain info'''
         self._obs_helper = self.helper_resolve_time(obs.get_obs_aux())
@@ -313,6 +314,16 @@ class EnKF:
             states_old = None
             vv = None
             states_ens_update_delta = None
+
+        '''clipping statistics of this member (printed to the rank log, saved next to its daily output)'''
+        if rank != OL_thread:
+            self._thresholder.print_summary()
+            try:
+                from pathlib import Path
+                out_dir = Path(self.DA_setting.basic.DA_output_temp_dir) / self.DA_setting.basic.case / ('Ens_%d' % rank)
+                self._thresholder.save_log(out_dir / 'threshold_log.json')
+            except Exception as err:            # logging must never stop the run
+                print('threshold log not written: %s' % err)
 
         pass
 
