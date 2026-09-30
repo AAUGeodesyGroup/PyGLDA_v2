@@ -333,6 +333,14 @@ class RDA:
         '''the first stage: reorganize the data over specific area'''
         state_dir = configDA.basic.OL_output_temp_dir if stage == Stage.OL else configDA.basic.DA_output_temp_dir
 
+        if rank == 1:
+            print('\n=================== Collection and statistics: %s ===================' % stage.name)
+            print('case %s | basin %s | %s to %s | %d members (+ unperturbed)' %
+                  (RDA.case, RDA.basin, RDA.sim_begin_time, RDA.sim_end_time, RDA.ens))
+            print('step 1/2: %s daily output from %s into yearly files under %s' %
+                  ('skipped (skip_collect=True), using existing yearly files' if skip_collect else 'merging',
+                   state_dir, Path(configDA.basic.res_permanent) / RDA.case / stage.name))
+
         ps = yearly_merge(basin_mask_dir=Path(RDA.external_data_path) / 'Basin/mask', basin_name=RDA.basin,
                           state_dir=state_dir,
                           output_dir=configDA.basic.res_permanent, stage=stage, case_name=RDA.case)
@@ -353,6 +361,9 @@ class RDA:
         comm.barrier()
 
         '''the second stage: do statistical analysis and save it'''
+        if rank == 1:
+            print('step 2/2: basin-average time series of all storages -> Res/%s/%s/Ens_k/basin_ts_%s.h5' %
+                  (RDA.case, stage.name, stage.name))
         analysis = BasinAverageAnalysis(
             basin_mask_path=configDA.basic.basin_mask,
             state_dir=configDA.basic.res_permanent, stage=stage, ens_id=rank, case_name=RDA.case)
@@ -365,6 +376,8 @@ class RDA:
             _abort_with_report(comm, rank, 'collect')
 
         comm.barrier()
+        if rank == 1:
+            print('Collection and statistics of %s finished: %s' % (stage.name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
 
         pass
 
@@ -503,6 +516,26 @@ class RDA:
         for style in styles:
             vv.harmonic_maps(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
                              variable=WaterGap_storage_variables.tws.name, style=style)
+
+    @staticmethod
+    def increment_diagnosis(tag=None, event_threshold_mm=40.0):
+        """
+        Diagnosis of the assimilation increments from the collected basin time series (needs post_processing):
+        A. mean increment per window vs drift inside the windows, per storage (filter-model tug of war)
+        B. windows with a basin-mean increment above event_threshold_mm in one storage, sub-basin breakdown
+        C. cross-member correlation of every storage with TWS in OL and DA
+        D. yearly maxima / minima of the window-mean TWS anomaly (OL, DA, GRACE)
+        Written to Res/<case>/figures/da_increment_diagnosis_<tag>.{txt,json} and da_increments_<tag>.png.
+        """
+        from src_DA.configure_DA import config_DA
+        from src_postprocessing.da_increment_diagnosis import run_diagnosis
+
+        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        res_dir = Path(configDA.basic.res_permanent) / RDA.case
+        return run_diagnosis(res_dir=res_dir, obs_file=Path(configDA.obs.dir) / ('%s_obs_GRACE.hdf5' % RDA.basin),
+                             out_dir=res_dir / 'figures', tag=tag or RDA.case, nens=RDA.ens,
+                             start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
+                             event_threshold_mm=event_threshold_mm)
 
 
 

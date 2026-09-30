@@ -17,6 +17,7 @@ class FusionMethod(Enum):
     EnKF_v0 = 0
     EnKF_v1 = 1
     EnKF_v2 = 2
+    EnKF_localized = 3      # state-observation localization (src_DA.EnKF_localized)
 
 
 class WaterGap_storage_variables(Enum):

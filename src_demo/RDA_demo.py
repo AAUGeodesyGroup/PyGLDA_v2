@@ -36,8 +36,14 @@ def demo1():
     # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after data assimilation'''
-    # RDA.post_processing()
-    # RDA.visualization()
+    RDA.post_processing()
+    RDA.visualization()
+    RDA.increment_diagnosis()
+
+    '''house-keeping: remove the temporary daily output of a collected stage (dry run first, then dry_run=False)'''
+    # from src_DA.EnumDA import Stage
+    # RDA.clean_temp_output(Stage.OL, dry_run=True)
+    # RDA.clean_temp_output(Stage.DA, dry_run=True)
 
     pass
 
@@ -46,24 +52,24 @@ def demo2():
     from src_DA.EnumDA import Stage
     from mpi4py import MPI
 
-    RDA.spin_up()
+    # RDA.spin_up()
+    # #
+    # RDA.OL_run()
     #
-    RDA.OL_run()
+    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
-    RDA.collect_and_statistics(Stage.OL, skip_collect=False)
-
-    # try:
-    #     RDA.DA_run()  # or whatever your entry point is
-    # except Exception:
-    #     import traceback
-    #     traceback.print_exc()
-    #     MPI.COMM_WORLD.Abort(1)
-    #
-    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    '''DA of 2026-09-29 (TUD 5-daily, 4 members): run and collection done'''
+    try:
+        RDA.DA_run()  # or whatever your entry point is
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        MPI.COMM_WORLD.Abort(1)
+    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
 
     pass
 
 
 if __name__ == '__main__':
-    # demo1()
-    demo2()
+    # demo1()     # post_processing / visualization: run after the OL statistics below
+    demo2()      # mpiexec -n 5 python -u RDA_demo.py Config_ReWaterGAP.json

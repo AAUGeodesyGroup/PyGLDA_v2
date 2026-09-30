@@ -14,7 +14,8 @@ import warnings
 import xarray as xr
 
 
-def make_state_envelope(res_dir, case: str, ens: int, basin: str, out_dir, variables=('riverstor',),
+def make_state_envelope(res_dir, case: str, ens: int, basin: str, out_dir,
+                        variables=('riverstor', 'groundwstor'),
                         members=None, force: bool = False, verbose: bool = True):
     """
     res_dir   : configDA.basic.res_permanent
@@ -26,9 +27,14 @@ def make_state_envelope(res_dir, case: str, ens: int, basin: str, out_dir, varia
     """
     out_fn = Path(out_dir) / ('state_envelope_%s.nc' % basin)
     if out_fn.exists() and not force:
+        with xr.open_dataset(out_fn) as old:
+            missing = [v for v in variables if ('%s_min' % v not in old) or ('%s_max' % v not in old)]
+        if not missing:
+            if verbose:
+                print('state envelope exists: %s (use force=True to recompute)' % out_fn)
+            return out_fn
         if verbose:
-            print('state envelope exists: %s (use force=True to recompute)' % out_fn)
-        return out_fn
+            print('state envelope %s lacks %s -> recomputed' % (out_fn, ','.join(missing)))
 
     members = list(range(1, ens + 1)) if members is None else list(members)
     vmin, vmax, lat, lon, n_files = {v: None for v in variables}, {v: None for v in variables}, None, None, 0

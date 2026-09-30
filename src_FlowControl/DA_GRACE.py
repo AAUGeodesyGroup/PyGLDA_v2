@@ -149,12 +149,13 @@ class DA_GRACE:
 
         pass
 
-    def make_state_envelope(self, variables=('riverstor',), force=False):
+    def make_state_envelope(self, variables=('riverstor', 'groundwstor'), force=False):
         """
         Per-cell min/max of selected storages over the collected open loop (Res/<case>/OL/Ens_1..N), written to
-        <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage in the analysis
-        within [env_low*min, env_high*max] of what the model produced. Like gather_OLmean it needs the OL to be
-        collected; it is skipped when the file exists unless force=True (recompute after a new open loop).
+        <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage and groundwater
+        in the analysis within an envelope of what the model produced. Like gather_OLmean it needs the OL to be
+        collected; it is skipped when the file exists and holds all variables, unless force=True (recompute after
+        a new open loop).
         """
         from src_DA.state_envelope import make_state_envelope
         cfg = self.configDA
@@ -261,7 +262,15 @@ class DA_GRACE:
         '''DA experiment'''
         # # da = DataAssimilation(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         # # da = DataAssimilation_monthly(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        da = EnKF(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
+        '''choice of the filter: configDA.method.fusion_method (EnKF_v0 = plain EnKF; EnKF_localized = EnKF with
+        state-observation localization, settings in configDA.method.localization)'''
+        from src_DA.EnumDA import FusionMethod
+        if configDA.method.fusion_method == FusionMethod.EnKF_localized:
+            from src_DA.EnKF_localized import EnKF_localized
+            da = EnKF_localized(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included,
+                                sv_excluded=sv_excluded, localization=getattr(configDA.method, 'localization', None))
+        else:
+            da = EnKF(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
         # # da = EnSQRA(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         # # da = EnSQRA_V2(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         # # da = EnKF_localization_v1(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)

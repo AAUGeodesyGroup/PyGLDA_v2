@@ -12,7 +12,9 @@ class model_state_threshold:
 
     Rules (only for the storages that are part of the DA state, configDA.model.layer == True):
       soilmoist          0 <= S <= smax (maximum soil water content, static, from <Auxiliary_dir>/smax.nc)
-      groundwstor        no bound (WaterGAP groundwater may go into deficit; long-term excursions are signal)
+      groundwstor        open-loop envelope (see riverstor); WaterGAP groundwater may go into deficit, so no fixed
+                         bound, but the analysis is kept within env_low*min .. env_high*max of the open loop, with
+                         the bounds widened symmetrically by the OL range where min and max have different signs
       riverstor          positive floor (a storage of exactly zero makes the Manning velocity divide by zero
                          in river_routing) and, if available, a per-cell envelope learned from the open loop:
                              env_low  * min_OL(cell)  <=  S  <=  env_high * max_OL(cell)
@@ -29,7 +31,7 @@ class model_state_threshold:
     reported as a term of the water balance. summary() returns the statistics, save_log() writes them to JSON.
     """
 
-    ENVELOPE_VARS = ('riverstor',)          # storages bounded by the open-loop envelope
+    ENVELOPE_VARS = ('riverstor', 'groundwstor')     # storages bounded by the open-loop envelope
 
     def __init__(self, configDA: config_DA, env_low: float = 0.5, env_high: float = 1.5, river_floor: float = 1e-3,
                  snow_max: float = 1000.0):
@@ -54,16 +56,24 @@ class model_state_threshold:
                 if ('%s_min' % var in env) and ('%s_max' % var in env):
                     lo = env['%s_min' % var].values.astype(float)
                     hi = env['%s_max' % var].values.astype(float)
-                    # outside the basin (NaN) -> no bound
-                    lo = np.where(np.isfinite(lo), self.env_low * lo, -np.inf)
-                    hi = np.where(np.isfinite(hi), self.env_high * hi, np.inf)
+                    # outside the basin (NaN) -> no bound. For positive storages the bounds are env_low*min and
+                    # env_high*max; for signed storages (groundwater) the OL range is widened on both sides by
+                    # (env_high-1)*range so that a negative minimum does not shrink the interval
+                    rng = hi - lo
+                    signed = np.nanmin(lo) < 0
+                    if signed:
+                        lo_b, hi_b = lo - (self.env_high - 1.0) * rng, hi + (self.env_high - 1.0) * rng
+                    else:
+                        lo_b, hi_b = self.env_low * lo, self.env_high * hi
+                    lo = np.where(np.isfinite(lo), lo_b, -np.inf)
+                    hi = np.where(np.isfinite(hi), hi_b, np.inf)
                     self.envelope[var] = (lo, hi)
             env.close()
         elif 'riverstor' in self.layers:
             print('model_state_threshold: %s not found -> riverstor bounded by the positive floor only' % env_fn)
 
         self.non_negative_vars = ['canopystor', 'reservoirstor', 'localwetlandstor', 'globalwetlandstor']
-        self.unbounded_vars = ['groundwstor', 'locallakestor', 'globallakestor']
+        self.unbounded_vars = ['locallakestor', 'globallakestor']
 
         '''clipping statistics'''
         self.stats = {var: dict(n_calls=0, n_cells_checked=0, n_cells_clipped=0, water_added_mm=0.0,
@@ -83,9 +93,11 @@ class model_state_threshold:
                 lo, hi = self.envelope[var]
                 return np.maximum(lo, self.river_floor), hi
             return self.river_floor, np.inf
+        if var in self.envelope:                        # groundwater (signed storage)
+            return self.envelope[var]
         if var in self.non_negative_vars:
             return 0.0, np.inf
-        return None                                     # groundwater, lakes: unbounded
+        return None                                     # lakes, groundwater without envelope: unbounded
 
     # ------------------------------------------------------------------ application
     def threshold(self, state: dict):

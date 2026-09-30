@@ -147,6 +147,19 @@ class config_DA:
 
         def __init__(self):
             self.fusion_method = FusionMethod.EnKF_v0.name
+            '''used by EnKF_localized: kind 'block' (own sub-basin only) or 'gaussian' (distance taper);
+            length_km and cutoff (in units of length_km) apply to the gaussian taper'''
+            self.localization = {'kind': 'block', 'length_km': 300, 'cutoff': 2.0}
+            '''used by EnKF_localized: spread maintenance and observation-error inflation
+            inflation           multiplicative inflation of the forecast anomalies (1.0 = off)
+            rtps_alpha          relaxation to prior spread, 0 = off ... 1 = keep forecast spread (Whitaker & Hamill 2012)
+            obs_error_inflation {sub_basin_id (1-based, as string): factor on the error variance}, {} = off'''
+            self.inflation = 1.0
+            self.rtps_alpha = 0.7
+            self.obs_error_inflation = {}
+            '''used by EnKF_localized: 'enkf' (increments from the Kalman gain) or 'non_negative' (the sub-basin
+            TWS increment is distributed with non-negative shares over cells and storages; for small ensembles)'''
+            self.increment_partition = 'enkf'
 
 
 
