@@ -436,9 +436,9 @@ class RDA:
 
             da.generate_perturbed_GRACE_obs()
 
-            '''open-loop envelope for the storages bounded by it (see src_DA.Threshold); built once per open loop'''
-            if da.configDA.model.layer.get('riverstor', False):
-                da.make_state_envelope(force=False)
+            '''open-loop envelope for river storage and groundwater (see src_DA.Threshold): rebuilt from the collected
+            open loop at every DA start, so that it always matches the current case, basin and period'''
+            da.make_state_envelope(force=True)
 
         comm.barrier()
 

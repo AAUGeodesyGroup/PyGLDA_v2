@@ -9,6 +9,17 @@ import xarray as xr
 
 
 class basin_shp_process:
+    """
+    Rasterise a (sub-)basin shapefile (column ID = 1..N) to the 0.5 or 1 degree grid.
+    rule (class default `default_rule`, or argument of shp_to_mask):
+      'area'   : (default) a cell belongs to the sub-basin that covers the largest part of it, provided the whole
+                 basin covers at least `area_threshold` of the cell (default 0.4: basin area within ~1 %, the
+                 per-sub-basin areas within ~4 %, for the Danube); sub-basins never overlap
+      'centre' : a cell belongs to the sub-basin whose polygon contains the cell centre (classic rule used for
+                 the Amazon/demo_3 masks; about half of the cut boundary cells are dropped)
+    """
+    default_rule = 'area'
+    area_threshold = 0.4
 
     def __init__(self, res, basin_name='MDB', save_dir='../data/basin/mask'):
         self._res = res
@@ -58,75 +69,158 @@ class basin_shp_process:
 
         return self
 
-    def shp_to_mask(self, shp_path='../data/basin/shp/MDB_4_shapefiles/MDB_4_subbasins.shp', issave=False):
+    def shp_to_mask(self, shp_path='../data/basin/shp/MDB_4_shapefiles/MDB_4_subbasins.shp', issave=False, rule=None):
         import geopandas as gpd
-        import shapely.vectorized
-        res = self._res
-        basin_name = self._basin_name
-
-        if issave:
-            h5fn = str(self.save_dir / ('%s_res_%s.h5' % (basin_name, res)))
-            hf = h5py.File(h5fn, 'w')
-
-        mask_basin = {}
+        rule = (rule or self.default_rule).lower()
+        assert rule in ('centre', 'center', 'area'), "rule must be 'centre' or 'area'"
         gdf = gpd.read_file(shp_path)
+        if rule == 'area':
+            mask_basin = self._masks_by_area(gdf)
+        else:
+            mask_basin = self._masks_by_centre(gdf)
 
+        mask_all = np.zeros(mask_basin[1].shape, dtype=bool)
+        for id in mask_basin:
+            mask_all |= mask_basin[id]
+        if issave:
+            h5fn = str(self.save_dir / ('%s_res_%s.h5' % (self._basin_name, self._res)))
+            with h5py.File(h5fn, 'w') as hf:
+                for id in mask_basin:
+                    hf.create_dataset('sub_basin_%s' % id, data=mask_basin[id].astype(int))
+                hf.create_dataset('basin', data=mask_all.astype(int))
+                hf.attrs['rule'] = rule
+        mask_basin[0] = mask_all
+        self.mask = mask_basin
+        return self
+
+    def _grid(self):
+        res = self._res
         err = res / 10
         lat = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
         lon = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
+        return lat, lon
 
-        lon, lat = np.meshgrid(lon, lat)
-
-        mask_all = np.zeros(np.shape(lat))
+    def _masks_by_centre(self, gdf):
+        """classic rule: the cell centre is inside (or on the boundary of) the sub-basin polygon"""
+        import shapely.vectorized
+        lat1, lon1 = self._grid()
+        lon, lat = np.meshgrid(lon1, lat1)
+        mask_basin = {}
         for id in np.arange(gdf.ID.size) + 1:
-            # if id !=3: continue
             bd1 = gdf[gdf.ID == id]
-
-            """crop data"""
             bb = bd1.total_bounds
-            crop_box = {
-                "lat": [
-                    bb[3],
-                    bb[1]
-                ],
-                "lon": [
-                    bb[0],
-                    bb[2]
-                ]}
-
+            crop_box = {"lat": [bb[3], bb[1]], "lon": [bb[0], bb[2]]}
             sub_lat, sub_lon, box_mask_id = self._crop_box(crop_box=crop_box)
-
-            '''get local mask'''
             mask1 = shapely.vectorized.touches(bd1.geometry.item(), sub_lon, sub_lat)
             mask2 = shapely.vectorized.contains(bd1.geometry.item(), sub_lon, sub_lat)
-            mask3 = mask1 + mask2
-
-            '''project to the global mask'''
             mask_gl = np.full_like(lat, fill_value=0, dtype=bool)
-            mask_gl[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]] = mask3
-            mask3 = mask_gl
-
-            # mask3=mask2
-            # print('Mask for %s' % bd1.ID.values[0])
+            mask_gl[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]] = mask1 + mask2
             if self.box_mask is not None:
-                mask3 = (mask3 * self.box_mask).astype(bool)
+                mask_gl = (mask_gl * self.box_mask).astype(bool)
+            mask_basin[int(bd1.ID.values[0])] = mask_gl
+        return mask_basin
 
-            mask_basin[bd1.ID.values[0]] = mask3
+    def _masks_by_area(self, gdf):
+        """area rule: coverage of every cell by every sub-basin polygon; the cell goes to the sub-basin with the
+        largest coverage if the basin as a whole covers >= area_threshold of the cell"""
+        from shapely.geometry import box as shp_box
+        from shapely.prepared import prep
+        res = self._res
+        lat1, lon1 = self._grid()
+        bb = gdf.total_bounds
+        rows = np.where((lat1 + res / 2 > bb[1]) & (lat1 - res / 2 < bb[3]))[0]
+        cols = np.where((lon1 + res / 2 > bb[0]) & (lon1 - res / 2 < bb[2]))[0]
+        ids = [int(i) for i in gdf.ID.values]
+        geoms = {int(r.ID): r.geometry for _, r in gdf.iterrows()}
+        prepared = {k: prep(g) for k, g in geoms.items()}
+        cov = np.zeros((len(ids), len(lat1), len(lon1)))
+        for i in rows:
+            for j in cols:
+                cell = shp_box(lon1[j] - res / 2, lat1[i] - res / 2, lon1[j] + res / 2, lat1[i] + res / 2)
+                for k, id in enumerate(ids):
+                    if not prepared[id].intersects(cell):
+                        continue
+                    if prepared[id].contains(cell):
+                        cov[k, i, j] = 1.0
+                    else:
+                        cov[k, i, j] = geoms[id].intersection(cell).area / cell.area
+        total = cov.sum(0)                                   # coverage by the whole basin (sub-basins do not overlap)
+        inside = total >= self.area_threshold
+        winner = cov.argmax(0)
+        mask_basin = {}
+        for k, id in enumerate(ids):
+            m = inside & (winner == k)
+            if self.box_mask is not None:
+                m = (m * self.box_mask).astype(bool)
+            mask_basin[id] = m
+        return mask_basin
 
-            '''add up to get the mask for the entire basin'''
-            mask_all += mask3
+    def plot_mask(self, shp_path=None, fn=None, title=None, allow_pop_up=True, dpi=200):
+        """
+        Matplotlib map of the rasterised mask (call after shp_to_mask): one colour per sub-basin on the model
+        grid with the cell edges drawn, the polygons of the shapefile in black, an ID badge per sub-basin and a
+        legend (ID, name, cells, area of the mask) to the right of the map.
+        fn: output name without extension (.png and .pdf are written); None = no file.
+        """
+        import matplotlib
+        if not allow_pop_up:
+            matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import ListedColormap, BoundaryNorm
+        from matplotlib.patches import Patch
+        import geopandas as gpd
 
-            if issave:
-                hf.create_dataset('sub_basin_%s' % id, data=mask3.astype(int))
+        plt.rcParams.update({'font.size': 12, 'font.weight': 'bold', 'axes.labelweight': 'bold', 'axes.titleweight': 'bold',
+                             'axes.linewidth': 1.8, 'xtick.major.width': 1.6, 'ytick.major.width': 1.6})
+        res = self._res
+        lat1, lon1 = self._grid()
+        ids = sorted(k for k in self.mask if k != 0)
+        lab = np.zeros(self.mask[0].shape, int)
+        for k in ids:
+            lab[self.mask[k]] = k
+        r = np.where(self.mask[0].any(1))[0]; c = np.where(self.mask[0].any(0))[0]
+        r0, r1 = max(r[0] - 2, 0), min(r[-1] + 3, len(lat1)); c0, c1 = max(c[0] - 2, 0), min(c[-1] + 3, len(lon1))
+        X = np.append(lon1[c0:c1] - res / 2, lon1[c1 - 1] + res / 2)          # cell edges
+        Y = np.append(lat1[r0:r1] + res / 2, lat1[r1 - 1] - res / 2)
+        wcell = (111.2 * res) ** 2 * np.cos(np.deg2rad(lat1))[:, None]          # km2 per cell
+        colors = ['steelblue', 'seagreen', 'plum', 'pink', 'khaki', 'turquoise', 'salmon', 'gold', 'orchid',
+                  'lightcoral', 'palegreen', 'skyblue', 'tan', 'lightpink', 'yellowgreen', 'thistle', 'wheat', 'aquamarine']
+        cols = [colors[(k - 1) % len(colors)] for k in ids]
+        cmap = ListedColormap(['white'] + cols); norm = BoundaryNorm(np.arange(-0.5, len(ids) + 1.5, 1), len(ids) + 1)
+        gdf = gpd.read_file(shp_path) if shp_path is not None else None
+        names = {int(rw.ID): str(rw.NAME).split(' (')[0] for _, rw in gdf.iterrows()} if gdf is not None and 'NAME' in gdf else {}
 
-        if issave:
-            hf.create_dataset('basin', data=mask_all.astype(int))
-            hf.close()
-
-        mask_basin[0] = mask_all.astype(bool)
-
-        self.mask = mask_basin
-        return self
+        fig, ax = plt.subplots(figsize=(16, 7.5))
+        ax.pcolormesh(X, Y, lab[r0:r1, c0:c1], cmap=cmap, norm=norm, edgecolors='0.75', linewidth=0.4, shading='flat')
+        if gdf is not None:
+            gdf.boundary.plot(ax=ax, color='k', lw=1.5)
+            for _, rw in gdf.iterrows():
+                p = rw.geometry.representative_point()
+                ax.text(p.x, p.y, str(rw.ID), ha='center', va='center', fontsize=14, fontweight='bold',
+                        bbox=dict(boxstyle='circle,pad=0.3', fc='w', ec='k', lw=1.2))
+        handles = [Patch(fc=cols[i], ec='k', label='%d  %s\n     %d cells, %.0f x10$^3$ km$^2$'
+                         % (k, names.get(k, 'sub-basin %d' % k), self.mask[k].sum(), (self.mask[k] * wcell).sum() / 1e3))
+                   for i, k in enumerate(ids)]
+        handles.append(Patch(fc='none', ec='none', label='total: %d cells, %.0f x10$^3$ km$^2$'
+                             % (self.mask[0].sum(), (self.mask[0] * wcell).sum() / 1e3)))
+        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=10, frameon=False,
+                  title='sub-basins (ID, cells, mask area)', title_fontsize=11, labelspacing=1.0)
+        lat0 = 0.5 * (Y[0] + Y[-1])
+        ax.set_xticks(np.arange(np.ceil(X[0]), X[-1] + 0.01, 2 if X[-1] - X[0] > 15 else 1))
+        ax.set_yticks(np.arange(np.ceil(Y[-1]), Y[0] + 0.01, 1 if Y[0] - Y[-1] < 15 else 2))
+        ax.set_xlim(X[0], X[-1]); ax.set_ylim(Y[-1], Y[0]); ax.set_aspect(1 / np.cos(np.deg2rad(lat0)))
+        ax.set_xlabel('longitude [deg]'); ax.set_ylabel('latitude [deg]')
+        ax.set_title(title or '%s %s-degree model grid: %d cells in %d sub-basins (rule %s, threshold %.2f)\nblack: shapefile polygons'
+                     % (self._basin_name, res, int(self.mask[0].sum()), len(ids), self.default_rule, self.area_threshold))
+        fig.tight_layout()
+        if fn is not None:
+            Path(fn).parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(str(fn) + '.png', dpi=dpi, bbox_inches='tight')
+            fig.savefig(str(fn) + '.pdf', bbox_inches='tight')
+            print('figure', str(fn) + '.png/.pdf')
+        if allow_pop_up:
+            plt.show()
+        return fig
 
     def mask_to_vec(self, external_mask=None,
                     model_mask_global='/media/user/My Book/Fan/W3RA_data/crop_input/test/mask/mask_global.h5'):
@@ -277,6 +371,14 @@ def load_mask(mask_path:dir):
     local_mask['global_2d'] = global_mask['basin'] # global 2D ---> basin grid 1D
     return box_crop, local_mask
 
+def demo_Danube():
+    """rasterise the HydroBASINS Danube shapefile with the default rule and plot the grid"""
+    base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
+    shp = base / 'Basin/shp/Danube/Danube.shp'
+    bs = basin_shp_process(res=0.5, basin_name='Danube', save_dir=base / 'Basin/mask').shp_to_mask(shp_path=str(shp), issave=False)
+    bs.plot_mask(shp_path=str(shp), fn=base / 'Extra/fig/Danube_grid_0.5', title='Danube 0.5-degree model grid')
+
+
 def demo1():
     basin_shp = basin_shp_process(save_dir='/media/user/My Book/Fan/WaterGap/Basin/mask',
                                   basin_name='Brahmaputra', res=0.5)
@@ -290,4 +392,5 @@ def demo2():
 
 if __name__ == '__main__':
     # demo1()
-    demo2()
+    # demo2()
+    demo_Danube()
