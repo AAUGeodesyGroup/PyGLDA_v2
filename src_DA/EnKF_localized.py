@@ -1,40 +1,23 @@
 """
-EnKF with state-observation localization (and hooks for spread relaxation and observation-error inflation).
+Localized EnKF for basin-averaged TWS observations, assembled from independent components:
 
-Why: with a small ensemble the sample cross-covariance between the state of one sub-basin and the observation of
-another is dominated by sampling noise. In the Amazon run this let the large innovations of the estuary unit
-remove river storage along the whole mainstem. The variants in src_DA.EnKF localize only in observation space
-(tapering R or the observation-space covariance), which does not stop this: the leakage happens in the gain,
-through  Pxy = A HA^T / (N-1).  Here Pxy is tapered element-wise (Schur product) with a matrix L (n_state x n_obs)
-that is 1 for cells inside the observed sub-basin and decays with distance to it, and Pyy = HA HA^T / (N-1) is
-tapered with the corresponding sub-basin to sub-basin taper, so that
+    localization  src_DA.localization  NoLocalization | BlockLocalization | GaussianLocalization
+    inflation     src_DA.inflation     NoInflation | MultiplicativeInflation | RTPS | AdditiveInflation |
+                                       AdaptiveAdditiveInflation
+    partition     src_DA.partition     EnKFPartition | NonNegativePartition
+    bounds        src_DA.bounds        StateBounds (physical limits, window-aware)
 
-        K = (L o Pxy) (L_obs o Pyy + R)^-1 .
+Analysis step (one window, window-mean states):
 
-Settings (DA_setting.json, block "method"):
-    "fusion_method": "EnKF_localized",
-    "localization": {"kind": "block" | "gaussian", "length_km": 300, "cutoff": 2.0}
-        block    : each observation updates only the cells of its own sub-basin (L = membership matrix)
-        gaussian : L = exp(-0.5 (d/length)^2) with d the distance [km] from a cell to the nearest cell of the
-                   observed sub-basin (0 inside it), set to 0 beyond cutoff*length; Pyy is tapered with the
-                   same function of the mean distance between the cells of two sub-basins
-    "inflation": 1.0            multiplicative inflation of the forecast anomalies before the update (1 = off)
-    "rtps_alpha": 0.7           relaxation-to-prior-spread (Whitaker & Hamill 2012): the analysis spread of every
-                                state element is set to alpha*sigma_forecast + (1-alpha)*sigma_analysis; 0 = off,
-                                1 = analysis keeps the full forecast spread. Counters the spread collapse of small
-                                ensembles without touching the analysis mean.
-    "obs_error_inflation": {}   per-sub-basin factor on the observation error variance, e.g. {"18": 9} triples
-                                sigma of sub-basin 18 (1-based index); R' = D R D keeps the error correlations
-    "increment_partition": "enkf" | "non_negative"
-        enkf         : increments as given by the (localized) Kalman gain
-        non_negative : the sub-basin TWS increment of the Kalman update is kept, but it is distributed over the
-                       cells and storages of the sub-basin with non-negative shares proportional to
-                       variance x max(correlation with the sub-basin TWS, 0). No storage is emptied to fill another
-                       one, and no element can receive more than the sub-basin increment times its share. Meant for
-                       small ensembles, whose vertical partition of the increment is dominated by sampling noise and
-                       by the parameter perturbation (member with more TWS = member with more groundwater and less
-                       river water), which the Amazon 4-member run turned into a filter-model tug of war.
-The state vector ordering is that of EnsStates / DM_basin_average: cell-major, vertical_dim storages per cell.
+    A  = inflation.prior(X_f - mean)                    multiplicative / additive inflation (or nothing)
+    K  = (L_state o Pxy) (L_obs o Pyy + R)^-1           localization tapers, R' = D R D (obs_error_inflation)
+    dX = partition.split(K (y - HX))                    as given by K, or non-negative and bound-aware
+    Xa = inflation.posterior(X + dX)                    RTPS (or nothing)
+
+The components are chosen in DA_setting.json ("method" block) and built by src_DA.filter_factory.build_filter;
+see doc/configuration.md. The daily loop, MPI, window means / extremes and the post-update thresholds live in the
+base class src_DA.EnKF.EnKF. The state vector is that of EnsStates / DM_basin_average: cell-major, vertical_dim
+storages per cell.
 """
 import numpy as np
 from src_DA.EnKF import EnKF
@@ -42,102 +25,78 @@ from src_DA.configure_DA import config_DA
 from src_DA.observations import GRACE_obs
 from src_DA.ExtractStates import EnsStates
 from src_GHM.Interface.DailyStepRun import DailyModelRun as model_run_daily
+from src_DA.localization import Localization, BlockLocalization, sub_basin_membership
+from src_DA.inflation import Inflation, NoInflation
+from src_DA.partition import Partition, EnKFPartition
+from src_DA.bounds import StateBounds
 
 
 class EnKF_localized(EnKF):
+    METHOD = 'EnKF_localized'
 
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
-                 sv_excluded: EnsStates, localization: dict = None):
+                 sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
+                 partition: Partition = None, obs_error_inflation: dict = None, obs_error_correlation: str = 'full',
+                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True):
         super().__init__(DA_setting, model, obs, sv, sv_excluded)
-        loc = dict(kind='block', length_km=300.0, cutoff=2.0)
-        if localization:
-            loc.update(localization)
-        self.loc = loc
-        self._L_state, self._L_obs = self._build_taper(sv, kind=loc['kind'], length_km=float(loc['length_km']),
-                                                       cutoff=float(loc['cutoff']))
+        self.localization = localization or BlockLocalization()
+        self.inflation = inflation or NoInflation()
+        self.partition = partition or EnKFPartition()
+
+        '''localization tapers'''
+        self._L_state, self._L_obs = self.localization.build(sv.DM.local_mask, sv.DM.vertical_dim)
         n_state, n_obs = self._L_state.shape
 
-        # spread maintenance and observation-error inflation, all read from the "method" block with defaults
-        m = DA_setting.method
-        self._inflation = float(getattr(m, 'inflation', 1.0))
-        self._rtps_alpha = float(getattr(m, 'rtps_alpha', 0.7))
-        oei = getattr(m, 'obs_error_inflation', None) or {}
+        '''state layout: storage of every element, sub-basin of every element (from the membership, not the taper)'''
+        names = list(sv.DM.statesnn)
+        n_cell = n_state // len(names)
+        self._var_idx = np.tile(np.arange(len(names)), n_cell)
+        M = sub_basin_membership(sv.DM.local_mask)
+        owner_cell = np.where(M.sum(1) > 0, np.argmax(M, axis=1), -1)
+        self._owner = np.repeat(owner_cell, len(names))
+        '''soil capacity: the same smax as the post-update threshold, so that the partition hands the water soil cannot
+        hold to the other storages (conserved) instead of the threshold deleting it after the update'''
+        upper = {}
+        self._soil_upper_bound = bool(soil_upper_bound) and 'soilmoist' in names
+        if self._soil_upper_bound:
+            mk = np.asarray(sv.DM.local_mask['basin_2d']).astype(bool)
+            smax = np.asarray(self._thresholder.smax, dtype=float)
+            if smax.shape != mk.shape or int(mk.sum()) != n_cell:
+                raise ValueError('soil_upper_bound: smax %s / basin mask %s (%d cells) do not match the state vector '
+                                 '(%d cells)' % (smax.shape, mk.shape, int(mk.sum()), n_cell))
+            upper['soilmoist'] = smax[mk]
+        self.bounds = StateBounds(names, n_cell, upper=upper)
+
+        '''observation-error inflation per sub-basin (1-based keys): R' = D R D keeps the error correlations'''
+        self._oei = dict(obs_error_inflation or {})
         d = np.ones(n_obs)
-        for k, f in oei.items():
-            d[int(k) - 1] = np.sqrt(float(f))
-        self._R_scale = np.outer(d, d)                      # R' = D R D keeps the error correlations
+        for k, fac in self._oei.items():
+            d[int(k) - 1] = np.sqrt(float(fac))
+        self._R_scale = np.outer(d, d)
 
-        self._partition = str(getattr(m, 'increment_partition', 'enkf')).lower()
-        if self._partition not in ('enkf', 'non_negative'):
-            raise ValueError('increment_partition must be "enkf" or "non_negative", got %s' % self._partition)
-        self._partition_stats = dict(n_updates=0, n_obs_fallback=0, n_obs_unresolved=0,
-                                     max_abs_inc_enkf=0.0, max_abs_inc_new=0.0)
+        '''observation-error correlation between sub-basins: "full" (as delivered with the GRACE product) or "diagonal"
+        (sensitivity test: R without off-diagonal terms; the member observations are re-perturbed consistently)'''
+        self._obs_corr = str(obs_error_correlation or 'full').lower()
+        if self._obs_corr not in ('full', 'diagonal'):
+            raise ValueError('obs_error_correlation must be "full" or "diagonal", got %s' % self._obs_corr)
+        self._n_obs_decorrelated = 0
 
-        print('EnKF_localized: kind=%s, length=%.0f km, cutoff=%.1f; taper %d states x %d observations, '
-              'mean weight %.3f (block would be %.3f); inflation %.2f, RTPS alpha %.2f, obs-error inflation %s, '
-              'increment partition %s'
-              % (loc['kind'], loc['length_km'], loc['cutoff'], n_state, n_obs, self._L_state.mean(), 1.0 / n_obs,
-                 self._inflation, self._rtps_alpha, oei if oei else 'none', self._partition))
+        '''centring of the observation perturbations: the members' perturbations (GRACE ens_k - ens_0) are shifted so
+        that they average to zero, i.e. the ensemble-mean observation is exactly the unperturbed GRACE value. With
+        4 members their mean is otherwise ~sigma/2 per sub-basin (Danube: 12 mm RMS) and pulls every analysis
+        towards a randomly shifted observation. The spread of the members is unchanged.'''
+        self._obs_centering = bool(obs_perturbation_centering)
+        self._n_obs_centered = 0
+        self._obs_mean_shift_rms = []
 
-    # ------------------------------------------------------------------ taper construction
-    @staticmethod
-    def _cell_coordinates(local_mask):
-        """latitude / longitude [deg] of the basin cells in the order of the state vector"""
-        res = 0.5
-        lat_c = np.arange(90 - res / 2, -90, -res)
-        lon_c = np.arange(-180 + res / 2, 180, res)
-        lon_mesh, lat_mesh = np.meshgrid(lon_c, lat_c)
-        g = local_mask['global_2d'].astype(bool)
-        return lat_mesh[g], lon_mesh[g]
-
-    @staticmethod
-    def _haversine_matrix(lat, lon):
-        """pairwise great-circle distances [km] between cells (n x n)"""
-        R = 6371.0
-        la, lo = np.deg2rad(lat)[:, None], np.deg2rad(lon)[:, None]
-        dlat, dlon = la - la.T, lo - lo.T
-        a = np.sin(dlat / 2) ** 2 + np.cos(la) * np.cos(la.T) * np.sin(dlon / 2) ** 2
-        return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
-    def _build_taper(self, sv: EnsStates, kind='block', length_km=300.0, cutoff=2.0):
-        lm = sv.DM.local_mask
-        nsub = lm['basin_num']
-        nvar = sv.DM.vertical_dim
-        M = np.column_stack([lm['sub_basin_%d' % k].astype(float) for k in range(1, nsub + 1)])   # n_cell x n_sub
-        orphan = M.sum(1) == 0
-        if orphan.any():
-            print('EnKF_localized: %d basin cells belong to no sub-basin and are never updated' % orphan.sum())
-
-        if kind == 'block':
-            L_cell = M
-            L_obs = np.eye(nsub)
-        elif kind == 'gaussian':
-            lat, lon = self._cell_coordinates(lm)
-            D = self._haversine_matrix(lat, lon)                                  # n_cell x n_cell
-            d_cell_sub = np.column_stack([D[:, M[:, j] > 0].min(1) for j in range(nsub)])   # n_cell x n_sub
-            d_cell_sub[M > 0] = 0.0
-            L_cell = np.exp(-0.5 * (d_cell_sub / length_km) ** 2)
-            L_cell[d_cell_sub > cutoff * length_km] = 0.0
-            # sub-basin to sub-basin distance: mean distance of the cells of j to sub-basin k (symmetrised); the
-            # nearest-cell distance would be ~one cell for every adjacent pair and taper nothing
-            d_sub_sub = np.array([[d_cell_sub[M[:, j] > 0, k].mean() for k in range(nsub)] for j in range(nsub)])
-            d_sub_sub = 0.5 * (d_sub_sub + d_sub_sub.T)
-            L_obs = np.exp(-0.5 * (d_sub_sub / length_km) ** 2)
-            L_obs[d_sub_sub > cutoff * length_km] = 0.0
-        else:
-            raise ValueError('localization kind must be "block" or "gaussian", got %s' % kind)
-
-        L_state = np.repeat(L_cell, nvar, axis=0)                                 # cell-major, nvar rows per cell
-        return L_state, L_obs
-
-    def run_mpi(self):
-        super().run_mpi()
-        s = self._partition_stats
-        if s['n_updates'] > 0:
-            print('Increment partition (%s): %d updates, variance-only fallback for %d sub-basin updates, '
-                  '%d unresolved; largest |increment| of one element: EnKF %.1f mm -> applied %.1f mm'
-                  % (self._partition, s['n_updates'], s['n_obs_fallback'], s['n_obs_unresolved'],
-                     s['max_abs_inc_enkf'], s['max_abs_inc_new']))
+        self.inflation.setup(self)
+        self.partition.setup(self)
+        print('%s: %d states x %d observations; localization %s (mean taper weight %.3f); inflation: %s; '
+              'increment partition: %s; obs-error inflation: %s; obs-error correlation: %s; obs-perturbation '
+              'centring: %s; soil upper bound (smax) in the partition: %s'
+              % (self.METHOD, n_state, n_obs, self.localization.describe(), self._L_state.mean(),
+                 self.inflation.describe(), self.partition.KIND, self._oei if self._oei else 'none', self._obs_corr,
+                 self._obs_centering, self._soil_upper_bound))
 
     # ------------------------------------------------------------------ analysis step
     def update(self, obs, obs_cov, ens_states):
@@ -146,79 +105,106 @@ class EnKF_localized(EnKF):
         obs_cov    : R (n_obs x n_obs)
         ens_states : forecast states (n_state x N), window means
         """
-        R = obs_cov * self._R_scale                                               # per-sub-basin obs-error inflation
-        N = self.DA_setting.basic.ensemble
+        R = obs_cov * self._R_scale
+        N = ens_states.shape[1]
+        if self._obs_corr == 'diagonal':
+            obs, R = self._decorrelate(obs, obs_cov, R)
+        if self._obs_centering:
+            obs = self._center_perturbations(obs)
+        self.bounds.set_window(ens_states, getattr(self, '_ens_min', None), getattr(self, '_ens_max', None))
 
         xm = np.mean(ens_states, 1)[:, None]
-        A = (ens_states - xm) * self._inflation                                   # inflated forecast anomalies
+        A = self.inflation.prior(ens_states - xm, xm, obs, R)
         X = xm + A
 
         HX = self._DM(states=X)
         HA = HX - np.mean(HX, 1)[:, None]
-
         Pyy = self._L_obs * (HA @ HA.T) / (N - 1) + R                             # localized obs-space covariance
         Pxy = self._L_state * (A @ HA.T) / (N - 1)                                # localized cross-covariance
+        K = np.linalg.solve(Pyy.T, Pxy.T).T                                       # K = Pxy Pyy^-1
 
-        '''K = Pxy Pyy^-1, solved without forming the inverse'''
-        K = np.linalg.solve(Pyy.T, Pxy.T).T
+        dX = self.partition.split(K @ (obs - HX), A, HA, N, X)
+        return self.inflation.posterior(X + dX, A, HA)
 
-        dX = K @ (obs - HX)                                                        # EnKF increments (n_state x N)
-        if self._partition == 'non_negative':
-            dX = self._partition_non_negative(dX, A, HA, N)
-        Xa = X + dX
-
-        '''RTPS (Whitaker & Hamill 2012): relax the analysis spread back towards the forecast spread,
-           sigma_a' = alpha * sigma_f + (1 - alpha) * sigma_a, element-wise; the analysis mean is unchanged'''
-        if self._rtps_alpha > 0:
-            xa_m = np.mean(Xa, 1)[:, None]
-            Aa = Xa - xa_m
-            sig_f = np.std(A, axis=1, ddof=1)
-            sig_a = np.std(Aa, axis=1, ddof=1)
-            factor = np.ones_like(sig_a)
-            ok = sig_a > 1e-12
-            factor[ok] = self._rtps_alpha * sig_f[ok] / sig_a[ok] + (1.0 - self._rtps_alpha)
-            Xa = xa_m + Aa * factor[:, None]
-
-        return Xa
-
-    # ------------------------------------------------------------------ non-negative disaggregation
-    def _partition_non_negative(self, dX, A, HA, N):
+    def _center_perturbations(self, obs):
         """
-        Keep the observation-space part of the EnKF update (how much water each sub-basin gains or loses) but
-        redistribute it over the cells and storages of that sub-basin with non-negative shares, so that no storage
-        is emptied to fill another one.
-
-        dX : EnKF increments (n_state x N);  A, HA : forecast anomalies of states / observation equivalents
-        For sub-basin j:   delta_j = (H dX)_j  (per member)
-                           w_ij  = L_ij * var_i * max(corr(A_i, HA_j), 0)       (0 for anti-correlated elements)
-                           dX_i  = sum_j  w_ij / (H w_.j)_j * delta_j            (so that H dX is unchanged)
-        If no element of a sub-basin is positively correlated, the shares fall back to L_ij * var_i.
+        The member observations are obs_i = y_0 + eps_i - x_excl,i (unperturbed GRACE, perturbation, excluded
+        storages of the member). eps_i = GRACE ens_k - ens_0, or its decorrelated version when
+        obs_error_correlation is "diagonal". Its member mean is removed: obs_i' = obs_i - mean_i(eps_i), so the
+        ensemble-mean observation equals y_0 (minus the mean excluded storages) and the member spread is unchanged.
         """
-        delta = self._DM(states=dX)                                                # n_obs x N, sub-basin increments
-        var = np.sum(A * A, 1) / (N - 1)                                           # n_state
-        sd_x = np.sqrt(var)
-        sd_y = np.sqrt(np.sum(HA * HA, 1) / (N - 1))                               # n_obs
-        with np.errstate(invalid='ignore', divide='ignore'):
-            corr = (A @ HA.T) / (N - 1) / np.outer(sd_x, sd_y)                    # n_state x n_obs
-        corr = np.nan_to_num(corr)
-        W = self._L_state * var[:, None] * np.maximum(corr, 0.0)                   # n_state x n_obs
-        HW = self._DM(states=W)                                                    # n_obs x n_obs, column j -> (H w_.j)
-        hw = np.diag(HW).copy()
-        bad = hw <= 0
-        if bad.any():                                                              # fall back to variance-only shares
-            W[:, bad] = self._L_state[:, bad] * var[:, None]
-            hw[bad] = np.diag(self._DM(states=W))[bad]
-        ok = hw > 0
-        scale = np.zeros_like(hw)
-        scale[ok] = 1.0 / hw[ok]
-        dX_new = (W * scale[None, :]) @ delta                                      # n_state x N
+        eps = getattr(self, '_last_eps', None)
+        if eps is None:
+            raw, ref = getattr(self, '_obs_raw', None), getattr(self, '_obs_unperturbed', None)
+            if raw is None or ref is None or np.shape(raw) != np.shape(obs):
+                if self._n_obs_centered == 0:
+                    print('%s: obs_perturbation_centering: unperturbed observations not available, not applied'
+                          % self.METHOD)
+                return obs
+            eps = raw - np.asarray(ref)[:, None]
+        self._last_eps = None
+        shift = eps.mean(1)
+        self._n_obs_centered += 1
+        self._obs_mean_shift_rms.append(float(np.sqrt(np.mean(shift ** 2))))
+        return obs - shift[:, None]
 
-        self._partition_stats['n_updates'] += 1
-        self._partition_stats['n_obs_fallback'] += int(bad.sum())
-        self._partition_stats['n_obs_unresolved'] += int((~ok).sum())
-        self._partition_stats['max_abs_inc_enkf'] = max(self._partition_stats['max_abs_inc_enkf'], float(np.abs(dX).max()))
-        self._partition_stats['max_abs_inc_new'] = max(self._partition_stats['max_abs_inc_new'], float(np.abs(dX_new).max()))
-        return dX_new
+    def _decorrelate(self, obs, obs_cov, R):
+        """
+        Diagonal R and member observations perturbed consistently with it. The perturbations of the members,
+        eps_i = y_i - y_0 (GRACE ens_k - ens_0, drawn from N(0, C) with the full covariance C of the product), are
+        whitened with the Cholesky factor of C and rescaled with the standard deviations of the diagonal R:
+            eps_i' = diag(sqrt(R_jj)) L^-1 eps_i,  C = L L^T      ->   eps_i' ~ N(0, diag(R))
+        so the same random numbers are used, only their correlation is removed.
+        """
+        Rd = np.diag(np.diag(R))
+        raw, ref = getattr(self, '_obs_raw', None), getattr(self, '_obs_unperturbed', None)
+        if raw is None or ref is None or np.shape(raw) != np.shape(obs):
+            if self._n_obs_decorrelated == 0:
+                print('%s: obs_error_correlation "diagonal": unperturbed observations not available, only R is made '
+                      'diagonal (member perturbations keep their correlation)' % self.METHOD)
+            return obs, Rd
+        eps = raw - np.asarray(ref)[:, None]
+        try:
+            Lc = np.linalg.cholesky(obs_cov)
+        except np.linalg.LinAlgError:
+            w, V = np.linalg.eigh(obs_cov)
+            Lc = V @ np.diag(np.sqrt(np.maximum(w, 1e-12)))
+        z = np.linalg.solve(Lc, eps)
+        eps_new = np.sqrt(np.diag(R))[:, None] * z
+        self._n_obs_decorrelated += 1
+        self._last_eps = eps_new                    # perturbation now contained in obs (used by the centring)
+        return obs - eps + eps_new, Rd
 
-    def partition_summary(self):
-        return dict(self._partition_stats, partition=self._partition)
+    # ------------------------------------------------------------------ reporting
+    def run_mpi(self):
+        super().run_mpi()
+        s = self.partition.stats
+        if s.get('n_updates', 0) > 0 and self.partition.KIND == 'non_negative':
+            print('%s, increment partition (non_negative): %d updates, variance-only fallback for %d sub-basin '
+                  'updates, %d unresolved; largest |increment| of one element: EnKF %.1f mm -> applied %.1f mm (%s); '
+                  'bound-aware: %d element-members capped, %.3g mm redistributed'
+                  % (self.METHOD, s['n_updates'], s['n_obs_fallback'], s['n_obs_unresolved'], s['max_abs_inc_enkf'],
+                     s['max_abs_inc_new'], s.get('max_inc_where'), s['n_bound_capped'], s['water_redistributed_mm']))
+
+    def filter_summary(self):
+        return dict(method=self.METHOD, localization=self.localization.describe(),
+                    inflation=self.inflation.summary(), partition=self.partition.summary(),
+                    bounds=dict(self.bounds.summary(), soil_upper_bound=self._soil_upper_bound),
+                    obs_error_inflation=self._oei,
+                    obs_error_correlation=self._obs_corr, n_obs_decorrelated=self._n_obs_decorrelated,
+                    obs_perturbation_centering=self._obs_centering, n_obs_centered=self._n_obs_centered,
+                    mean_perturbation_removed_rms_mm=(float(np.mean(self._obs_mean_shift_rms))
+                                                      if self._obs_mean_shift_rms else None))
+
+    def save_filter_log(self, out_dir):
+        """filter_summary.json and, for the adaptive inflation, adaptive_inflation_log.csv (one row per window and
+        sub-basin) in out_dir"""
+        import json, csv
+        from pathlib import Path
+        out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        json.dump(self.filter_summary(), open(out_dir / 'filter_summary.json', 'w'), indent=1,
+                  default=lambda o: np.asarray(o).tolist())
+        rows = self.inflation.log_rows()
+        if rows:
+            with open(out_dir / 'adaptive_inflation_log.csv', 'w', newline='') as fh:
+                wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys())); wr.writeheader(); wr.writerows(rows)

@@ -3,6 +3,8 @@ import numpy as np
 from pathlib import Path
 import xarray as xr
 import json
+import csv
+import h5py
 from src_auxiliary.shp2mask import load_mask
 
 
@@ -12,9 +14,11 @@ class model_state_threshold:
 
     Rules (only for the storages that are part of the DA state, configDA.model.layer == True):
       soilmoist          0 <= S <= smax (maximum soil water content, static, from <Auxiliary_dir>/smax.nc)
-      groundwstor        open-loop envelope (see riverstor); WaterGAP groundwater may go into deficit, so no fixed
-                         bound, but the analysis is kept within env_low*min .. env_high*max of the open loop, with
-                         the bounds widened symmetrically by the OL range where min and max have different signs
+      groundwstor        no bound by default. The open-loop envelope (min - (env_high-1)*range .. max + (env_high-1)*range)
+                         was a safety net against metre-scale blow-ups of the 4-member standard EnKF partition
+                         (Amazon run 3); with the non-negative partition and sub-basin-coherent additive inflation it
+                         clipped real signal instead (Danube: 2006 spring peak, 2007/2011-12 droughts).
+                         gw_lower=True / gw_upper=True restore the lower / upper edge
       riverstor          positive floor (a storage of exactly zero makes the Manning velocity divide by zero
                          in river_routing) and, if available, a per-cell envelope learned from the open loop:
                              env_low  * min_OL(cell)  <=  S  <=  env_high * max_OL(cell)
@@ -29,18 +33,25 @@ class model_state_threshold:
     Every clip is recorded: number of cells clipped, water added / removed (mm summed over cells), per storage
     and in total, so that the thresholds can be checked to act as a rare safety net and the clipped water can be
     reported as a term of the water balance. summary() returns the statistics, save_log() writes them to JSON.
+
+    When threshold() is given the date of the day, the clips are additionally recorded per month, per sub-basin
+    and separately for the lower and the upper bound (e.g. soil at 0 vs soil at smax), save_monthly_csv() writes
+    them as a table (var, month, sub_basin, n_checked, n_lower, n_upper, water_added_mm, water_removed_mm).
     """
 
     ENVELOPE_VARS = ('riverstor', 'groundwstor')     # storages bounded by the open-loop envelope
 
     def __init__(self, configDA: config_DA, env_low: float = 0.5, env_high: float = 1.5, river_floor: float = 1e-3,
-                 snow_max: float = 1000.0):
+                 snow_max: float = 1000.0, gw_lower: bool = False, gw_upper: bool = False):
         self.layers = [key for key, value in configDA.model.layer.items() if value is True]
         self.env_low, self.env_high, self.river_floor, self.snow_max = env_low, env_high, river_floor, snow_max
+        self.gw_lower = gw_lower            # lower edge of the open-loop envelope for groundwater (default off)
+        self.gw_upper = gw_upper            # upper edge of the open-loop envelope for groundwater (default off)
 
         box_crop, _ = load_mask(mask_path=configDA.basic.basin_mask)
         self._lat_slice = slice(box_crop['lat_max'], box_crop['lat_min'])   # descending latitude
         self._lon_slice = slice(box_crop['lon_min'], box_crop['lon_max'])
+        self.sub_labels = self._sub_basin_labels(configDA.basic.basin_mask, box_crop)
 
         '''maximum soil water content'''
         ds = xr.open_dataset(Path(configDA.basic.Auxiliary_dir) / 'smax.nc')
@@ -53,6 +64,8 @@ class model_state_threshold:
         if env_fn.exists():
             env = xr.open_dataset(env_fn).sel(lon=self._lon_slice, lat=self._lat_slice)
             for var in [v for v in self.layers if v in self.ENVELOPE_VARS]:
+                if var == 'groundwstor' and not (self.gw_lower or self.gw_upper):
+                    continue                                # groundwater unbounded (default)
                 if ('%s_min' % var in env) and ('%s_max' % var in env):
                     lo = env['%s_min' % var].values.astype(float)
                     hi = env['%s_max' % var].values.astype(float)
@@ -67,6 +80,10 @@ class model_state_threshold:
                         lo_b, hi_b = self.env_low * lo, self.env_high * hi
                     lo = np.where(np.isfinite(lo), lo_b, -np.inf)
                     hi = np.where(np.isfinite(hi), hi_b, np.inf)
+                    if var == 'groundwstor' and not self.gw_lower:
+                        lo = np.full_like(lo, -np.inf)       # follow GRACE droughts / declines beyond the OL range
+                    if var == 'groundwstor' and not self.gw_upper:
+                        hi = np.full_like(hi, np.inf)        # follow GRACE wet extremes beyond the OL range
                     self.envelope[var] = (lo, hi)
             env.close()
         elif 'riverstor' in self.layers:
@@ -79,7 +96,27 @@ class model_state_threshold:
         self.stats = {var: dict(n_calls=0, n_cells_checked=0, n_cells_clipped=0, water_added_mm=0.0,
                                 water_removed_mm=0.0, max_abs_change_mm=0.0) for var in self.layers}
         self.n_updates = 0
+        '''monthly statistics: monthly[var][YYYY-MM][sub_basin] = [n_checked, n_lower, n_upper, added, removed]'''
+        self.monthly = {var: {} for var in self.layers}
         pass
+
+    @staticmethod
+    def _sub_basin_labels(mask_path, box_crop, res=0.5):
+        """2-D integer field on the regional box: k for cells of sub_basin_k, 0 outside the basin"""
+        with h5py.File(mask_path, 'r') as f:
+            subs = {k: f[k][()] for k in f.keys() if k.startswith('sub')}
+        i0 = int(round((90 - res / 2 - box_crop['lat_max']) / res))
+        i1 = int(round((90 - res / 2 - box_crop['lat_min']) / res)) + 1
+        j0 = int(round((box_crop['lon_min'] + 180 - res / 2) / res))
+        j1 = int(round((box_crop['lon_max'] + 180 - res / 2) / res)) + 1
+        lab = np.zeros((i1 - i0, j1 - j0), dtype=int)
+        for key, m in subs.items():
+            try:
+                k = int(key.split('_')[-1])
+            except ValueError:
+                continue
+            lab[m[i0:i1, j0:j1].astype(bool)] = k
+        return lab
 
     # ------------------------------------------------------------------ bounds per storage
     def _bounds(self, var, x):
@@ -100,8 +137,10 @@ class model_state_threshold:
         return None                                     # lakes, groundwater without envelope: unbounded
 
     # ------------------------------------------------------------------ application
-    def threshold(self, state: dict):
-        """clip the (regional 2-D) analysis fields in place and record what was clipped"""
+    def threshold(self, state: dict, date=None):
+        """clip the (regional 2-D) analysis fields in place and record what was clipped;
+        date ('YYYY-MM-DD' or datetime) enables the monthly / sub-basin / lower-vs-upper record"""
+        month = None if date is None else str(date)[:7]
         self.n_updates += 1
         for var in self.layers:
             if var not in state:
@@ -123,8 +162,47 @@ class model_state_threshold:
             st['water_removed_mm'] += float(-diff[changed & (diff < 0)].sum())
             if changed.any():
                 st['max_abs_change_mm'] = max(st['max_abs_change_mm'], float(np.abs(diff[changed]).max()))
+            if month is not None:
+                self._record_month(var, month, old, diff, finite)
             state[var] = new
         return state
+
+    def _record_month(self, var, month, old, diff, finite):
+        lower = finite & (diff > 0)                      # raised to the lower bound
+        upper = finite & (diff < 0)                      # cut at the upper bound
+        lab = self.sub_labels if self.sub_labels.shape == old.shape else np.zeros(old.shape, dtype=int)
+        rec = self.monthly[var].setdefault(month, {})
+        for k in np.unique(lab[finite]):
+            if k == 0:
+                continue
+            m = lab == k
+            r = rec.setdefault(int(k), [0, 0, 0, 0.0, 0.0])
+            r[0] += int((finite & m).sum())
+            r[1] += int((lower & m).sum())
+            r[2] += int((upper & m).sum())
+            r[3] += float(diff[lower & m].sum())
+            r[4] += float(-diff[upper & m].sum())
+
+    def monthly_rows(self):
+        rows = []
+        for var, months in self.monthly.items():
+            for month in sorted(months):
+                for k in sorted(months[month]):
+                    n, nl, nu, wa, wr = months[month][k]
+                    rows.append(dict(var=var, month=month, sub_basin=k, n_checked=n, n_lower=nl, n_upper=nu,
+                                     frac_lower=nl / n if n else 0.0, frac_upper=nu / n if n else 0.0,
+                                     water_added_mm=wa, water_removed_mm=wr))
+        return rows
+
+    def save_monthly_csv(self, fn):
+        rows = self.monthly_rows()
+        if not rows:
+            return
+        Path(fn).parent.mkdir(parents=True, exist_ok=True)
+        with open(fn, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
 
     # ------------------------------------------------------------------ reporting
     def summary(self):
@@ -134,6 +212,7 @@ class model_state_threshold:
             out[var] = dict(st, fraction_clipped=frac, bound='none' if self._bounds(var, None) is None else
                             ('envelope' if var in self.envelope else 'fixed'))   # envelope only holds ENVELOPE_VARS
         out['_settings'] = dict(env_low=self.env_low, env_high=self.env_high, river_floor=self.river_floor,
+                                gw_lower=self.gw_lower, gw_upper=self.gw_upper,
                                 snow_max=self.snow_max, n_threshold_calls=self.n_updates)
         return out
 
@@ -146,6 +225,14 @@ class model_state_threshold:
                   'max |change| %.1f mm' % (var, st['bound'], st['n_cells_clipped'], st['n_cells_checked'],
                                            100 * st['fraction_clipped'], st['water_added_mm'], st['water_removed_mm'],
                                            st['max_abs_change_mm']))
+        rows = self.monthly_rows()
+        for var in self.layers:
+            for side in ('upper', 'lower'):
+                r = sorted([x for x in rows if x['var'] == var and x['n_' + side] > 0],
+                           key=lambda x: -x['frac_' + side])[:5]
+                if r:
+                    print('    %s %s-bound clips, top months: %s' % (var, side, ', '.join(
+                        '%s sb%d %.1f%%' % (x['month'], x['sub_basin'], 100 * x['frac_' + side]) for x in r)))
 
     def save_log(self, fn):
         Path(fn).parent.mkdir(parents=True, exist_ok=True)

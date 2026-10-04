@@ -91,31 +91,122 @@ are printed per member and saved to `DA_output/<case>/Ens_k/threshold_log.json`.
 
 ### 1.4 `method` — the filter
 
-| key | type / values | default | meaning |
-|---|---|---|---|
-| `fusion_method` | `EnKF_v0`, `EnKF_v1`, `EnKF_v2`, `EnKF_localized` | `EnKF_v0` | `EnKF_v0`: stochastic EnKF with perturbed observations, no localisation (fine for large ensembles). `EnKF_localized`: the same update with the options below; recommended for ≤ 10 members. |
-| `localization.kind` | `block`, `gaussian` | `block` | taper of the state–observation covariance. `block`: each sub-basin observation updates only the cells of its own sub-basin (taper 1 inside, 0 outside); the strongest choice, right for small ensembles. `gaussian`: weight exp(−½(d/ℓ)²) with d the distance of a cell to the observed sub-basin (0 inside), so boundary cells are also informed by the neighbour's observation; use with ≥ 20 members. |
-| `localization.length_km` | float | 300 | ℓ of the gaussian taper (ignored for `block`) |
-| `localization.cutoff` | float | 2.0 | gaussian weight set to 0 beyond `cutoff · length_km` |
-| `inflation` | float ≥ 1 | 1.0 | multiplicative inflation of the forecast anomalies before the update (1 = off). Prefer RTPS. |
-| `rtps_alpha` | 0 … 1 | 0.7 | relaxation to prior spread (Whitaker & Hamill 2012): after the update the spread of every state element is set to α·σ_forecast + (1−α)·σ_analysis. 0 = off; 0.7 stopped the spread collapse of the 4-member Amazon run (χ² 5.9 → 0.5). |
-| `obs_error_inflation` | `{ "k": factor }` | `{}` | multiply the observation error **variance** of sub-basin k (1-based, as string) by `factor`, keeping the error correlations (R' = D R D). Use to down-weight a unit whose observation is suspect (e.g. coastal leakage); `{}` = off. |
-| `increment_partition` | `enkf`, `non_negative` | `enkf` | how the sub-basin TWS increment is split over the cells and storages of the sub-basin. `enkf`: as given by the Kalman gain (vertical split from the sample covariance; with few members this produces compensating increments, e.g. +GW / −river, and a filter–model tug of war). `non_negative`: the sub-basin TWS increment of the Kalman update is kept exactly, but distributed with shares ∝ variance × max(correlation with sub-basin TWS, 0); no storage is emptied to fill another, single-element increments are bounded. Recommended for small ensembles; compare with `enkf` once the ensemble is ≥ 20. |
+`fusion_method` selects the analysis:
 
-Typical blocks:
+| value | meaning |
+|---|---|
+| `EnKF_v0` (default) | stochastic EnKF with perturbed observations, no localization or inflation (`src_DA/EnKF.py`); for large ensembles |
+| `EnKF_localized` | the EnKF assembled from four independent components (`src_DA/filter_factory.py`), each chosen with its own block below; recommended for small ensembles |
+
+The components of `EnKF_localized` (code in `src_DA/`):
+
+| component | file | classes |
+|---|---|---|
+| localization of the gain | `localization.py` | `NoLocalization`, `BlockLocalization`, `GaussianLocalization` |
+| spread maintenance (inflation) | `inflation.py` | `NoInflation`, `MultiplicativeInflation`, `RTPS`, `AdditiveInflation`, `AdaptiveAdditiveInflation` |
+| increment partition | `partition.py` | `EnKFPartition`, `NonNegativePartition` |
+| physical bounds (window-aware) | `bounds.py` | `StateBounds` |
+
+Analysis of one window: `A = inflation.prior(A)` → `K = (L_state∘Pxy)(L_obs∘Pyy + R)⁻¹` → `dX = partition.split(K(y − HX))` → `Xa = inflation.posterior(X + dX)`. Any localization can be combined with any inflation and partition.
+
+#### `localization`
+
+| kind | settings | meaning |
+|---|---|---|
+| `none` | — | the plain sample covariances; every observation updates every cell |
+| `block` (default) | — | each sub-basin observation updates only the cells of its own sub-basin; the strongest choice, right for small ensembles |
+| `gaussian` | `length_km` (300), `cutoff` (2.0) | weight exp(−½(d/ℓ)²) with d the distance of a cell to the observed sub-basin (0 inside), 0 beyond `cutoff · length_km`; boundary cells are also informed by the neighbour's observation; use with ≥ 20 members |
+
+#### `inflation` (one scheme per run)
+
+| kind | settings (defaults) | meaning |
+|---|---|---|
+| `none` (default) | — | no spread maintenance |
+| `multiplicative` | `factor` (1.0) | forecast anomalies × factor before the gain. Danube run 4 (1.6): it inflates storages that cancel each other (soil vs groundwater), the TWS spread GRACE sees does not grow, and the hidden directions grow every month (40 % groundwater clipping). |
+| `rtps` | `alpha` (0.7), `space` (`state`) | relaxation to prior spread (Whitaker & Hamill 2012): σ_a' = α σ_f + (1−α) σ_a. `state`: per element; with basin-mean observations the cell anomalies compensate and the sub-basin spread stays collapsed (Danube run 2). `obs`: one factor per sub-basin from the spread of the observation equivalents, bounded elements limited, the rest rescaled (Danube run 3). |
+| `additive` | `sigma` ({storage: std in mm}), `months` (all), `seed` (none), `exact_spread` (false) | zero-mean random perturbations added before the gain: one number per member, sub-basin and storage, centred over the members; groundwater: the same value in every cell of the sub-basin (visible to GRACE); snow and other bounded storages: weighted by the cell's storage, at most 50 % of it (empty cells stay empty). The perturbations stay in the members and are propagated by WaterGAP (model error). Danube runs 5–7: `{"groundwstor": 15, "swe": 5}`. |
+| `adaptive_additive` | `split` ({"groundwstor": 0.9, "swe": 0.1}), `weight_current` (0.5), `max_factor` (3.0), `min_sigma` (5 mm), `remove_bias` (true), `bias_memory` (0.05), `months`, `seed`, `exact_spread` | as `additive`, but the std of the added sub-basin spread is estimated every window from the innovations d = mean(obs) − mean(HX): s² = (1−w) s²_prev + w (d − bias)², σ_add² = s² − var(HX) − R_jj, clipped to [`min_sigma`, `max_factor`·√R_jj]; `split` gives the share of the added variance per storage (variance snow cannot take goes to groundwater). The current window is included (Anderson 2007, 2009), so an extreme month gets a high weight on GRACE in the same update. Danube run 8. Writes `adaptive_inflation_log.csv`. `split` may also be `"ol_spread"` or `"ol_variability"` (+ optional `split_source`, `min_share`, `split_storages`), see below. |
+
+`months`: calendar months of the window in which the additive schemes act. `exact_spread`: rescale the centred random numbers so that their sample std equals σ in every window (improved sampling, Evensen 2004); removes the chance in the added spread of a 4-member ensemble.
+
+#### `increment_partition`
+
+| kind | meaning |
+|---|---|
+| `enkf` (default) | increments as given by the (localized) Kalman gain; with few members the vertical split comes from noisy sample covariances (compensating +GW / −river increments, Amazon tug of war) |
+| `non_negative` | the sub-basin TWS increment of the Kalman update is kept exactly, but distributed with shares ∝ variance × max(correlation with sub-basin TWS, 0); no storage is emptied to fill another. Bound-aware: an element is not pushed across its bound (snow/soil/canopy/wetlands/reservoirs ≥ 0, river ≥ floor, snow ≤ 1000 mm), its share goes to the other elements of the sub-basin. The bounds are checked against each member's lowest/highest **daily** value in the window, so no day crosses a bound. Recommended for small ensembles. |
+| `non_negative` + `max_weight_ratio` (e.g. 5; default none) | caps every element's weight at `max_weight_ratio` × the median weight of the same storage in the sub-basin, so that one cell with an extreme ensemble spread cannot absorb the whole sub-basin correction (Danube: the Vienna cell, whose groundwater drifts by > 100 mm/yr in the open loop because of WaterGAP's groundwater abstraction of 263 mm/yr, had ~10⁴ × the typical weight and got single-window increments of 5–10 m). The sub-basin increment is unchanged; only its distribution over the cells changes. `filter_summary.json` reports how often the cap acted and where the largest weight ratio occurred. A number caps every storage (run 10); a dict caps only the listed storages: `{"kind": "non_negative", "max_weight_ratio": {"groundwstor": 5}}` (**recommended**). Capping snow is harmful: most cells have little or no snow, so the median snow weight is ~0 and the real mountain snow cells lose their weight (run 10: snow correction halved, up to 94 % of a sub-basin's snow share removed). `filter_summary.json` → `capped_by_storage`. |
+
+#### The inflation split (`adaptive_additive`)
+
+GRACE constrains only the sum of the storages, so where the correction ends up is decided by the spread the ensemble carries in each storage, and with adaptive additive inflation that spread is mostly the added noise. `split` therefore largely decides which storage takes the correction.
+
+| `split` | shares of the added variance |
+|---|---|
+| `{"groundwstor": 0.9, "swe": 0.1}` | fixed, the same every month and sub-basin (Danube runs 8–10: groundwater takes ~90 % of the correction) |
+| `"ol_spread"` | per calendar month and sub-basin ∝ the **open-loop ensemble variance** of each storage: the model's own error estimate from the forcing / parameter perturbations (Danube: soil 0.8 in May–Oct, groundwater + snow in winter, Alps groundwater / snow) |
+| `"ol_variability"` | per calendar month and sub-basin ∝ the **year-to-year variance of the open-loop monthly anomalies** of each storage (natural variability; independent of the perturbation design, gives groundwater and river more weight in spring) |
+
+The two OL-based tables are computed once at the start from `Res/<case>/Res_OL.h5` (or `"split_source": "<path>"`) for the storages of the DA state; `"min_share": 0.05` puts a floor under every share. `"split_storages": ["groundwstor", "soilmoist", "swe"]` restricts the noise to these storages and re-normalises the shares over them: river storage stays in the DA state (the update still corrects it) but gets no random noise, which would otherwise flow out within days as noise in each member's discharge (default: all storages of the state). They are written to `filter_summary.json` (`inflation.split_table[storage][month][sub-basin]`), and the shares used in every window are columns `share_<storage>` of `adaptive_inflation_log.csv`.
+
+Noise in a bounded storage is weighted per cell by the room to the nearer bound, min(S − lb, ub − S): snow by its amount (as before), soil by the distance to 0 or to smax, so a nearly full winter soil gets almost none; what a bounded storage cannot take goes to groundwater. Use soil in the split only with `"soil_upper_bound": true` (default). Example (run 11a / 11b):
 
 ```json
-"method": {                                  // large ensemble, classic
+"inflation": {"kind": "adaptive_additive", "split": "ol_spread",
+              "split_storages": ["groundwstor", "soilmoist", "swe"], "weight_current": 0.5, "max_factor": 3.0,
+              "min_sigma": 5.0, "remove_bias": true, "bias_memory": 0.05, "seed": 42}
+```
+
+#### `obs_error_inflation`
+
+`{ "k": factor }` multiplies the observation error **variance** of sub-basin k (1-based, as string) by `factor`, keeping the error correlations (R' = D R D); `{}` = off.
+
+#### `obs_error_correlation`
+
+`"full"` (default): R as delivered with the GRACE product (for the CSR mascons in demo_2 the DDK3-based covariance, with correlations up to 0.9 between neighbouring sub-basins). `"diagonal"`: sensitivity test without error correlations between sub-basins — R keeps its variances only, and the member observations are re-perturbed consistently: the perturbations ε = GRACE `ens_k` − `ens_0` are whitened with the Cholesky factor of the full covariance and rescaled with the diagonal standard deviations, so the same random numbers are used without their correlation.
+
+#### `obs_perturbation_centering`
+
+`false` (default) or `true`. Each member assimilates GRACE plus its own random perturbation (`ens_k` − `ens_0` in the observation file, or its decorrelated version with `"obs_error_correlation": "diagonal"`). With few members the perturbations do not average to zero (4 members: about σ/2, Danube 12 mm RMS per sub-basin), so every analysis is pulled towards a randomly shifted GRACE value. `true` removes the member mean of the perturbations, so the ensemble-mean observation is exactly GRACE; the spread of the members is unchanged. Standard practice for perturbed-observation EnKFs; with 30 members the effect is small (σ/√30), and square-root filters (ETKF/LETKF) do not perturb observations at all. `filter_summary.json` reports the mean shift that was removed.
+
+#### `soil_upper_bound`
+
+`true` (default) or `false`. With the `non_negative` partition, soil is kept at or below its capacity `smax` (`Auxiliary_dir/smax.nc`, the same field the post-update threshold uses) already inside the update: the window-aware limit smax − (daily max − window mean) keeps every day of the window ≤ smax, and the part of a sub-basin increment that soil cannot hold goes to the other storages of the sub-basin with their shares (mostly groundwater). Without it (`false`, runs ≤ 10) only the threshold clipped soil at smax after the update and that water was deleted (Danube run 9: about 12.5 m per member summed over cells and days, all at the upper bound). The sub-basin TWS increments are the same either way; only where the water goes changes. `filter_summary.json` → `bounds.upper_fields` lists the bounded cells and the smax range. No effect with the `enkf` partition, which ignores bounds.
+
+#### Output
+
+`DA_output/<case>/filter_summary.json` (one section per component; for `non_negative` also where the largest single-element increment occurred) and, for `adaptive_additive`, `adaptive_inflation_log.csv` (one row per window and sub-basin: innovation, bias, forecast spread, observation error, added spread).
+
+#### Older settings
+
+Files written before the restructuring (October 2026) still work; the flat keys are translated with a note in the log:
+
+| old | new |
+|---|---|
+| `"inflation": 1.6` | `"inflation": {"kind": "multiplicative", "factor": 1.6}` |
+| `"rtps_alpha": 0.7, "rtps_space": "obs"` | `"inflation": {"kind": "rtps", "alpha": 0.7, "space": "obs"}` |
+| `"additive_inflation": {"groundwstor": 15, "swe": 5, "seed": 42}` | `"inflation": {"kind": "additive", "sigma": {"groundwstor": 15, "swe": 5}, "seed": 42}` |
+| `"additive_inflation": {"mode": "adaptive", ...}` | `"inflation": {"kind": "adaptive_additive", ...}` |
+| `"increment_partition": "non_negative"` | `"increment_partition": {"kind": "non_negative"}` |
+
+If more than one old scheme is active (e.g. `rtps_alpha` > 0 and `inflation` ≠ 1), the run stops with an error.
+
+#### Typical blocks
+
+```json
+"method": {                                   // large ensemble, classic
     "fusion_method": "EnKF_v0"
 }
 
-"method": {                                  // small ensemble (Amazon run 4, Danube demo_2)
+"method": {                                   // small ensemble (Danube demo_2, run 8)
     "fusion_method": "EnKF_localized",
-    "localization": {"kind": "block", "length_km": 300, "cutoff": 2.0},
-    "inflation": 1.0,
-    "rtps_alpha": 0.7,
+    "localization": {"kind": "block"},
+    "inflation": {"kind": "adaptive_additive", "split": {"groundwstor": 0.9, "swe": 0.1},
+                  "weight_current": 0.5, "max_factor": 3.0, "min_sigma": 5.0,
+                  "remove_bias": true, "bias_memory": 0.05, "seed": 42},
+    "increment_partition": {"kind": "non_negative"},
     "obs_error_inflation": {},
-    "increment_partition": "non_negative"
+    "obs_error_correlation": "full"
 }
 ```
 
@@ -143,15 +234,16 @@ Typical blocks:
              "layer": { "groundwstor": true, "soilmoist": true, "riverstor": true, "swe": false, "canopystor": false,
                         "locallakestor": false, "localwetlandstor": false, "globallakestor": false,
                         "globalwetlandstor": false, "reservoirstor": false } },
-  "method": { "fusion_method": "EnKF_localized", "localization": {"kind": "block", "length_km": 300, "cutoff": 2.0},
-              "inflation": 1.0, "rtps_alpha": 0.7, "obs_error_inflation": {}, "increment_partition": "non_negative" }
+  "method": { "fusion_method": "EnKF_localized", "localization": {"kind": "block"},
+              "inflation": {"kind": "rtps", "alpha": 0.7, "space": "state"},
+              "increment_partition": {"kind": "non_negative"}, "obs_error_inflation": {} }
 }
 ```
 
 **demo_2 — Danube, CSR mascons monthly, 6 sub-basins**: identical structure with `case: demo_2`, `basin: Danube`,
 `basin_shp: .../Basin/shp/Danube/Danube.shp`, `obs.GRACE.kind: Mascon_monthly`,
 `EWH_grid_dir` = `aux_for_time_epochs` = `.../GRACE/SaGEA/signal_Mascon`, `preprocess_res: .../GRACE/output`,
-`layer.swe: true`, same `method` block.
+`layer.swe: true`, and the `method` block of run 8 (`adaptive_additive`, see 1.4).
 
 ---
 
@@ -228,3 +320,7 @@ Stage order and parallelism:
 Logs of the MPI stages are written to `PyGLDA_v2/parallel_logs/{OL,DA,collect}/rank_k.log`; the main thread
 (rank 1) prints to the terminal, which is where the filter summary (`EnKF_localized: ...`, `Increment partition:
 ...`) appears.
+
+
+### Note on the post-update threshold (`src_DA/Threshold.py`)
+It is a safety net: with `"soil_upper_bound": true` and the `non_negative` partition the soil upper limit is already respected by the update, so the soil `water_removed_mm` in `threshold_monthly.csv` should be ~0 (it still acts for the `enkf` partition, multiplicative / RTPS inflation and rounding). Groundwater has no limit by default (`gw_lower=False`, `gw_upper=False`). The open-loop envelope (OL range widened by half the range on each side) was a safety net against metre-scale blow-ups of the 4-member standard partition (Amazon run 3); with the non-negative partition and sub-basin-coherent additive inflation it clipped real signal instead: the lower edge in the Danube droughts (2007, 2011–12) and the trend, the upper edge in the 2006 spring peak (20 % of cell-days). `gw_lower=True` / `gw_upper=True` restore either edge. River keeps its floor and envelope. Every clip is logged per month, sub-basin and bound in `threshold_monthly.csv` next to `threshold_log.json` in each `Ens_k` folder.

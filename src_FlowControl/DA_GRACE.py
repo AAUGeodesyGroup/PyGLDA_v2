@@ -228,7 +228,8 @@ class DA_GRACE:
         """The main entrance to the data assimilation experiment"""
         import json
         from src_DA.observations import GRACE_obs
-        from src_DA.EnKF import EnKF, EnKF_localization_v1, EnKF_localization_v2, EnKF_domain_localization
+        from src_DA.EnKF import EnKF
+        # earlier variants (EnKF_localization_v1/v2, EnKF_domain_localization): src_DA.legacy.EnKF_legacy
         # from src_DA.EnSQRA import EnSQRA, EnSQRA_V2
 
         if rank != 1:
@@ -262,13 +263,12 @@ class DA_GRACE:
         '''DA experiment'''
         # # da = DataAssimilation(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         # # da = DataAssimilation_monthly(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        '''choice of the filter: configDA.method.fusion_method (EnKF_v0 = plain EnKF; EnKF_localized = EnKF with
-        state-observation localization, settings in configDA.method.localization)'''
+        '''choice of the filter: configDA.method.fusion_method (EnKF_v0 = plain EnKF; EnKF_localized = EnKF assembled
+        from localization, inflation and increment-partition components, see src_DA.filter_factory)'''
         from src_DA.EnumDA import FusionMethod
         if configDA.method.fusion_method == FusionMethod.EnKF_localized:
-            from src_DA.EnKF_localized import EnKF_localized
-            da = EnKF_localized(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included,
-                                sv_excluded=sv_excluded, localization=getattr(configDA.method, 'localization', None))
+            from src_DA.filter_factory import build_filter
+            da = build_filter(configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
         else:
             da = EnKF(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
         # # da = EnSQRA(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)

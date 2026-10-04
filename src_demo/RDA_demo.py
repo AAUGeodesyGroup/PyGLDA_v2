@@ -71,5 +71,5 @@ def demo2():
 
 
 if __name__ == '__main__':
-    # demo1()     # post_processing / visualization: run after the OL statistics below
-    demo2()      # mpiexec -n 5 python -u RDA_demo.py Config_ReWaterGAP.json
+    demo1()     # post_processing / visualization: run after the OL statistics below
+    # demo2()      # mpiexec -n 5 python -u RDA_demo.py Config_ReWaterGAP.json

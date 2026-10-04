@@ -8,7 +8,7 @@ Order of the stages (they overwrite the demo_2 results of the old 3-sub-basin ru
   serial   : config_basin_mask (new shapefile), get_GRACE_obs (mascons)
   mpiexec  : collect_and_statistics(OL)  -> crops the global OL into Res/demo_2/OL with the new mask
              DA_run, collect_and_statistics(DA)
-  serial   : post_processing, visualization, increment_diagnosis
+  serial   : post_processing, visualization, increment_diagnosis, da_evaluation
 (config_external_data / read_config_and_save / model_perturbation / spin_up / OL_run only if the shared
  OL_output or Ensemble_* directories were cleaned or the perturbation changes)
 """
@@ -43,13 +43,15 @@ def demo1():
     # RDA.model_perturbation()
 
     '''before the data assimilation (serial): mask from the new shapefile, mascon observations'''
-    RDA.config_basin_mask()
-    RDA.get_GRACE_obs(is_diagonal=False)
+    # RDA.config_basin_mask()
+    # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after the data assimilation (serial)'''
-    # RDA.post_processing()
-    # RDA.visualization()
-    # RDA.increment_diagnosis()
+    RDA.post_processing()
+    RDA.visualization()
+    RDA.increment_diagnosis()
+    '''evaluation report + archive of the run logs -> Res/demo_2/evaluation/<tag>/ (set the tag for every run)'''
+    RDA.da_evaluation(tag='run11a', reference='run10')
 
     '''house-keeping: remove the temporary daily output of a collected stage (dry run first, then dry_run=False)'''
     # from src_DA.EnumDA import Stage
@@ -65,18 +67,18 @@ def demo2():
 
     # RDA.spin_up()          # not needed: shared with demo_3
     # RDA.OL_run()           # not needed: shared with demo_3
-    RDA.collect_and_statistics(Stage.OL, skip_collect=False)
+    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
 
-    # try:
-    #     RDA.DA_run()
-    # except Exception:
-    #     import traceback
-    #     traceback.print_exc()
-    #     MPI.COMM_WORLD.Abort(1)
-    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    try:
+        RDA.DA_run()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        MPI.COMM_WORLD.Abort(1)
+    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
     pass
 
 
 if __name__ == '__main__':
-    demo1()
-    # demo2()
+    # demo1()
+    demo2()

@@ -147,21 +147,30 @@ class config_DA:
 
         def __init__(self):
             self.fusion_method = FusionMethod.EnKF_v0.name
-            '''used by EnKF_localized: kind 'block' (own sub-basin only) or 'gaussian' (distance taper);
-            length_km and cutoff (in units of length_km) apply to the gaussian taper'''
+            '''EnKF_localized: the filter is assembled from independent components (src_DA.filter_factory),
+            each chosen with its own block; see doc/configuration.md for all options
+              localization        {"kind": "none" | "block" | "gaussian", "length_km": 300, "cutoff": 2.0}
+              inflation           {"kind": "none" | "multiplicative" | "rtps" | "additive" | "adaptive_additive", ...}
+                                  e.g. {"kind": "rtps", "alpha": 0.7, "space": "state"}
+                                       {"kind": "additive", "sigma": {"groundwstor": 15, "swe": 5}, "seed": 42}
+                                       {"kind": "adaptive_additive", "split": {"groundwstor": 0.9, "swe": 0.1}}
+              increment_partition {"kind": "enkf" | "non_negative"}
+              obs_error_inflation {sub_basin_id (1-based, as string): factor on the error variance}, {} = off
+              obs_error_correlation "full" (as delivered) | "diagonal" (no error correlation between sub-basins;
+                                  the member observations are re-perturbed consistently)
+              obs_perturbation_centering  true: member GRACE perturbations shifted to zero mean
+              soil_upper_bound    true: soil <= smax (Auxiliary/smax.nc) inside the bound-aware partition, the water
+                                  soil cannot hold goes to the other storages; false: only the post-update threshold
+                                  clips soil at smax (the water is then lost)
+            Old flat keys (inflation as a number, rtps_alpha, rtps_space, additive_inflation) are still read and
+            translated by src_DA.filter_factory.'''
             self.localization = {'kind': 'block', 'length_km': 300, 'cutoff': 2.0}
-            '''used by EnKF_localized: spread maintenance and observation-error inflation
-            inflation           multiplicative inflation of the forecast anomalies (1.0 = off)
-            rtps_alpha          relaxation to prior spread, 0 = off ... 1 = keep forecast spread (Whitaker & Hamill 2012)
-            obs_error_inflation {sub_basin_id (1-based, as string): factor on the error variance}, {} = off'''
-            self.inflation = 1.0
-            self.rtps_alpha = 0.7
+            self.inflation = {'kind': 'none'}
+            self.increment_partition = {'kind': 'enkf'}
             self.obs_error_inflation = {}
-            '''used by EnKF_localized: 'enkf' (increments from the Kalman gain) or 'non_negative' (the sub-basin
-            TWS increment is distributed with non-negative shares over cells and storages; for small ensembles)'''
-            self.increment_partition = 'enkf'
-
-
+            self.obs_error_correlation = 'full'     # 'diagonal': R without correlations between sub-basins (test)
+            self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
+            self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
 
 
 

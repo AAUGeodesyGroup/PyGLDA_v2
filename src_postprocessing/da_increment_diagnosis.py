@@ -94,15 +94,20 @@ def run_diagnosis(res_dir, obs_file, out_dir, tag='DA', nens=4, start=dt.date(20
     lines = ['Increment diagnosis  [%s]   %d windows, %d members, %s .. %s' % (TAG, len(starts), NENS, days[0], days[-1])]
 
     # ------------------------------------------------------------------ A. tug of war
-    lines += ['', 'A. Tug of war (basin mean, ensemble mean) [mm/day]: increment at window start vs drift inside windows',
-              '   %-18s %10s %10s %12s %12s' % ('storage', 'increment', 'drift', 'incr+4*drift', 'OL drift')]
-    report['tug_of_war'] = {}
+    # mean window length in days (5 for the TUD product, ~30 for monthly mascons); the drift acts on the
+    # (length - 1) days inside a window, so 'increment + drift x (len-1)' is the net change per window
+    win_len = float(np.mean([day_index[b] - day_index[a] + 1 for _, a, b in windows]))
+    n_in = max(win_len - 1.0, 1.0)
+    lines += ['', 'A. Tug of war (basin mean, ensemble mean) [mm/day]: increment at window start vs drift inside windows '
+                  '(mean window length %.1f days)' % win_len,
+              '   %-18s %10s %10s %14s %12s' % ('storage', 'increment', 'drift', 'incr+%d*drift' % round(n_in), 'OL drift')]
+    report['tug_of_war'] = {'window_length_days': win_len}
     for v in storages + ['tws']:
         d = diff_da_ol(v, 'basin').mean(0)
         d_ol = np.diff(OL[v]['basin'], axis=1).mean(0)
         inc, drf = d[starts - 1].mean(), d[inside - 1].mean()
-        report['tug_of_war'][v] = dict(increment=float(inc), drift=float(drf))
-        lines.append('   %-18s %+10.3f %+10.3f %+12.3f %+12.3f' % (v, inc, drf, inc + 4 * drf, d_ol[inside - 1].mean()))
+        report['tug_of_war'][v] = dict(increment=float(inc), drift=float(drf), net_per_window=float(inc + n_in * drf))
+        lines.append('   %-18s %+10.3f %+10.3f %+14.3f %+12.3f' % (v, inc, drf, inc + n_in * drf, d_ol[inside - 1].mean()))
     lines += ['', '   per sub-basin, increment / drift for groundwstor and riverstor [mm/day]',
               '   %-12s %9s %9s | %9s %9s' % ('sub-basin', 'GW incr', 'GW drift', 'RIV incr', 'RIV drift')]
     for k in keys[1:]:
@@ -180,7 +185,7 @@ def run_diagnosis(res_dir, obs_file, out_dir, tag='DA', nens=4, start=dt.date(20
     report['peaks'] = {}
     for y in np.unique(years):
         sel = years == y
-        if sel.sum() < 40:
+        if sel.sum() < min(40, 0.6 * len(years) / max(len(np.unique(years)) - 1, 1)):   # skip incomplete years
             continue
         r = dict(ol_max=wm_ol[sel].max(), da_max=wm_da[sel].max(), gr_max=obs_b[sel].max(),
                  ol_min=wm_ol[sel].min(), da_min=wm_da[sel].min(), gr_min=obs_b[sel].min())

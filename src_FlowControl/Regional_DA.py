@@ -537,6 +537,36 @@ class RDA:
                              start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
                              event_threshold_mm=event_threshold_mm)
 
+    @staticmethod
+    def da_evaluation(tag=None, reference='previous', extra_files=None, thresholds=None):
+        """
+        Standard evaluation report of the run (needs post_processing; best after increment_diagnosis, whose output
+        is then archived with it). Written to Res/<case>/evaluation/<tag>/:
+          summary.txt / summary.json   fit to GRACE (overall, by season, per sub-basin, key months), trends,
+                                       gain, forecast spread, chi^2, comparison with the reference run, warnings
+          fig1..fig5                   basin series, seasonal correction per storage, groundwater drift,
+                                       sub-basins, filter health
+          DA_setting.json, logs/       copies of the configuration and of the filter / clipping / adaptive-inflation
+                                       logs and the DA rank logs (parallel_logs/DA/rank_k.log); DA_output/<case> is
+                                       temporary and overwritten by the next run
+        and one row in Res/<case>/evaluation/runs_index.csv.
+        tag       : name of the run, e.g. 'run10' (None: date and time)
+        reference : tag of an earlier report, 'previous' (last row of runs_index.csv) or None
+        """
+        from src_DA.configure_DA import config_DA
+        from src_postprocessing.da_evaluation import evaluate_run
+
+        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        res_dir = Path(configDA.basic.res_permanent) / RDA.case
+        return evaluate_run(res_dir=res_dir, obs_file=Path(configDA.obs.dir) / ('%s_obs_GRACE.hdf5' % RDA.basin),
+                            out_root=res_dir / 'evaluation', tag=tag, basin=RDA.basin,
+                            da_output_dir=Path(configDA.basic.DA_output_temp_dir) / RDA.case,
+                            setting_file=Path(RDA.setting_dir) / 'DA_setting.json', reference=reference,
+                            start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
+                            thresholds=thresholds, figures_dir=res_dir / 'figures',
+                            extra_files=list(extra_files or []) +
+                            sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
+
 
 
 
