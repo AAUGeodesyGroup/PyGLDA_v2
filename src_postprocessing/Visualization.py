@@ -35,7 +35,7 @@ class visualization:
         if (cur_x, cur_y) != (0.0, 0.0):
             fig.shift_origin(xshift='%gc' % cur_x, yshift='%gc' % cur_y)
 
-    def basin_ensemble(self, allow_pop_up: bool = True, fig_path=None, stage: Stage = Stage.DA, variables=None,
+    def basin_ensemble(self, allow_pop_up: bool = False, fig_path=None, stage: Stage = Stage.DA, variables=None,
                        basin_id: str = 'basin', ncol: int = 2, min_range: float = 1.0, show_unperturbed: bool = False,
                        skip_start_days: int = 20, panel_width: float = 12, panel_height: float = 3,
                        row_gap: float = 1.4, col_gap: float = 2.5, fig_name=None):
@@ -288,7 +288,7 @@ class visualization:
                 plt.close(fig)
         return rows
 
-    def GRACE_OL_DA(self, allow_pop_up: bool = True, fig_path=None, signal=WaterGap_storage_variables.tws.name,
+    def GRACE_OL_DA(self, allow_pop_up: bool = False, fig_path=None, signal=WaterGap_storage_variables.tws.name,
                     ncol: int = 2, basins=None, show_unperturbed: bool = False, obs_marker_size=None,
                     skip_start_days: int = 5, panel_width: float = 12, panel_height: float = 3,
                     row_gap: float = 1.6, col_gap: float = 2.5, fig_name=None):
@@ -393,7 +393,7 @@ class visualization:
             fig.show()
         pass
 
-    def harmonic_maps(self, allow_pop_up: bool = True, fig_path=None, variable=WaterGap_storage_variables.tws.name,
+    def harmonic_maps(self, allow_pop_up: bool = False, fig_path=None, variable=WaterGap_storage_variables.tws.name,
                       quantities=('trend', 'annual_amp', 'annual_peak_doy'), style: str = 'smooth', fine_res: float = 0.05):
         """
         2-D maps of the per-grid-cell harmonic analysis (statistical_analysis.HarmonicMapAnalysis,

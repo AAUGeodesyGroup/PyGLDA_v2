@@ -68,7 +68,9 @@ You must download the complete WaterGAP 2.2e package separately and copy the mis
 ### 3. Install Python dependencies
 
 ```bash
-pip install numpy scipy xarray h5py pandas tqdm termcolor mpi4py
+# see doc/installation.md — the pinned conda environment (installation/environment.yml) is required;
+# a plain pip install does not give the numpy/numba versions WaterGAP 2.2e is locked to.
+bash installation/setup_env.sh install
 ```
 
 ## Usage

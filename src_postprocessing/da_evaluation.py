@@ -349,7 +349,8 @@ def _method_string(setting_file):
     for key in ('localization', 'inflation', 'increment_partition'):
         c = m.get(key)
         if isinstance(c, dict):
-            extra = {k: v for k, v in c.items() if k in ('max_weight_ratio', 'alpha', 'factor', 'sigma', 'split')}
+            extra = {k: v for k, v in c.items() if k in ('max_weight_ratio', 'alpha', 'factor', 'sigma', 'split',
+                                                         'split_storages', 'spatial_blend', 'max_cell_factor')}
             parts.append('%s=%s%s' % (key.split('_')[-1], c.get('kind'), (' %s' % extra) if extra else ''))
         elif c is not None:
             parts.append('%s=%s' % (key, c))
@@ -357,6 +358,9 @@ def _method_string(setting_file):
         parts.append('R=%s' % m['obs_error_correlation'])
     if m.get('obs_perturbation_centering'):
         parts.append('centred obs perturbations')
+    if isinstance(m.get('snow_upper_bound'), dict):
+        parts.append('snow <= %s x forecast + %s mm' % (m['snow_upper_bound'].get('factor'),
+                                                         m['snow_upper_bound'].get('offset_mm')))
     if m.get('obs_error_inflation'):
         parts.append('obs_error_inflation=%s' % m['obs_error_inflation'])
     return ', '.join(parts)

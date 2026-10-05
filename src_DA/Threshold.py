@@ -24,7 +24,8 @@ class model_state_threshold:
                              env_low  * min_OL(cell)  <=  S  <=  env_high * max_OL(cell)
                          read from <Auxiliary_dir>/state_envelope_<basin>.nc (see src_DA.state_envelope);
                          without the file only the floor is applied
-      swe                0 <= S <= 1000 mm (WaterGAP stops snow accumulation at 1000 mm per sub-grid band)
+      swe                S >= 0 (no fixed upper limit: the filter limits snow relative to each member's forecast,
+                         see src_DA.bounds; snow_max sets an absolute safety limit if wanted, default none)
       canopystor, reservoirstor, localwetlandstor, globalwetlandstor      S >= 0
       locallakestor, globallakestor                                       no bound (lakes may be negative)
     Capacities of lakes, wetlands and reservoirs exist inside WaterGAP (lateral water balance: max_*_storage,
@@ -42,7 +43,7 @@ class model_state_threshold:
     ENVELOPE_VARS = ('riverstor', 'groundwstor')     # storages bounded by the open-loop envelope
 
     def __init__(self, configDA: config_DA, env_low: float = 0.5, env_high: float = 1.5, river_floor: float = 1e-3,
-                 snow_max: float = 1000.0, gw_lower: bool = False, gw_upper: bool = False):
+                 snow_max: float = None, gw_lower: bool = False, gw_upper: bool = False):
         self.layers = [key for key, value in configDA.model.layer.items() if value is True]
         self.env_low, self.env_high, self.river_floor, self.snow_max = env_low, env_high, river_floor, snow_max
         self.gw_lower = gw_lower            # lower edge of the open-loop envelope for groundwater (default off)
@@ -124,7 +125,7 @@ class model_state_threshold:
         if var == 'soilmoist':
             return 0.0, self.smax
         if var == 'swe':
-            return 0.0, self.snow_max
+            return 0.0, (np.inf if self.snow_max is None else self.snow_max)
         if var == 'riverstor':
             if var in self.envelope:
                 lo, hi = self.envelope[var]

@@ -1,4 +1,5 @@
 from src_auxiliary.banner import print_pyglda_banner
+from src_DA.EnumDA import Stage
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -62,11 +63,6 @@ class RDA:
     '''for open-loop and data assimilation'''
     sim_begin_time = '2002-05-01'
     sim_end_time = '2005-04-30'
-
-    '''for visualization of the 2-D harmonic maps: 'smooth' (interpolated, clipped to the basin
-    polygon) or 'pixel' (one cell per 0.5-degree node); or a list/tuple to produce both'''
-    map_style = 'smooth'
-    # map_style = 'pixel'
 
     @staticmethod
     def config_external_data():
@@ -200,19 +196,46 @@ class RDA:
 
     @staticmethod
     def model_perturbation():
-        """This is global-wise perturbation"""
-
+        """
+        Global perturbation of parameters and forcing -> Ensemble_input/Ens_k (k = 0..ens, Ens_0 unperturbed).
+        MPI stage (mpiexec -n ens+1): each rank writes its own member; rank 0 draws the random numbers and
+        broadcasts them. Rank 1 prints the progress, the other ranks log to parallel_logs/perturbation/.
+        """
+        from mpi4py import MPI
+        import sys, os
         from src_DA.Perturbation import perturbation
+
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+
+        assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
+
+        if rank != 1:
+            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'perturbation')
+            os.makedirs(log_dir, exist_ok=True)
+            sys.stdout = open(os.path.join(log_dir, f"rank_{rank}.log"), 'w', encoding='utf-8', buffering=1)
+            sys.stderr = sys.stdout
+
         dp = Path(RDA.setting_dir) / 'perturbation.json'
 
         '''the begin time should cover the spin-up period, and the end time should cover the simulation period'''
         t1 = datetime.strptime(RDA.spin_up_start, '%Y-%m-%d').strftime('%Y-%m')
         t2 = datetime.strptime(RDA.sim_end_time, '%Y-%m-%d').strftime('%Y-%m')
 
-        pp = perturbation(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2)
-        pp.perturb_par()
-        pp.perturb_forcing()
+        try:
+            if rank == 1:
+                print('\n=================== Model perturbation ===================')
+                print('%d members (+ unperturbed) | %s to %s | %d ranks' % (RDA.ens, t1, t2, size), flush=True)
+            pp = perturbation(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2)
+            pp.perturb_par(comm=comm)
+            pp.perturb_forcing(comm=comm)
+        except Exception:
+            _abort_with_report(comm, rank, 'perturbation')
 
+        comm.barrier()
+        if rank == 1:
+            print('Model perturbation finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'), flush=True)
         pass
 
     @staticmethod
@@ -252,7 +275,7 @@ class RDA:
             OL.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
                                         read_init_dir=configDA.basic.Ensemble_ini_dir)
 
-            OL.model_spinup()
+            OL.model_spinup(spinup_years=RDA.spin_up_years)
 
         except Exception:
             _abort_with_report(comm, rank, 'spin_up')
@@ -302,7 +325,20 @@ class RDA:
         pass
 
     @staticmethod
-    def collect_and_statistics(stage, skip_collect= False):
+    def collect_and_statistics(stage, skip_collect=False, post_process=True):
+        """
+        MPI stage after OL_run / DA_run (mpiexec -n ens+1):
+          step 1  daily output -> yearly files Res/<case>/<stage>/Ens_k/daily_output_<year>.nc (skip_collect=True:
+                  use the existing yearly files)
+          step 2  basin / sub-basin series -> Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5
+          step 3  (post_process=True) post-processing of this stage:
+                  3a  harmonic maps Harmonic_<stage>.nc on all ranks (members spread over the ranks, rank 1 writes;
+                      every member is fitted, see statistical_analysis.HarmonicMapAnalysis)
+                  3b  RDA.post_processing(stages=[stage], harmonic=False) on rank 1: Res_<stage>.h5 and, for the DA,
+                      the GRACE files; the other ranks wait.
+                  A failure in step 3 is reported but does not abort the job (the collected files are complete);
+                  rerun it serially with RDA.post_processing(stages=[stage]).
+        """
         from mpi4py import MPI
         import sys, os
         from src_postprocessing.merge_standardize import yearly_merge, Stage
@@ -379,6 +415,33 @@ class RDA:
         if rank == 1:
             print('Collection and statistics of %s finished: %s' % (stage.name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
 
+        '''the third stage: post-processing of this stage'''
+        if post_process:
+            if rank == 1:
+                print('step 3/3: post-processing %s -> Res/%s/Harmonic_%s.nc (all ranks), Res_%s.h5%s (rank 1)' %
+                      (stage.name, RDA.case, stage.name, stage.name, ', GRACE files' if stage == Stage.DA else ''))
+            '''3a: harmonic maps, members spread over all ranks (an error is raised on every rank, so no hang)'''
+            try:
+                RDA.harmonic_fit(stage, comm=comm, root=1)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                if rank == 1:
+                    print('[WARNING] harmonic maps of %s failed; rerun serially: RDA.harmonic_fit(Stage.%s)' %
+                          (stage.name, stage.name), flush=True)
+            comm.barrier()
+            '''3b: basin series and GRACE files on rank 1'''
+            if rank == 1:
+                try:
+                    RDA.post_processing(stages=[stage], harmonic=False)
+                    print('Post-processing of %s finished: %s' % (stage.name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    print('[WARNING] post-processing of %s failed; the collected files are complete. Rerun serially: '
+                          'RDA.post_processing(stages=[Stage.%s])' % (stage.name, stage.name), flush=True)
+            comm.barrier()
+
         pass
 
     @staticmethod
@@ -394,17 +457,16 @@ class RDA:
         (not under mpiexec), e.g. from demo1() after collect_and_statistics() has finished.
         """
         from src_DA.configure_DA import config_DA
-        from src_DA.EnumDA import Stage
         from src_auxiliary.clean_temp_output import clean_daily_output
 
+        if stage not in (Stage.OL, Stage.DA):
+            raise ValueError('clean_temp_output: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
-        stage_name = stage.name if isinstance(stage, Stage) else str(stage)
-        assert stage_name in ('OL', 'DA'), 'stage must be Stage.OL or Stage.DA'
-        temp_dir = configDA.basic.OL_output_temp_dir if stage_name == 'OL' else configDA.basic.DA_output_temp_dir
+        temp_dir = configDA.basic.OL_output_temp_dir if stage == Stage.OL else configDA.basic.DA_output_temp_dir
         res_dir = Path(configDA.basic.res_permanent) / RDA.case
 
-        print('Cleaning temporary %s output of case %s' % (stage_name, RDA.case))
-        return clean_daily_output(temp_dir=temp_dir, res_dir=res_dir, stage_name=stage_name, case=RDA.case,
+        print('Cleaning temporary %s output of case %s' % (stage.name, RDA.case))
+        return clean_daily_output(temp_dir=temp_dir, res_dir=res_dir, stage=stage, case=RDA.case,
                                   dry_run=dry_run, force=force)
 
     @staticmethod
@@ -453,43 +515,75 @@ class RDA:
         pass
 
     @staticmethod
-    def post_processing():
+    def harmonic_fit(stage, comm=None, root=0):
         """
-        post-processing of the data assimilation and open loop results
-        Returns
-        -------
-
+        Per-grid-cell harmonic maps of one stage -> Res/<case>/Harmonic_<stage>.nc (HarmonicMapAnalysis).
+        Every member is fitted (per-member maps, ensemble spread) plus the ensemble mean; the options
+        (per_member, n_workers) stay in statistical_analysis.HarmonicMapAnalysis.
+        comm : MPI communicator (all its ranks call this; members are spread over the ranks, `root` writes)
         """
-
         from src_DA.configure_DA import config_DA
-        from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post, HarmonicMapAnalysis, Stage
+        from src_postprocessing.statistical_analysis import HarmonicMapAnalysis
+        if not isinstance(stage, Stage) or stage not in (Stage.OL, Stage.DA):
+            raise ValueError('harmonic_fit: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
+        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        hm = HarmonicMapAnalysis(res_dir=configDA.basic.res_permanent, case=RDA.case, ens=RDA.ens,
+                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time)
+        return hm.run(stage, comm=comm, root=root)
+
+    @staticmethod
+    def post_processing(stages=(Stage.OL, Stage.DA), grace=None, harmonic=True):
+        """
+        Post-processing of one or both stages, from their collected results (Res/<case>/<stage>/Ens_k/):
+            Res/<case>/Res_<stage>.h5         basin / sub-basin daily series of all storages, all members
+            Res/<case>/Harmonic_<stage>.nc    per-cell trend, annual and semi-annual cycle maps
+        and, with grace=True, GRACE_<basin>.h5 and Harmonic_GRACE.nc (GRACE basin series and maps).
+        It runs automatically at the end of collect_and_statistics(stage) (post_process=True, rank 1), so in
+        the normal workflow it is not called by hand. Call it directly only to rerun it serially, e.g. after a
+        failure or a code change:  RDA.post_processing(stages=[Stage.OL])  /  RDA.post_processing(stages=[Stage.DA])
+            Res_OL.h5 is needed by the DA when the inflation split is "ol_spread" or "ol_variability";
+            the DA stage includes GRACE, whose observation file is written at the start of the DA.
+        stages   : Stage.OL, Stage.DA or both (a single Stage or a list); grace: None = with the DA stage
+        harmonic : False skips Harmonic_<stage>.nc (collect_and_statistics makes it in parallel, RDA.harmonic_fit);
+        """
+        from src_DA.configure_DA import config_DA
+        from src_postprocessing.statistical_analysis import BasinAverageAnalysis_post, HarmonicMapAnalysis
+
+        if isinstance(stages, Stage):
+            stages = [stages]
+        stages = list(stages)
+        bad = [s for s in stages if s not in (Stage.OL, Stage.DA)]
+        if bad:
+            raise ValueError('post_processing: stages must be Stage.OL and/or Stage.DA, got %s' % bad)
+        if grace is None:
+            grace = Stage.DA in stages
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        res_case = Path(configDA.basic.res_permanent) / RDA.case
 
         bp = BasinAverageAnalysis_post(ens=RDA.ens, case=RDA.case, basin=RDA.basin, date_begin=RDA.sim_begin_time,
                                        date_end=RDA.sim_end_time)
-
-        for stage in [Stage.OL, Stage.DA]:
-            bp.get_states(dir=configDA.basic.res_permanent, stage=stage)
-            bp.save_states(save_dir=Path(configDA.basic.res_permanent)/RDA.case, prefix=stage.name)
-
-        '''collect GRACE basin average results'''
-
-        bp.get_GRACE(obs_dir=configDA.obs.dir)
-        bp.save_GRACE(prefix=RDA.basin, save_dir=Path(configDA.basic.res_permanent)/RDA.case)
-
-        '''per-grid-cell harmonic analysis (trend, annual / semi-annual cycle) of the OL and DA
-        yearly files -> 2-D maps saved to Res/<case>/Harmonic_<stage>.nc (see src_auxiliary.ts)'''
         hm = HarmonicMapAnalysis(res_dir=configDA.basic.res_permanent, case=RDA.case, ens=RDA.ens,
                                  date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time)
-        for stage in [Stage.OL, Stage.DA]:
-            hm.run(stage)
-        '''... and of the gridded GRACE TWS prepared by get_GRACE_obs (grid_TWS) -> Harmonic_GRACE.nc'''
-        hm.run_GRACE(grace_dir=configDA.obs.GRACE['preprocess_res'], basin=RDA.basin,
-                     basin_mask_path=configDA.basic.basin_mask,
-                     land_mask_path=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
 
-        pass
+        for stage in stages:
+            '''basin / sub-basin time series -> Res/<case>/Res_<stage>.h5'''
+            bp.get_states(dir=configDA.basic.res_permanent, stage=stage)
+            bp.save_states(save_dir=res_case, prefix=stage.name)
+            '''per-grid-cell harmonic analysis of the yearly files -> Res/<case>/Harmonic_<stage>.nc'''
+            if harmonic:
+                hm.run(stage)
+            print('post-processing %s done: Res_%s.h5%s' % (stage.name, stage.name,
+                                                            ', Harmonic_%s.nc' % stage.name if harmonic else ''))
+
+        if grace:
+            '''GRACE basin series -> GRACE_<basin>.h5, gridded GRACE TWS (from get_GRACE_obs) -> Harmonic_GRACE.nc'''
+            bp.get_GRACE(obs_dir=configDA.obs.dir)
+            bp.save_GRACE(prefix=RDA.basin, save_dir=res_case)
+            hm.run_GRACE(grace_dir=configDA.obs.GRACE['preprocess_res'], basin=RDA.basin,
+                         basin_mask_path=configDA.basic.basin_mask,
+                         land_mask_path=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
+            print('post-processing GRACE done: GRACE_%s.h5, Harmonic_GRACE.nc' % RDA.basin)
 
 
     @staticmethod
@@ -505,17 +599,15 @@ class RDA:
         '''ensemble time series of the storage compartments, one figure per stage (Components_<stage>.png);
         panels with a range below min_range [mm] (e.g. constant global lakes) are skipped, ncol sets the layout'''
         for stage in [Stage.OL, Stage.DA]:
-            vv.basin_ensemble(allow_pop_up=True, fig_path=fig_path, stage=stage, ncol=2, min_range=1.0)
-        vv.GRACE_OL_DA(allow_pop_up=True, fig_path=fig_path, signal=WaterGap_storage_variables.tws.name)
+            vv.basin_ensemble(allow_pop_up=False, fig_path=fig_path, stage=stage, ncol=2, min_range=1.0)
+        vv.GRACE_OL_DA(allow_pop_up=False, fig_path=fig_path, signal=WaterGap_storage_variables.tws.name)
         '''evaluation on the observation windows: OL vs DA vs GRACE, innovation/residual with sigma, spread;
         basin_id=0 is the whole basin, k a sub-basin; zoom adds a daily close-up (figures/DA_eval_*.png,
         statistics for all sub-basins in figures/DA_eval_stats.json)'''
         vv.DA_evaluation(fig_path=fig_path, basin_id=0, zoom=None)
         '''2-D maps of trend / annual amplitude / annual peak day: OL | DA | GRACE'''
-        styles = RDA.map_style if isinstance(RDA.map_style, (list, tuple)) else [RDA.map_style]
-        for style in styles:
-            vv.harmonic_maps(allow_pop_up=True, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
-                             variable=WaterGap_storage_variables.tws.name, style=style)
+        vv.harmonic_maps(allow_pop_up=False, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
+                         variable=WaterGap_storage_variables.tws.name)
 
     @staticmethod
     def increment_diagnosis(tag=None, event_threshold_mm=40.0):

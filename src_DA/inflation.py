@@ -205,7 +205,7 @@ class AdditiveInflation(Inflation):
             a sub-basin with little snow gets less than sigma; members are kept within the window-aware bounds;
           - storages with a lower AND an upper bound (soil: 0..smax, needs soil_upper_bound): e weighted by the room
             to the nearer bound, min(S - lb, ub - S), so a nearly full (winter) or nearly empty soil gets little
-            noise and is not clipped; the same CV_MAX cap applies to the room. For snow far below 1000 mm this is
+            noise and is not clipped; the same CV_MAX cap applies to the room. For snow (no static upper bound) this is
             the snow amount, as before.
           Variance a bounded storage cannot take (no snow, full soil) goes to the unbounded storages (groundwater,
           lakes) in the adaptive scheme.
@@ -269,7 +269,7 @@ class AdditiveInflation(Inflation):
 
     def _room(self, v, x, rows):
         """how much noise a bounded storage can take in each cell (rows: its state elements): the distance to the
-        nearer static bound, min(S - lb, ub - S); for snow far below 1000 mm this is the snow amount as before"""
+        nearer static bound, min(S - lb, ub - S); for snow (no static upper bound) this is the snow amount as before"""
         f = self.f
         w = np.maximum(x - f.bounds.lb[rows], 0.0)
         ub = f.bounds.ub[rows]
@@ -440,6 +440,11 @@ def split_table(path, storages, n_sub, mode, min_share=0.0):
     Returns (table (12, n_sub, n_storage), storages)
     """
     import h5py, datetime as dt
+    from pathlib import Path
+    if not Path(path).exists():
+        raise FileNotFoundError('inflation split "%s" needs the open-loop basin series %s - run '
+                                'collect_and_statistics(Stage.OL) (post-processing included) or RDA.post_processing(stages=[Stage.OL])'
+                                % (mode, path))
     storages = list(storages)
     T = np.zeros((12, n_sub, len(storages)))
     with h5py.File(path, 'r') as h:

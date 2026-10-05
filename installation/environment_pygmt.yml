@@ -1,0 +1,26 @@
+# Visualization env for PyGLDA_v2 (src_postprocessing/Visualization.py, src_auxiliary/HydroShed.py, Shape.py).
+# Separate from pyglda_v2 because pygmt does not solve against WaterGAP's numpy 1.23.5 pin.
+# Not for running the model. Mirrors the desktop "pygmt-2" env (python 3.13, pygmt 0.16, gmt 6.6).
+#   desktop:  mamba env create -f environment_pygmt.yml
+#   UCloud:   bash setup_env.sh install --prefix /work/PyGLDA_v2_external_data/envs --with-pygmt
+name: pygmt
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pygmt=0.16
+  - gmt=6.6
+  - ghostscript   # psconvert needs gs to write png/pdf; not present on the UCloud image
+  - numpy
+  - xarray
+  - pandas<3      # match the desktop env (pandas 3 changes copy-on-write / string semantics)
+  - netcdf4=*=nompi_*
+  - h5py=*=nompi_*
+  - geopandas
+  - shapely
+  - scipy
+  - matplotlib
+  - tqdm
+  - mpich
+  - mpi4py        # some src_DA / src_postprocessing modules import it at top level

@@ -336,19 +336,25 @@ class HarmonicMapAnalysis:
     Output: one netCDF per stage, Res/<case>/Harmonic_<stage>.nc, with
         (the GRACE counterpart, Harmonic_GRACE.nc, is produced by run_GRACE with maps on (lat, lon) only)
         <var>_<quantity>            dims (ens, lat, lon)   one map per ensemble member (ens 0..N;
-                                                           ens 0 is the unperturbed member)
+                                                           ens 0 is the unperturbed member)  [per_member only]
         <var>_<quantity>_ensmean    dims (lat, lon)        fit of the ENSEMBLE-MEAN series of
                                                            members 1..N (the proper way to
                                                            average an amplitude/phase)
         <var>_<quantity>_ensspread  dims (lat, lon)        std across members 1..N (circular
-                                                           std for phases)
+                                                           std for phases)                    [per_member only]
+    per_member : True  = fit every member (Ens_0..N) and the ensemble mean (default)
+                 False = fit only the ensemble-mean series; Ens_0 is not read, no (ens) maps and no spread
+    Parallel (run): comm = an MPI communicator -> members are spread over its ranks (rank r takes members
+                 r, r+size, ...), the maps are gathered and the ensemble sum reduced on `root`, which writes the
+                 file; every rank of comm must call run(). Without comm, n_workers > 1 uses a process pool
+                 (one member per task; do not use it inside an MPI job).
     quantities: bias, trend, trend_std, annual_amp, annual_amp_std, annual_phase (calendar,
                 deg), annual_phase_std, annual_peak_doy, semi_annual_amp, semi_annual_phase,
                 semi_annual_peak_doy, residual_std, n_valid
     """
 
     def __init__(self, res_dir, case: str, ens: int, date_begin: str, date_end: str,
-                 variables=(WaterGap_storage_variables.tws.name,), components=None):
+                 variables=(WaterGap_storage_variables.tws.name,), components=None, per_member=True):
         from src_auxiliary.ts import decomposition
         self.res_dir = Path(res_dir)
         self.case = case
@@ -356,6 +362,7 @@ class HarmonicMapAnalysis:
         self.date_begin, self.date_end = date_begin, date_end
         self.variables = list(variables)
         self.components = components or [decomposition.trend, decomposition.annual, decomposition.semi_annual]
+        self.per_member = bool(per_member)
 
     # ------------------------------------------------------------------ loading
     def _member_dir(self, stage: Stage, ens_id: int) -> Path:
@@ -437,57 +444,152 @@ class HarmonicMapAnalysis:
         return np.rad2deg(np.sqrt(-2.0 * np.log(R)))
 
     # ------------------------------------------------------------------ driver
-    def run(self, stage: Stage, save=True) -> xr.Dataset:
-        print(f"Harmonic map analysis | {stage.name} | Ens_0..{self.ens} | {self.date_begin} to {self.date_end} | "
-              f"{', '.join(self.variables)} | {', '.join(c.name for c in self.components)}")
-        member_maps = {v: [] for v in self.variables}           # var -> list over ens of dict(q -> 2D)
-        mean_series = {v: None for v in self.variables}         # var -> running sum of members 1..N
-        lat = lon = tfrac = None
-        for ens_id in range(self.ens + 1):
-            ds = self._load_member(stage, ens_id)
-            if lat is None:
-                lat, lon = ds['lat'].values, ds['lon'].values
-                tfrac = self._year_fraction(ds['time'].values)
-            for v in self.variables:
-                cube = ds[v].transpose('time', 'lat', 'lon')
-                member_maps[v].append(self._fit_cube(cube, tfrac))
-                if ens_id >= 1:                                 # ensemble mean excludes the unperturbed member 0
-                    mean_series[v] = cube.values.copy() if mean_series[v] is None else mean_series[v] + cube.values
-            print(f"  Ens_{ens_id}: fitted {len(tfrac)} days x {lat.size * lon.size} cells")
+    def _fit_member(self, stage: Stage, ens_id: int) -> dict:
+        """load one member and fit it (per_member). Returns meta (lat, lon, time), maps {var: {q: 2-D}} or None,
+        and the daily cubes {var: (time, lat, lon)} for the ensemble mean (None for the unperturbed Ens_0)."""
+        ds = self._load_member(stage, ens_id)
+        meta = (ds['lat'].values, ds['lon'].values, ds['time'].values)
+        tfrac = self._year_fraction(meta[2])
+        maps, cubes = {}, {}
+        for v in self.variables:
+            cube = ds[v].transpose('time', 'lat', 'lon')
+            if self.per_member:
+                maps[v] = self._fit_cube(cube, tfrac)
+            if ens_id >= 1:                                     # ensemble mean excludes the unperturbed member 0
+                cubes[v] = np.asarray(cube.values, dtype=np.float64)
+        return {'ens_id': ens_id, 'meta': meta, 'maps': maps if self.per_member else None,
+                'cubes': cubes if ens_id >= 1 else None}
 
+    def _process(self, stage: Stage, ids, n_workers=1) -> dict:
+        """fit the members `ids` (serially or with a process pool) and keep a running sum of members >= 1"""
+        local = {'meta': None, 'maps': {}, 'sums': {v: None for v in self.variables}}
+
+        def take(r):
+            if local['meta'] is None:
+                local['meta'] = r['meta']
+            elif len(r['meta'][2]) != len(local['meta'][2]) or r['meta'][0].shape != local['meta'][0].shape \
+                    or r['meta'][1].shape != local['meta'][1].shape:
+                raise ValueError(f"Ens_{r['ens_id']} ({stage.name}) has a different time axis or grid than the other members")
+            if r['maps'] is not None:
+                local['maps'][r['ens_id']] = r['maps']
+            if r['cubes'] is not None:
+                for v, c in r['cubes'].items():
+                    local['sums'][v] = c if local['sums'][v] is None else local['sums'][v] + c
+            print(f"  Ens_{r['ens_id']}: {'fitted' if self.per_member else 'loaded'} "
+                  f"{len(r['meta'][2])} days x {r['meta'][0].size * r['meta'][1].size} cells", flush=True)
+
+        ids = list(ids)
+        if n_workers and n_workers > 1 and len(ids) > 1:
+            from concurrent.futures import ProcessPoolExecutor
+            from functools import partial
+            with ProcessPoolExecutor(max_workers=min(int(n_workers), len(ids))) as ex:
+                for r in ex.map(partial(self._fit_member, stage), ids):
+                    take(r)
+        else:
+            for ens_id in ids:
+                take(self._fit_member(stage, ens_id))
+        return local
+
+    def run(self, stage: Stage, save=True, comm=None, root=0, n_workers=1):
+        """
+        Harmonic maps of one stage -> Res/<case>/Harmonic_<stage>.nc (see the class docstring).
+        comm      : MPI communicator; all its ranks call run(), members are spread over the ranks, `root` writes
+                    the file and returns the Dataset (the other ranks return None). An error on any rank is raised
+                    on every rank (no hang).
+        n_workers : without comm, number of processes (one member per task); 1 = serial
+        """
+        ids_all = list(range(0 if self.per_member else 1, self.ens + 1))
+        rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
+        if rank == root:
+            mode = (f'MPI over {size} ranks' if comm is not None else
+                    f'{n_workers} processes' if n_workers and n_workers > 1 else 'serial')
+            print(f"Harmonic map analysis | {stage.name} | "
+                  f"{'every member Ens_0..%d + ensemble mean' % self.ens if self.per_member else 'ensemble mean of Ens_1..%d only' % self.ens}"
+                  f" | {mode} | {self.date_begin} to {self.date_end} | {', '.join(self.variables)} | "
+                  f"{', '.join(c.name for c in self.components)}", flush=True)
+
+        my_ids = ids_all[rank::size]
+        err = None
+        try:
+            local = self._process(stage, my_ids, n_workers=1 if comm is not None else n_workers)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            local, err = None, f'rank {rank}: {type(e).__name__}: {e}'
+
+        if comm is None:
+            if err:
+                raise RuntimeError('harmonic fit failed: ' + err)
+            meta, maps, sums = local['meta'], local['maps'], local['sums']
+        else:
+            from mpi4py import MPI
+            errs = [e for e in comm.allgather(err) if e]
+            if errs:
+                raise RuntimeError('harmonic fit failed on ' + '; '.join(errs))
+            metas = comm.allgather(None if local['meta'] is None else
+                                   (local['meta'][0], local['meta'][1], local['meta'][2]) if rank == 0 else
+                                   (local['meta'][0].shape, local['meta'][1].shape, len(local['meta'][2])))
+            meta = metas[0]                                     # rank 0 always holds the first member
+            shp = (len(meta[2]), meta[0].size, meta[1].size)
+            bad = [r for r, m in enumerate(metas[1:], start=1)
+                   if m is not None and (m[0], m[1], m[2]) != (meta[0].shape, meta[1].shape, len(meta[2]))]
+            if bad:
+                raise RuntimeError(f'harmonic fit: ranks {bad} read a different time axis or grid than rank 0')
+            gathered = comm.gather(local['maps'], root=root)
+            sums = {}
+            for v in self.variables:
+                send = local['sums'][v] if local['sums'][v] is not None else np.zeros(shp)
+                send = np.ascontiguousarray(send, dtype=np.float64)
+                recv = np.empty(shp, dtype=np.float64) if rank == root else None
+                comm.Reduce(send, recv, op=MPI.SUM, root=root)
+                sums[v] = recv
+            if rank != root:
+                return None
+            maps = {}
+            for g in gathered:
+                maps.update(g)
+        return self._assemble(stage, meta, maps, sums, save)
+
+    def _assemble(self, stage: Stage, meta, maps: dict, sums: dict, save=True) -> xr.Dataset:
+        lat, lon, time = meta
+        tfrac = self._year_fraction(time)
         data_vars = {}
         for v in self.variables:
-            quantities = member_maps[v][0].keys()
-            for q in quantities:
-                stack = np.stack([mm[q] for mm in member_maps[v]], axis=0)          # (ens, lat, lon)
-                data_vars[f'{v}_{q}'] = (('ens', 'lat', 'lon'), stack, {'units': self._units(q)})
-                members = stack[1:] if stack.shape[0] > 1 else stack
-                with warnings.catch_warnings():                                    # all-NaN cells outside the basin
-                    warnings.simplefilter('ignore', category=RuntimeWarning)
-                    if q.endswith('phase'):
-                        spread = self._circular_std_deg(members, axis=0)
-                    else:
-                        spread = np.nanstd(members, axis=0, ddof=1) if members.shape[0] > 1 else np.full_like(members[0], np.nan)
-                data_vars[f'{v}_{q}_ensspread'] = (('lat', 'lon'), spread, {'units': self._units(q),
-                                                   'description': 'std across ensemble members 1..N'})
-            if mean_series[v] is not None:
-                n_members = max(self.ens, 1)
-                cube_mean = xr.DataArray(mean_series[v] / n_members, dims=('time', 'lat', 'lon'))
-                fit_mean = self._fit_cube(cube_mean, tfrac)
-                for q, arr in fit_mean.items():
+            if self.per_member:
+                member_maps = [maps[k][v] for k in range(self.ens + 1)]
+                for q in member_maps[0].keys():
+                    stack = np.stack([mm[q] for mm in member_maps], axis=0)        # (ens, lat, lon)
+                    data_vars[f'{v}_{q}'] = (('ens', 'lat', 'lon'), stack, {'units': self._units(q)})
+                    members = stack[1:] if stack.shape[0] > 1 else stack
+                    with warnings.catch_warnings():                                # all-NaN cells outside the basin
+                        warnings.simplefilter('ignore', category=RuntimeWarning)
+                        if q.endswith('phase'):
+                            spread = self._circular_std_deg(members, axis=0)
+                        else:
+                            spread = np.nanstd(members, axis=0, ddof=1) if members.shape[0] > 1 else np.full_like(members[0], np.nan)
+                    data_vars[f'{v}_{q}_ensspread'] = (('lat', 'lon'), spread, {'units': self._units(q),
+                                                       'description': 'std across ensemble members 1..N'})
+            if sums.get(v) is not None and self.ens >= 1:
+                cube_mean = xr.DataArray(sums[v].reshape(len(time), lat.size, lon.size) / self.ens,
+                                         dims=('time', 'lat', 'lon'))
+                for q, arr in self._fit_cube(cube_mean, tfrac).items():
                     data_vars[f'{v}_{q}_ensmean'] = (('lat', 'lon'), arr, {'units': self._units(q),
                                                      'description': 'fit of the ensemble-mean series (members 1..N)'})
 
-        out = xr.Dataset(data_vars, coords={'ens': np.arange(self.ens + 1), 'lat': lat, 'lon': lon},
+        coords = {'lat': lat, 'lon': lon}
+        if self.per_member:
+            coords['ens'] = np.arange(self.ens + 1)
+        out = xr.Dataset(data_vars, coords=coords,
                          attrs={'case': self.case, 'stage': stage.name, 'period': f'{self.date_begin} to {self.date_end}',
                                 'components': ', '.join(c.name for c in self.components),
+                                'per_member': int(self.per_member), 'n_members': self.ens,
                                 'phase_convention': 'calendar phase phi_cal [deg]: y = A cos(2 pi k f + phi_cal), '
                                                     'f = fraction of the year from 1 January; peak_doy = 1 + 365.25 * ((-phi_cal/360) mod 1) / k',
                                 'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
         if save:
             fn = self.output_path(self.res_dir, self.case, stage)
             out.to_netcdf(fn, encoding={k: {'zlib': True, 'complevel': 4} for k in out.data_vars})
-            print(f"  -> {fn}")
+            print(f"  -> {fn}", flush=True)
         return out
 
     @staticmethod

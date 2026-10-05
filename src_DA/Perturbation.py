@@ -27,7 +27,15 @@ class perturbation:
     """
     #TODO: A sensitivity test is necessary for further analysis!
     Notice: Take care of the unit of the perturbation! see ext_forcing.py
+
+    Parallel: perturb_par(comm) / perturb_forcing(comm) with an MPI communicator split the ensemble members over
+    the ranks (rank r writes Ens_r, Ens_r+size, ...). Rank 0 draws all random numbers and broadcasts them, so the
+    result does not depend on the number of ranks. Without comm everything runs serially.
     """
+
+    '''zlib level of the perturbed forcing files: 1 is ~2.5x faster to write than 4 for ~8% larger files
+    (a global month: ~2.7 s vs ~6.7 s per file); WaterGAP reads any level'''
+    FORCING_COMPLEVEL = 1
 
     def __init__(self, dp='./DA_settings/perturbation.json', ens_size=None):
         self.setting = json.load(open(dp, 'r'))
@@ -125,7 +133,13 @@ class perturbation:
         self.monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
         return self
 
-    def perturb_par(self):
+    def _members(self, comm=None):
+        """ensemble members handled by this rank (all members without comm)"""
+        if comm is None:
+            return list(range(self.ens + 1))
+        return list(range(comm.Get_rank(), self.ens + 1, comm.Get_size()))
+
+    def perturb_par(self, comm=None):
         par = self.setting['correlation']['par']
 
         if par['customize']:
@@ -134,12 +148,12 @@ class perturbation:
 
         """using the built-in functions"""
         if par["isSpatialCorrelated"]:
-            self._par_spatial_correlated()
+            self._par_spatial_correlated(comm=comm)
         else:
             assert False, 'This function is not applicable for WaterGap yet!'
         pass
 
-    def perturb_forcing(self):
+    def perturb_forcing(self, comm=None):
         forcing = self.setting['correlation']['forcing']
 
         if forcing['customize']:
@@ -150,7 +164,7 @@ class perturbation:
         if forcing["isSpatialCorrelated"] and forcing["isTemporalCorrelated"]:
             self._forcing_spatiotemporal_correlated()
         elif forcing["isSpatialCorrelated"] and (not forcing["isTemporalCorrelated"]):
-            self._forcing_spatial_correlated_temporal_noncorrelated()
+            self._forcing_spatial_correlated_temporal_noncorrelated(comm=comm)
         elif (not forcing["isSpatialCorrelated"]) and forcing["isTemporalCorrelated"]:
             self._forcing_spatial_noncorrelated_temporal_correlated()
         else:
@@ -188,30 +202,22 @@ class perturbation:
 
             dir_out = dir_out_parent / ('Ens_%s' % ens_id)
 
-            if dir_out.exists():
-                pass
-            else:
-                dir_out.mkdir()
-                pass
+            dir_out.mkdir(exist_ok=True)                        # exist_ok: safe when all MPI ranks call it
 
             for keyw in ['parameters', 'monthly_climate_forcing']:
-                dir_out_par = dir_out / keyw
-                if dir_out_par.exists():
-                    pass
-                else:
-                    dir_out_par.mkdir()
-                    pass
+                (dir_out / keyw).mkdir(exist_ok=True)
 
         pass
 
-    def _par_spatial_correlated(self):
+    def _par_spatial_correlated(self, comm=None):
 
         dir_out_parent = Path(self.setting['dir']['out'])
         ens_size = self.ens
 
-        '''produce the coefficients for each parameter based on the error distribution and perturbation method'''
+        '''produce the coefficients for each parameter based on the error distribution and perturbation method
+        (rank 0 draws them and broadcasts, so all ranks use the same values)'''
         perturbed_ens = {}
-        for key, value in self.setting['par'].items():
+        for key, value in (self.setting['par'].items() if comm is None or comm.Get_rank() == 0 else []):
             if value['is_perturbed']:
                 if value['error_distribution'] == error_distribution.triangle.name:
                     if key == 'pt_coeff_humid_arid':
@@ -232,8 +238,10 @@ class perturbation:
                     perturbed_ens[key] = self.Gaussian_perturbation(mean=coeff[0], std=coeff[1], size=ens_size)
                 else:
                     raise ValueError(f"Unknown error distribution: {value['error_distribution']}")
+        if comm is not None:
+            perturbed_ens = comm.bcast(perturbed_ens, root=0)
 
-        for ens_id in range(ens_size + 1):
+        for ens_id in self._members(comm):
             print('Perturbing parameters for ensemble member %s' % ens_id)
             dir_in = Path(self.setting['dir']['in']) / 'Parameters' / 'WaterGAP_2.2e_global_parameters_gswp3_w5e5.nc'
             # Open the dataset with decode_times=False to avoid decoding the problematic time units
@@ -295,68 +303,73 @@ class perturbation:
         """
         pass
 
-    def _forcing_spatial_correlated_temporal_noncorrelated(self):
+    def _forcing_spatial_correlated_temporal_noncorrelated(self, comm=None):
+        """
+        One random factor (multiplicative) or offset (additive) per member and per day, the same for every grid
+        cell. Per month: rank 0 draws the samples of all members and broadcasts them (small: ens x days); each rank
+        then builds and writes only its own members, so the expensive part (compressing the global files) runs in
+        parallel and no rank holds the whole ensemble in memory.
+        """
         dir_in = Path(self.setting['dir']['in'])
         dir_out = Path(self.setting['dir']['out'])
 
         forcing = self.setting['forcing']
+        perturbed = [key for key in forcing if forcing[key]['is_perturbed']]
+        root = comm is None or comm.Get_rank() == 0
+        members = self._members(comm)
+        verbose = comm is None or comm.Get_rank() == min(1, comm.Get_size() - 1)
 
-        for month in self.monthlist:
-            # print(month.strftime('%Y-%m'))
+        for im, month in enumerate(self.monthlist):
 
             '''load data'''
             fn_1 = dir_in / 'monthly_climate_forcing' / ('%s.nc' % (month.strftime('%Y-%m')))
-            ds_1 = xr.open_dataset(fn_1, decode_times=False)
+            with xr.open_dataset(fn_1, decode_times=False) as ds:
+                ds_1 = ds.load()
 
-            outdata = {}
-            for key in forcing:
-                dict_group_load = ds_1[key].values
+            '''random samples of all members (ens, days), drawn on rank 0'''
+            samples = {}
+            if root:
+                for key in perturbed:
+                    s_shape = tuple([np.shape(ds_1[key].values)[0]])
+                    if forcing[key]['perturb_method'] == perturb_method.multiplicative.name:
+                        samples[key] = self.__generate_perturbation(config=forcing[key], mean=np.ones(s_shape))
+                    else:
+                        samples[key] = self.__generate_perturbation(config=forcing[key], mean=np.zeros(s_shape))
+            if comm is not None:
+                samples = comm.bcast(samples, root=0)
 
-                if not forcing[key]['is_perturbed']:
-                    outdata[key] = dict_group_load
-                    continue
-
-                dd = np.ones(tuple([self.ens] + list(np.shape(dict_group_load))))
-                s_shape = tuple([np.shape(dict_group_load)[0]])
-                if forcing[key]['perturb_method'] == perturb_method.multiplicative.name:
-                    samples = self.__generate_perturbation(config=forcing[key], mean=np.ones(s_shape))
-                    hh = samples[:, :, None, None] * dd * dict_group_load[None, :, :]
-                    outdata[key] = hh
-
-                    pass
-                else:
-                    samples = self.__generate_perturbation(config=forcing[key], mean=np.zeros(s_shape))
-                    hh = dd * dict_group_load[None, :, :] + samples[:, :, None, None] * dd
-                    outdata[key] = hh
-
-                '''make sure that the perturbed data is not negative'''
-                outdata[key][outdata[key] < 0] = 0
-
-            '''write the perturbed data to the new file'''
-            for ens in tqdm(np.arange(self.ens+1), desc='Month: %s, loop over ensemble members'%month.strftime('%Y-%m')):
-
-                '''save data'''
-                fn_2 = dir_out /('Ens_%s'%ens) /'monthly_climate_forcing' / ('%s.nc' % (month.strftime('%Y-%m')))
+            '''write the members of this rank'''
+            for ens in members:
+                fn_2 = dir_out / ('Ens_%s' % ens) / 'monthly_climate_forcing' / ('%s.nc' % (month.strftime('%Y-%m')))
 
                 if ens == 0:
                     '''save the unperturbed data'''
                     ds_1.to_netcdf(fn_2)
                     continue
 
-                for key in outdata.keys():
-                    if forcing[key]['is_perturbed']:
-                        ds_1[key].values = outdata[key][ens-1]
-
-                        if ds_1[key].dtype != 'float32':
-                            ds_1[key] = ds_1[key].astype('float32')
+                ds_2 = ds_1.copy(deep=True)
+                for key in perturbed:
+                    data = ds_1[key].values
+                    if forcing[key]['perturb_method'] == perturb_method.multiplicative.name:
+                        hh = samples[key][ens - 1][:, None, None] * data
+                    else:
+                        hh = data + samples[key][ens - 1][:, None, None]
+                    '''make sure that the perturbed data is not negative'''
+                    hh[hh < 0] = 0
+                    ds_2[key].values = hh                       # same sequence as before: keeps attrs/encoding
+                    if ds_2[key].dtype != 'float32':
+                        ds_2[key] = ds_2[key].astype('float32')
 
                 '''# monthly chunking for each variable'''
-                ds_1.to_netcdf(fn_2, format="NETCDF4", engine="netcdf4", encoding={
-                    var: {"chunksizes": ds_1[var].shape, "zlib": True,
-                          "complevel": 4}
-                    for var in ds_1.data_vars
+                ds_2.to_netcdf(fn_2, format="NETCDF4", engine="netcdf4", encoding={
+                    var: {"chunksizes": ds_2[var].shape, "zlib": True,
+                          "complevel": self.FORCING_COMPLEVEL}
+                    for var in ds_2.data_vars
                 })
 
+            if verbose:
+                print('Forcing perturbation: %s done (%d/%d months), %d member(s) on this rank' %
+                      (month.strftime('%Y-%m'), im + 1, len(self.monthlist), len(members)), flush=True)
 
         pass
 

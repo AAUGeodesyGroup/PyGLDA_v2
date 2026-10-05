@@ -10,6 +10,7 @@ Builds the localized EnKF from the "method" block of DA_setting.json (used by sr
         "obs_error_correlation": "full" | "diagonal",
         "obs_perturbation_centering": false | true,
         "soil_upper_bound": true | false        (soil <= smax inside the bound-aware partition; default true)
+        "snow_upper_bound": {"factor": 2.0, "offset_mm": 20}  (snow <= factor x forecast + offset; false = none)
     }
 
 Settings written before the restructuring (Oct 2026) are translated:
@@ -71,4 +72,5 @@ def build_filter(configDA, model, obs, sv, sv_excluded):
                           obs_error_inflation=getattr(m, 'obs_error_inflation', None),
                           obs_error_correlation=getattr(m, 'obs_error_correlation', 'full'),
                           obs_perturbation_centering=getattr(m, 'obs_perturbation_centering', False),
-                          soil_upper_bound=getattr(m, 'soil_upper_bound', True))
+                          soil_upper_bound=getattr(m, 'soil_upper_bound', True),
+                          snow_upper_bound=getattr(m, 'snow_upper_bound', None))

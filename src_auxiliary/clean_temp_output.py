@@ -14,19 +14,26 @@ Safety rules
 """
 import re
 from pathlib import Path
+if __name__ == '__main__':                        # run directly: make the package root importable
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src_DA.EnumDA import Stage
 
 PATTERN = re.compile(r'^daily_output_\d{4}-\d{2}-\d{2}\.nc$')
 
 
-def clean_daily_output(temp_dir, res_dir, stage_name: str, case=None, dry_run=True, force=False):
+def clean_daily_output(temp_dir, res_dir, stage: Stage, case=None, dry_run=True, force=False):
     """
     temp_dir  : OL_output_temp_dir / DA_output_temp_dir from DA_setting.json. The OL scratch is organised as
                 <temp_dir>/Ens_k, the DA scratch as <temp_dir>/<case>/Ens_k; both layouts are handled:
                 if <temp_dir>/<case> exists it is used, otherwise <temp_dir> itself.
     res_dir   : Res/<case> folder; used to check that Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5 exists
-    stage_name: 'OL' or 'DA'
+    stage     : Stage.OL or Stage.DA
     returns   : dict(files=n, bytes=b, deleted=bool, skipped_reason=str|None)
     """
+    if stage not in (Stage.OL, Stage.DA):
+        raise ValueError('clean_daily_output: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
+    stage_name = stage.name                       # folder / file names: Res/<case>/OL, basin_ts_OL.h5, ...
     temp_dir, res_dir = Path(temp_dir), Path(res_dir)
     if case is not None and (temp_dir / case).is_dir():
         temp_dir = temp_dir / case
@@ -78,4 +85,4 @@ if __name__ == '__main__':
     p.add_argument('--yes', action='store_true', help='actually delete (default: dry run)')
     p.add_argument('--force', action='store_true')
     a = p.parse_args()
-    clean_daily_output(a.temp_dir, a.res_dir, a.stage, case=a.case, dry_run=not a.yes, force=a.force)
+    clean_daily_output(a.temp_dir, a.res_dir, Stage[a.stage], case=a.case, dry_run=not a.yes, force=a.force)

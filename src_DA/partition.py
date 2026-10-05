@@ -18,6 +18,18 @@ How the Kalman increment of a sub-basin is distributed over the cells and storag
         caps only the listed storages. Recommended: groundwater only. For snow the median weight is ~0 (most cells
         have little or no snow), so a cap on snow removes the weight of the real mountain snow cells (run 10: snow
         correction halved, up to 94 % of a sub-basin's snow share removed).
+    "increment_partition": {"kind": "non_negative", "spatial_blend": {"groundwstor": 0.5}}
+        mixes the weights of a storage with their sub-basin mean, w' = (1-b) w + b mean(w), keeping the storage's
+        total share: GRACE has no information below the sub-basin scale, so the correction of a storage is spread
+        over its cells instead of following the cell-to-cell differences of a 4-member ensemble (Danube run 11a: 89 %
+        of the groundwater correction of sub-basin 6 in 7 of 76 cells, -150 to -270 mm in 13 years). Meant for
+        unbounded storages (groundwater); for snow / soil it would put water into snow-free or full cells.
+    "increment_partition": {"kind": "non_negative", "max_cell_factor": 3}
+        no element may change by more than 3 x the sub-basin TWS increment of its member (|dX_i| <= f |delta_j|);
+        the excess goes to the other elements of the sub-basin like a bound (Danube run 11a: one Alpine snow cell
+        +820 mm in a window with a sub-basin increment of a few tens of mm). The limit acts on every storage of every
+        cell separately; a dict sets it per storage, e.g. {"swe": 3, "groundwstor": 3} (storages not listed: no limit).
+    The three options can be combined; order: cap, blend (weights), then the per-cell limit (with the bounds).
     (a plain string "enkf" / "non_negative" is accepted as well)
 """
 import numpy as np
@@ -52,8 +64,20 @@ class EnKFPartition(Partition):
 class NonNegativePartition(Partition):
     KIND = 'non_negative'
 
-    def __init__(self, max_weight_ratio=None):
+    def __init__(self, max_weight_ratio=None, spatial_blend=None, max_cell_factor=None):
         super().__init__()
+        self.spatial_blend = {str(v): float(b) for v, b in (spatial_blend or {}).items() if b}
+        bad_b = {v: b for v, b in self.spatial_blend.items() if not 0.0 < b <= 1.0}
+        if bad_b:
+            raise ValueError('spatial_blend values must be in (0, 1], got %s' % bad_b)
+        if isinstance(max_cell_factor, dict):
+            self.max_cell_factor = {str(v): float(x) for v, x in max_cell_factor.items() if x is not None} or None
+            bad_c = {v: x for v, x in (self.max_cell_factor or {}).items() if x < 1.0}
+        else:
+            self.max_cell_factor = None if max_cell_factor is None else float(max_cell_factor)
+            bad_c = {} if self.max_cell_factor is None or self.max_cell_factor >= 1.0 else {'all': self.max_cell_factor}
+        if bad_c:
+            raise ValueError('max_cell_factor must be >= 1 (or null), got %s' % bad_c)
         if isinstance(max_weight_ratio, dict):
             self.max_weight_ratio = {str(v): float(r) for v, r in max_weight_ratio.items() if r is not None}
             bad = {v: r for v, r in self.max_weight_ratio.items() if r <= 1}
@@ -67,7 +91,9 @@ class NonNegativePartition(Partition):
         self.stats = dict(n_updates=0, n_obs_fallback=0, n_obs_unresolved=0, max_abs_inc_enkf=0.0,
                           max_abs_inc_new=0.0, n_bound_capped=0, water_redistributed_mm=0.0, max_inc_where=None,
                           max_weight_ratio=self.max_weight_ratio, n_weights_capped=0, weight_share_removed_max=0.0,
-                          largest_weight_ratio=0.0, largest_weight_ratio_where=None, capped_by_storage={})
+                          largest_weight_ratio=0.0, largest_weight_ratio_where=None, capped_by_storage={},
+                          spatial_blend=self.spatial_blend, max_cell_factor=self.max_cell_factor,
+                          n_cell_limited=0, cell_limited_by_storage={}, increment_not_placed_mm_max=0.0)
 
     def _ratio(self, var):
         """cap for one storage (None = not capped)"""
@@ -77,6 +103,12 @@ class NonNegativePartition(Partition):
 
     def setup(self, f):
         super().setup(f)
+        for v in self.spatial_blend:
+            if v not in f.bounds.names:
+                print('non_negative partition: spatial_blend for %s ignored (not in the DA state %s)' % (v, f.bounds.names))
+            elif f.bounds.is_bounded(v):
+                print('non_negative partition: spatial_blend for the bounded storage %s spreads its correction also '
+                      'into cells where it is empty or full' % v)
         if isinstance(self.max_weight_ratio, dict):
             unknown = [v for v in self.max_weight_ratio if v not in f.bounds.names]
             if unknown:
@@ -136,7 +168,7 @@ class NonNegativePartition(Partition):
                            dX_i  = sum_j  w_ij / (H w_.j)_j * delta_j            (so that H dX is unchanged)
         If no element of a sub-basin is positively correlated, the shares fall back to L_ij * var_i.
         Bound-aware (when X is given): an element may not be pushed below its lower bound (snow, soil, canopy,
-        wetlands, reservoirs: 0; river: its floor) or above its upper bound (snow 1000 mm); the share of a capped
+        wetlands, reservoirs: 0; river: its floor) or above its upper bound (soil smax, snow relative to its forecast); the share of a capped
         element is redistributed to the other elements of the same sub-basin so that the sub-basin increment is
         preserved (a few fixed-point iterations per sub-basin). Without this, negative winter innovations push
         thin snow packs below zero and the threshold adds the water back silently.
@@ -152,6 +184,8 @@ class NonNegativePartition(Partition):
         W = f._L_state * var[:, None] * np.maximum(corr, 0.0)                   # n_state x n_obs
         if self.max_weight_ratio is not None:
             W = self._cap_weights(W)
+        if self.spatial_blend:
+            W = self._blend_weights(W)
         HW = f._DM(states=W)                                                    # n_obs x n_obs, column j -> (H w_.j)
         hw = np.diag(HW).copy()
         bad = hw <= 0
@@ -159,13 +193,15 @@ class NonNegativePartition(Partition):
             W[:, bad] = f._L_state[:, bad] * var[:, None]
             if self.max_weight_ratio is not None:
                 W = self._cap_weights(W, cols=np.where(bad)[0])
+            if self.spatial_blend:
+                W = self._blend_weights(W, cols=np.where(bad)[0])
             hw[bad] = np.diag(f._DM(states=W))[bad]
         ok = hw > 0
         scale = np.zeros_like(hw)
         scale[ok] = 1.0 / hw[ok]
         dX_new = (W * scale[None, :]) @ delta                                      # n_state x N
 
-        if X is not None and f.bounds.any_finite():
+        if X is not None and (f.bounds.any_finite() or self.max_cell_factor is not None):
             dX_new = self._apply_bounds(dX_new, W * scale[None, :], delta, X)
 
         self.stats['n_updates'] += 1
@@ -176,12 +212,31 @@ class NonNegativePartition(Partition):
         self.stats['max_abs_inc_new'] = max(self.stats['max_abs_inc_new'], float(np.abs(dX_new).max()))
         return dX_new
 
-    def _apply_bounds(self, dX_new, S, delta, X, n_iter=6):
+    def _blend_weights(self, W, cols=None):
+        """per sub-basin and listed storage: w' = (1-b) w + b mean(w) over the storage's elements in the sub-basin
+        (elements with a localization weight > 0); the storage's total weight in the sub-basin is unchanged"""
+        f = self.f
+        names = f.bounds.names
+        for j in (range(W.shape[1]) if cols is None else cols):
+            for v, b in self.spatial_blend.items():
+                if v not in names:
+                    continue
+                rows = np.where((f._var_idx == names.index(v)) & (f._L_state[:, j] > 0))[0]
+                if len(rows) == 0:
+                    continue
+                w = W[rows, j]
+                if w.sum() <= 0:
+                    continue
+                W[rows, j] = (1.0 - b) * w + b * w.mean() * f._L_state[rows, j] / max(f._L_state[rows, j].mean(), 1e-12)
+        return W
+
+    def _apply_bounds(self, dX_new, S, delta, X, n_iter=12):
         """
         S     : normalised shares (n_state x n_obs), H S = I on the block diagonal; dX_new = S @ delta
         delta : sub-basin increments (n_obs x N);  X : forecast states (n_state x N)
         For every sub-basin j: elements whose increment would cross a bound are fixed at the bound, the remaining
         increment of j is redistributed over the free elements with their shares; repeated until no new crossing.
+        With max_cell_factor f every element of j is in addition limited to |dX_i| <= f |delta_j| (per member).
         """
         f = self.f
         cap_lo = f.bounds.LB - X                                 # most negative allowed increment (window-aware)
@@ -193,16 +248,35 @@ class NonNegativePartition(Partition):
             if len(rows) == 0:
                 continue
             s = S[rows, j]
+            lo_j, hi_j = cap_lo[rows], cap_hi[rows]
+            if self.max_cell_factor is not None:
+                if isinstance(self.max_cell_factor, dict):
+                    fac = np.array([self.max_cell_factor.get(f.bounds.names[i], np.inf) for i in f._var_idx[rows]])
+                else:
+                    fac = np.full(len(rows), self.max_cell_factor)
+                lim = fac[:, None] * np.abs(delta[j])[None, :]                     # (n_E, N)
+                lo_c, hi_c = np.maximum(lo_j, -lim), np.minimum(hi_j, lim)
+                cell_lim = (out[rows, :] < lo_c - 1e-9) | (out[rows, :] > hi_c + 1e-9)
+                bound_lim = (out[rows, :] < lo_j - 1e-9) | (out[rows, :] > hi_j + 1e-9)
+                only_cell = cell_lim & ~bound_lim
+                if only_cell.any():
+                    self.stats['n_cell_limited'] += int(only_cell.sum())
+                    cb = self.stats['cell_limited_by_storage']
+                    vi = f._var_idx[rows]
+                    for iv in np.unique(vi[only_cell.any(1)]):
+                        nm = f.bounds.names[iv]
+                        cb[nm] = cb.get(nm, 0) + int(only_cell[vi == iv].sum())
+                lo_j, hi_j = lo_c, hi_c
             dj = out[rows, :]                                 # current increments of sub-basin j (n_E x N)
             fixed = np.zeros_like(dj, dtype=bool)
             for _ in range(n_iter):
-                lo = dj < cap_lo[rows] - 1e-9
-                hi = dj > cap_hi[rows] + 1e-9
+                lo = dj < lo_j - 1e-9
+                hi = dj > hi_j + 1e-9
                 new_fix = (lo | hi) & ~fixed
                 if not new_fix.any():
                     break
-                dj = np.where(lo & ~fixed, cap_lo[rows], dj)
-                dj = np.where(hi & ~fixed, cap_hi[rows], dj)
+                dj = np.where(lo & ~fixed, lo_j, dj)
+                dj = np.where(hi & ~fixed, hi_j, dj)
                 fixed |= new_fix
                 # what the fixed elements contribute to the sub-basin increment, and what is left for the free ones
                 full = np.zeros_like(out); full[rows] = np.where(fixed, dj, 0.0)
@@ -212,6 +286,9 @@ class NonNegativePartition(Partition):
                 ok = denom > 1e-12
                 scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
                 dj = np.where(fixed, dj, s[:, None] * scale[None, :])
+            full = np.zeros_like(out); full[rows] = dj
+            miss = float(np.abs(delta[j] - f._DM(states=full)[j]).max())        # increment that found no room
+            self.stats['increment_not_placed_mm_max'] = max(self.stats['increment_not_placed_mm_max'], miss)
             n_capped += int(fixed.sum())
             moved += float(np.abs(dj - out[rows, :]).sum())
             out[rows, :] = dj

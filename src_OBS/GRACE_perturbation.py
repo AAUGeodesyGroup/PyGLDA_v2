@@ -323,8 +323,7 @@ def visualization():
 
         pass
 
-    # fig.savefig('result.png')
-    fig.show()
+    fig.savefig('GRACE_perturbation_result.png')  # pop-up disabled; written to the current directory
     pass
 
 

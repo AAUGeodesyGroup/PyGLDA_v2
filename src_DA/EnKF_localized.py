@@ -37,7 +37,7 @@ class EnKF_localized(EnKF):
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
                  sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
                  partition: Partition = None, obs_error_inflation: dict = None, obs_error_correlation: str = 'full',
-                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True):
+                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_upper_bound=None):
         super().__init__(DA_setting, model, obs, sv, sv_excluded)
         self.localization = localization or BlockLocalization()
         self.inflation = inflation or NoInflation()
@@ -65,7 +65,14 @@ class EnKF_localized(EnKF):
                 raise ValueError('soil_upper_bound: smax %s / basin mask %s (%d cells) do not match the state vector '
                                  '(%d cells)' % (smax.shape, mk.shape, int(mk.sum()), n_cell))
             upper['soilmoist'] = smax[mk]
-        self.bounds = StateBounds(names, n_cell, upper=upper)
+        '''snow: relative upper bound per member (default 2 x forecast + 20 mm), "snow_upper_bound": null = none'''
+        sub = snow_upper_bound
+        if sub is None or sub is True:
+            sub = {'factor': 2.0, 'offset_mm': 20.0}
+        rel = {}
+        if isinstance(sub, dict) and sub and 'swe' in names:
+            rel['swe'] = (float(sub.get('factor', 2.0)), float(sub.get('offset_mm', 20.0)))
+        self.bounds = StateBounds(names, n_cell, upper=upper, relative_upper=rel)
 
         '''observation-error inflation per sub-basin (1-based keys): R' = D R D keeps the error correlations'''
         self._oei = dict(obs_error_inflation or {})
@@ -93,10 +100,11 @@ class EnKF_localized(EnKF):
         self.partition.setup(self)
         print('%s: %d states x %d observations; localization %s (mean taper weight %.3f); inflation: %s; '
               'increment partition: %s; obs-error inflation: %s; obs-error correlation: %s; obs-perturbation '
-              'centring: %s; soil upper bound (smax) in the partition: %s'
+              'centring: %s; soil upper bound (smax) in the partition: %s; snow upper bound: %s'
               % (self.METHOD, n_state, n_obs, self.localization.describe(), self._L_state.mean(),
                  self.inflation.describe(), self.partition.KIND, self._oei if self._oei else 'none', self._obs_corr,
-                 self._obs_centering, self._soil_upper_bound))
+                 self._obs_centering, self._soil_upper_bound,
+                 ('%.1f x forecast + %.0f mm' % rel['swe']) if 'swe' in rel else 'none'))
 
     # ------------------------------------------------------------------ analysis step
     def update(self, obs, obs_cov, ens_states):

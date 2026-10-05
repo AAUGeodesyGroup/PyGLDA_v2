@@ -171,6 +171,7 @@ class config_DA:
             self.obs_error_correlation = 'full'     # 'diagonal': R without correlations between sub-basins (test)
             self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
             self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
+            self.snow_upper_bound = {'factor': 2.0, 'offset_mm': 20.0}   # snow <= factor x forecast + offset (false: none)
 
 
 
