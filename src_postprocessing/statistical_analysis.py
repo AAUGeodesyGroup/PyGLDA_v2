@@ -110,7 +110,9 @@ class BasinAverageAnalysis:
         # 4. Use xarray's open_mfdataset to read and merge multiple netcdf files at once
         if file_paths:
             # combine='by_coords' automatically concatenates the datasets along the coordinate dimensions (like time)
-            ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=True, chunks={"time": 365})
+            # parallel=False: opening the files from several dask threads calls HDF5 concurrently, which can crash a
+            # non-thread-safe HDF5 build (seen as "NetCDF: HDF error" / segfaults); it gives no speed-up for ~18 files
+            ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=False, chunks={"time": 365})
 
             # restrict to the requested period: the yearly files may extend beyond end_date (e.g. an OL run
             # that is longer than the DA period), and the basin time series must match the date range exactly

@@ -67,7 +67,10 @@ def vert_water_balance(rout_order, temperature, down_shortwave_radiation,
     #                  ||           Snow              ||
     #                  =================================
     snow_water_storage_out = basin.copy() + snow_water_storage.copy()
-    snow_water_storage_subgrid_out = snow_water_storage_subgrid.copy()
+    # snow_water_balance (below) receives a view of each cell's subgrid storage and updates it
+    # in place, so the output is the input array itself; .copy() duplicated 207 MB every day
+    # (PyGLDA change 2026-10-05, see README; original: snow_water_storage_subgrid.copy())
+    snow_water_storage_subgrid_out = snow_water_storage_subgrid
     snow_fall = basin.copy()
     sublimation = basin.copy()
     snow_melt = basin.copy()

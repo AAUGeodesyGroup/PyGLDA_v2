@@ -35,11 +35,13 @@ PyGLDA_v2/
 
 ## Modifications to WaterGAP 2.2e
 
-PyGLDA v2 requires two minimal modifications to the WaterGAP 2.2e source, both confined to a single file each. All other WaterGAP 2.2e files remain unmodified.
+PyGLDA v2 makes three minimal modifications to the WaterGAP 2.2e source, each confined to a single file. All other WaterGAP 2.2e files remain unmodified.
 
 1. **`src_GHM/ReWaterGAP/model/land_surfacewater_fraction.py`** — A new `update_setting()` function was added to allow PyGLDA to refresh WaterGAP's run-mode globals (`anthropogenic`, `reservoir_operation`) between ensemble iterations without reloading the module.
 
 2. **`src_GHM/ReWaterGAP/controller/configuration_module.py`** — Rewritten to expose WaterGAP's configuration parameters to PyGLDA's assimilation interface. The original file is preserved in the git history.
+
+3. **`src_GHM/ReWaterGAP/model/verticalwaterbalance/waterbalance_vertical.py`** (performance only, 2026-10-05) — In `vert_water_balance`, the line `snow_water_storage_subgrid_out = snow_water_storage_subgrid.copy()` was replaced by `snow_water_storage_subgrid_out = snow_water_storage_subgrid`. `snow_water_balance` receives a view of each cell's 100 elevation-band storages and already updates them in place, so the copy (100 x 360 x 720 float64, 207 MB per model day and per ensemble member) only duplicated values that are overwritten cell by cell. Results are expected to be bit-identical; `temp/env_test/check_snow_copy.py` runs the original and the modified routine on the same input and compares the restart states and daily output. To revert, restore the `.copy()` on that line.
 
 ## Requirements
 

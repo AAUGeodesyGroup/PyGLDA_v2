@@ -37,11 +37,6 @@ def demo1():
     # RDA.config_basin_mask()
     RDA.get_GRACE_obs(is_diagonal=False)
 
-    '''post-processing (Res_<stage>.h5, Harmonic_<stage>.nc, GRACE files with the DA) runs at the end of
-    collect_and_statistics(stage) in demo2; the lines below are only needed to redo it'''
-    # RDA.post_processing(stages=[Stage.OL])
-    # RDA.post_processing(stages=[Stage.DA])
-
     '''after the data assimilation'''
     # RDA.visualization()
     # RDA.increment_diagnosis()
