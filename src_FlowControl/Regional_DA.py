@@ -659,6 +659,22 @@ class RDA:
                             extra_files=list(extra_files or []) +
                             sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
 
+    @staticmethod
+    def export_product(version='v1.0'):
+        """
+        Data product of the case for distribution (called by hand, only when the data are shared; needs
+        collect_and_statistics of OL and DA). Written to Res/<case>/product/PyGLDA-v2_<case>_<version>/:
+          gridded/     daily ensemble mean and spread of every variable (OL, DA), one file per year, and the
+                       gridded GRACE TWS (monthly)
+          timeseries/  basin and sub-basin daily series (OL, DA) and the GRACE TWS assimilated
+          ancillary/   cell area, basin mask, sub-basin id, per-cell TWS trend, cell_flag
+          README.md
+        Further options (output folder, anomaly baseline): src_postprocessing.export_product.product_export
+        """
+        from src_postprocessing.export_product import product_export
+
+        return product_export(setting_dir=RDA.setting_dir, version=version).run()
+
 
 
 

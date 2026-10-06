@@ -79,6 +79,11 @@ Recommendations from the Amazon and Danube tests:
 
 * `riverstor` must be in the state wherever river storage carries the seasonal signal (Amazon: 75 % of the
   TWS variance). Without it the increments go into groundwater and produce a sawtooth there.
+  Where the river is a small part of TWS (Danube) leave it `false`: in run12 its correction was only −2..+3 mm
+  (basin, seasonal), it drained within the same window (increment +0.13 mm/day, drift −0.005 mm/day × 29 days)
+  and negative increments clipped river storage at its floor in 5–7 % of the cells in two months. With `false`
+  the river is subtracted from GRACE with each member's own value, its share of the mismatch goes to groundwater,
+  soil and snow, and it responds to the corrected storages through the model's own runoff (Danube from run13).
 * `soilmoist` and `groundwstor` always; `swe` in snow-affected basins (Danube), not needed in the tropics.
 * lakes, wetlands, reservoirs, canopy: leave `false` for now. Their member spread is a fixed offset from the
   depth perturbation and GRACE cannot resolve them separately; see §2 for the consequence on the ensemble.
@@ -178,6 +183,10 @@ Noise in a bounded storage is weighted per cell by the room to the nearer bound,
 #### `snow_upper_bound`
 
 `{"factor": 2.0, "offset_mm": 20}` (default) or `false`. Upper limit for snow per member and window, relative to the member's own forecast: snow ≤ factor × forecast + offset (window-aware: every day of the window stays below factor × that member's highest day + offset). The analysis can at most double a snow pack and add a few cm where there is little snow. Snow errors are mostly relative (precipitation under-catch in the mountains, melt timing), so a fixed value has no physical meaning; the former fixed 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a). WaterGAP itself has no cell-mean snow limit; it only stops accumulating in one of the 100 sub-grid elevation levels of a cell once that level holds 1000 mm. The post-update threshold now only keeps snow ≥ 0. `filter_summary.json` → `bounds.relative_upper`.
+
+#### `snow_lower_bound`
+
+`{"factor": 0.5}` (default) or `false`. Lower limit for snow per member and window, relative to the member's own forecast: snow ≥ factor × forecast, i.e. one update removes at most (1 − factor) of a snow pack (window-aware: every day of the window keeps at least factor × its own forecast, LB = window mean − (1 − factor) × the member's lowest day). Without it only snow ≥ 0 applied, and the partition could empty a single cell: Danube run12 removed 496 mm from one cell of one member in one window (2019-02), although GRACE has no information below the sub-basin scale. The removal the bound refuses goes to the other cells and storages of the sub-basin (bound-aware `non_negative` partition), so the sub-basin TWS increment is unchanged. Counterpart of `snow_upper_bound` (which limits additions). `filter_summary.json` → `bounds.relative_lower`. No effect with the `enkf` partition, which ignores bounds.
 
 #### Output
 

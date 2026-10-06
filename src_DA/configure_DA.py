@@ -162,6 +162,9 @@ class config_DA:
               soil_upper_bound    true: soil <= smax (Auxiliary/smax.nc) inside the bound-aware partition, the water
                                   soil cannot hold goes to the other storages; false: only the post-update threshold
                                   clips soil at smax (the water is then lost)
+              snow_upper_bound    {"factor": 2.0, "offset_mm": 20}: snow <= factor x forecast + offset; false: none
+              snow_lower_bound    {"factor": 0.5}: snow >= factor x forecast (one update removes at most 50 %);
+                                  false: none
             Old flat keys (inflation as a number, rtps_alpha, rtps_space, additive_inflation) are still read and
             translated by src_DA.filter_factory.'''
             self.localization = {'kind': 'block', 'length_km': 300, 'cutoff': 2.0}
@@ -172,6 +175,7 @@ class config_DA:
             self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
             self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
             self.snow_upper_bound = {'factor': 2.0, 'offset_mm': 20.0}   # snow <= factor x forecast + offset (false: none)
+            self.snow_lower_bound = {'factor': 0.5}                       # snow >= factor x forecast (false: none)
 
 
 

@@ -42,6 +42,10 @@ def demo1():
     # RDA.increment_diagnosis()
     # RDA.da_evaluation(tag='run11a2')      # set a new tag for every run
 
+    '''data product for distribution (only when the data are shared): daily ensemble mean and spread (OL, DA),
+    gridded GRACE TWS, basin time series -> Res/<case>/product/PyGLDA-v2_<case>_<version>/'''
+    # RDA.export_product(version='v0.1')      # 4-member test case
+
     '''house-keeping: remove the temporary daily output of a collected stage (dry run first)'''
     # from src_DA.EnumDA import Stage
     # RDA.clean_temp_output(Stage.OL, dry_run=True)

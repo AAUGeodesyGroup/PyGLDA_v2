@@ -14,6 +14,15 @@ Relative upper bounds (StateBounds(..., relative_upper={var: (factor, offset_mm)
     the earlier 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a).
     WaterGAP itself has no cell-mean limit; it only stops accumulating in a 100-band sub-grid level once that level
     holds 1000 mm.
+Relative lower bounds (StateBounds(..., relative_lower={var: factor})), per member and window:
+    snow                                                   >= factor x the member's own forecast
+                                                              (default 0.5, see EnKF_localized "snow_lower_bound"):
+                                                              one update removes at most half of a snow pack. GRACE
+                                                              has no information below the sub-basin scale, and the
+                                                              partition otherwise empties single cells (Danube run12:
+                                                              496 mm removed from one cell in one window, 2019-02).
+                                                              The removal the bound refuses goes to the other cells
+                                                              and storages of the sub-basin (bound-aware partition).
 Per-cell upper bounds from fields (StateBounds(..., upper={var: values per cell})):
     soil                                                   <= smax (maximum soil water content, the same
                                                               <Auxiliary_dir>/smax.nc as src_DA.Threshold), passed
@@ -24,7 +33,9 @@ Window-aware bounds: the increment of a window is added equally to every day of 
 (src_DA.Threshold) is then applied day by day. With the daily minimum / maximum of each member over the window
 (passed by EnKF.run_mpi), "every day stays within [lb, ub]" means for the window-mean analysis Xa
         Xa >= lb + (x_mean - x_min) = LB          Xa <= ub - (x_max - x_mean) = UB
-Without the window extremes LB = lb and UB = ub. For a relative bound ub = factor * x_max + offset (the member's
+Without the window extremes LB = lb and UB = ub. For a relative lower bound every day must keep at least factor x
+its own forecast; with the increment equal on all days this holds when Xa >= x_mean - (1-factor) x_min (x_min = the
+member's lowest day in the window): LB = max(LB, x_mean - (1-factor) x_min), which is never above the forecast. For a relative bound ub = factor * x_max + offset (the member's
 highest day in the window), so every day of the window stays below it: UB = x_mean + (factor-1) x_max + offset.
 UB is never below the forecast itself (UB >= Xf), so a storage that already sits at its upper bound gets no
 positive increment but is never forced to give water away by the bound.
@@ -38,7 +49,7 @@ UPPER = {}
 
 class StateBounds:
 
-    def __init__(self, names, n_cell, upper=None, relative_upper=None):
+    def __init__(self, names, n_cell, upper=None, relative_upper=None, relative_lower=None):
         """
         names  : storages of the state vector (cell-major layout: element i = cell * len(names) + storage)
         n_cell : number of cells
@@ -46,6 +57,9 @@ class StateBounds:
                  Combined with the static bound by taking the smaller one.
         relative_upper : optional {storage: (factor, offset_mm)}: per member ub = factor * forecast + offset_mm
                  (forecast = the member's highest day of the window when the window extremes are known)
+        relative_lower : optional {storage: factor}, 0 <= factor < 1: per member lb = factor * forecast, i.e. one
+                 update removes at most (1 - factor) of the storage (forecast = the member's lowest day of the
+                 window when the window extremes are known)
         """
         self.names = list(names)
         nv = len(self.names)
@@ -73,7 +87,14 @@ class StateBounds:
                     raise ValueError('relative upper bound of %s needs factor >= 1 and offset >= 0, got %s'
                                      % (var, (fac, off)))
                 self.relative_upper[var] = (float(fac), float(off))
-        self._rel_rows = {v: np.arange(self.names.index(v), nv * n_cell, nv) for v in self.relative_upper}
+        self.relative_lower = {}
+        for var, fac in (relative_lower or {}).items():
+            if var in self.names:
+                if not 0.0 <= float(fac) < 1.0:
+                    raise ValueError('relative lower bound of %s needs 0 <= factor < 1, got %s' % (var, fac))
+                self.relative_lower[var] = float(fac)
+        self._rel_rows = {v: np.arange(self.names.index(v), nv * n_cell, nv)
+                          for v in set(self.relative_upper) | set(self.relative_lower)}
         self.LB = self.UB = None
         self.n_window_bounds = 0
 
@@ -104,9 +125,16 @@ class StateBounds:
             xmax = np.asarray(ens_max, dtype=float)[r] if has_max else xs[r]
             rel = xs[r] + (fac - 1.0) * np.maximum(xmax, 0.0) + off       # every day <= fac * x_max + off
             self.UB[r] = np.minimum(self.UB[r], rel)
+        has_min = ens_min is not None and np.shape(ens_min) == xs.shape
+        for v, fac in self.relative_lower.items():
+            r = self._rel_rows[v]
+            xmin = np.asarray(ens_min, dtype=float)[r] if has_min else xs[r]
+            rel = xs[r] - (1.0 - fac) * np.maximum(xmin, 0.0)                # every day >= fac * its forecast
+            self.LB[r] = np.maximum(self.LB[r], rel)
         fin = np.isfinite(self.UB)
         self.UB[fin] = np.maximum(self.UB[fin], np.asarray(ens_states, dtype=float)[fin])   # never force a removal
 
     def summary(self):
         return dict(n_window_bounds=self.n_window_bounds, upper_fields=self.upper_fields,
-                    relative_upper={v: dict(factor=f, offset_mm=o) for v, (f, o) in self.relative_upper.items()})
+                    relative_upper={v: dict(factor=f, offset_mm=o) for v, (f, o) in self.relative_upper.items()},
+                    relative_lower={v: dict(factor=f) for v, f in self.relative_lower.items()})

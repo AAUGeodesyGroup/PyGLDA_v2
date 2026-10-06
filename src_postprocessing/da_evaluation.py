@@ -54,7 +54,8 @@ KEY_MONTHS = ['2003-08', '2006-03', '2006-04', '2006-05', '2007-09', '2007-10', 
 # warning thresholds (all can be changed through evaluate_run(thresholds={...}))
 THRESHOLDS = dict(trend_cell_mm_yr=20.0,          # |trend| of a grid cell (OL or DA)
                   grace_sigma_factor=3.0,         # GRACE sigma > factor x its median
-                  overfit_ratio=0.8,              # sub-basin RMS(DA - GRACE) < ratio x median GRACE sigma
+                  overfit_ratio=0.7,              # sub-basin RMS(DA - GRACE) < ratio x the RMS expected for a
+                                                  # consistent analysis, sqrt(mean(sigma^4 / (sd_fc^2 + sigma^2)))
                   chi2_low=0.5, chi2_high=2.0,    # median chi^2 outside this range
                   clip_frac=0.05,                 # fraction of clipped cells of one storage in one month
                   single_increment_mm=1000.0,     # largest single-cell increment
@@ -232,8 +233,28 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
                                               for s, m in SEASONS.items()}
     summ['fit_basin']['rms_by_season_OL'] = {s: _rms((S[b]['ol'] - S[b]['gr'])[np.isin(wmon, m)])
                                               for s, m in SEASONS.items()}
-    summ['fit_sub_basins'] = {u: dict(fit(u), sigma_GRACE_median=float(np.median(S[u]['sig'])))
-                              for u in units[1:]}
+    def rms_expected(u):
+        '''RMS(analysis - GRACE) of a consistent analysis: for each window E[(y - Hxa)^2] = (1 - K) sigma^2 with
+        K = sd_fc^2 / (sd_fc^2 + sigma^2), i.e. sigma^4 / (sd_fc^2 + sigma^2); the analysis is expected to sit
+        closer to GRACE than sigma (gain 0.7 -> ~0.55 sigma), so RMS < sigma alone is no sign of over-fitting.
+        Only regular windows (sigma <= grace_sigma_factor x its median, the same rule as the degraded-month
+        warning): the sigma^4 term of a few degraded months (run12 sub-basin 1: sigma up to 176 mm) otherwise
+        dominates the mean (19.4 mm expected vs 11.4 mm on regular windows). The actual RMS is returned on the
+        same windows. Caveat: the scalar formula ignores the information a sub-basin receives from its correlated
+        neighbours in the joint update, so a modest ratio below 1 is not by itself over-fitting.
+        Returns (expected RMS, actual RMS on the regular windows, number of regular windows).'''
+        s = S[u]
+        keep = s['sig'] <= TH['grace_sigma_factor'] * np.median(s['sig'])
+        exp = _rms((s['sig'] ** 2 / np.sqrt(s['sd_fc'] ** 2 + s['sig'] ** 2))[keep])
+        act = _rms((s['da'] - s['gr'])[keep])
+        return exp, act, int(keep.sum())
+
+    summ['fit_sub_basins'] = {}
+    summ['grace_sigma_factor'] = TH['grace_sigma_factor']
+    for u in units[1:]:
+        exp, act, nreg = rms_expected(u)
+        summ['fit_sub_basins'][u] = dict(fit(u), sigma_GRACE_median=float(np.median(S[u]['sig'])),
+                                         rms_DA_expected=exp, rms_DA_regular=act, n_regular_windows=nreg)
     ym = ['%04d-%02d' % (d.year, d.month) for d in wdate]
     summ['key_months'] = {m: dict(GRACE=S[b]['gr'][ym.index(m)], OL_minus_GRACE=S[b]['ol'][ym.index(m)] - S[b]['gr'][ym.index(m)],
                                   DA_minus_GRACE=S[b]['da'][ym.index(m)] - S[b]['gr'][ym.index(m)],
@@ -361,6 +382,8 @@ def _method_string(setting_file):
     if isinstance(m.get('snow_upper_bound'), dict):
         parts.append('snow <= %s x forecast + %s mm' % (m['snow_upper_bound'].get('factor'),
                                                          m['snow_upper_bound'].get('offset_mm')))
+    if isinstance(m.get('snow_lower_bound'), dict):
+        parts.append('snow >= %s x forecast' % m['snow_lower_bound'].get('factor'))
     if m.get('obs_error_inflation'):
         parts.append('obs_error_inflation=%s' % m['obs_error_inflation'])
     return ', '.join(parts)
@@ -473,14 +496,16 @@ def _warnings(summ, S, units, wdate, sig_sub, kk, res_dir, thr, TH):
                            (len(months), TH['grace_sigma_factor']),
                       items=[dict(month=str(wdate[m])[:7], max_sigma_mm=float(sig_sub[kk[m]].max()),
                                   median_sigma_mm=float(np.median(med))) for m in months][:n]))
-    # 3. sub-basins fitted more tightly than the GRACE error
+    # 3. sub-basins fitted more tightly than a consistent analysis would be (not: than the GRACE error - the
+    #    analysis is expected to be closer to GRACE than sigma, see rms_expected)
     over = {u: v for u, v in summ['fit_sub_basins'].items()
-            if v['rms_DA'] < TH['overfit_ratio'] * v['sigma_GRACE_median']}
+            if v['rms_DA_regular'] < TH['overfit_ratio'] * v['rms_DA_expected']}
     if over:
-        W.append(dict(kind='fit_tighter_than_GRACE_error', n=len(over),
-                      text='%d sub-basins with RMS(DA - GRACE) < %g x median GRACE sigma (possible over-fitting)' %
-                           (len(over), TH['overfit_ratio']),
-                      items=[dict(unit=u, rms_DA=v['rms_DA'], sigma_GRACE=v['sigma_GRACE_median'])
+        W.append(dict(kind='fit_tighter_than_expected', n=len(over),
+                      text='%d sub-basins with RMS(DA - GRACE) < %g x the RMS expected for a consistent analysis, '
+                           'regular windows only (possible over-fitting)' % (len(over), TH['overfit_ratio']),
+                      items=[dict(unit=u, rms_DA_regular=v['rms_DA_regular'], rms_DA_expected=v['rms_DA_expected'],
+                                  n_regular_windows=v['n_regular_windows'], sigma_GRACE=v['sigma_GRACE_median'])
                              for u, v in over.items()]))
     # 4. chi^2
     c = summ['filter_basin']['chi2_median']
@@ -624,12 +649,16 @@ def _report_text(s, units):
                                                                       f['corr_DA']))
     P('   by season (DA / OL):  ' + '   '.join('%s %.1f / %.1f' % (k, f['rms_by_season_DA'][k], f['rms_by_season_OL'][k])
                                               for k in SEASONS))
-    P('   %-12s %8s %8s %8s %8s %10s' % ('sub-basin', 'RMS OL', 'RMS DA', 'corr DA', 'sigma_GR', 'chi2 med'))
+    P('   %-12s %8s %8s %8s %8s %8s %8s %10s' % ('sub-basin', 'RMS OL', 'RMS DA', 'DA reg', 'expected', 'corr DA',
+                                                  'sigma_GR', 'chi2 med'))
     for u in units[1:]:
         v = s['fit_sub_basins'][u]
-        P('   %-12s %8.1f %8.1f %8.3f %8.1f %10.2f' % (u.replace('sub_basin_', 'sub '), v['rms_OL'], v['rms_DA'],
-                                                    v['corr_DA'], v['sigma_GRACE_median'],
-                                                    s['chi2_median_sub_basins'][u]))
+        P('   %-12s %8.1f %8.1f %8.1f %8.1f %8.3f %8.1f %10.2f' % (
+            u.replace('sub_basin_', 'sub '), v['rms_OL'], v['rms_DA'], v.get('rms_DA_regular', float('nan')),
+            v.get('rms_DA_expected', float('nan')), v['corr_DA'], v['sigma_GRACE_median'],
+            s['chi2_median_sub_basins'][u]))
+    P('   (DA reg / expected: RMS(DA - GRACE) and the RMS of a consistent analysis, sqrt(mean(sigma^4 / '
+      '(spread_fc^2 + sigma^2))), both on windows with sigma <= %g x its median)' % s.get('grace_sigma_factor', 3.0))
     P('   key months (basin)   GRACE   OL-GR   DA-GR   sigma')
     for m, v in s['key_months'].items():
         P('     %s        %7.1f %7.1f %7.1f %7.1f' % (m, v['GRACE'], v['OL_minus_GRACE'], v['DA_minus_GRACE'],

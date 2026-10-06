@@ -35,13 +35,17 @@ def demo1():
 
     '''before the data assimilation'''
     # RDA.config_basin_mask()
-    RDA.get_GRACE_obs(is_diagonal=False)
+    # RDA.get_GRACE_obs(is_diagonal=False)   # done 2026-10-05 (2002-01..2019-12, GRACE/output)
 
     '''after the data assimilation'''
-    # RDA.visualization()
-    # RDA.increment_diagnosis()
-    # RDA.da_evaluation(tag='run12', reference=DATA_ROOT + '/Res/demo_2/evaluation/run11a2')   # new tag for every run;
+    RDA.visualization()
+    RDA.increment_diagnosis()
+    RDA.da_evaluation(tag='run13', reference=DATA_ROOT + '/Res/demo_Danube/evaluation/run12')   # new tag for every run;
     #   reference = a tag in Res/demo_Danube/evaluation or the path of a report folder (the 4-member runs are in demo_2)
+
+    '''data product for distribution (only when the data are shared): daily ensemble mean and spread (OL, DA),
+    gridded GRACE TWS, basin time series -> Res/<case>/product/PyGLDA-v2_<case>_<version>/'''
+    # RDA.export_product(version='v1.0')   # done 2026-10-06 for run12 -> Res/demo_Danube/product/PyGLDA-v2_demo_Danube_v1.0
 
     '''house-keeping: remove the temporary daily output of a collected stage (dry run first)'''
     # from src_DA.EnumDA import Stage
@@ -61,18 +65,18 @@ def demo2():
         RDA.config_external_data()
     comm.barrier()
 
-    RDA.model_perturbation()            # MPI; rewrites Ensemble_input/Ens_0..30 (2000-01..2019-12)
-    RDA.spin_up()
-    # RDA.OL_run()
-    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
+    # RDA.model_perturbation()          # done 2026-10-05 (31 members, 2000-01..2019-12)
+    # RDA.spin_up()                     # done 2026-10-05 (restart states 2001-12-31, all 31 members)
+    # RDA.OL_run()                                            # done 2026-10-05 (2002-01..2019-12)
+    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)  # done 2026-10-05
 
-    # try:
-    #     RDA.DA_run()
-    # except Exception:
-    #     import traceback
-    #     traceback.print_exc()
-    #     MPI.COMM_WORLD.Abort(1)
-    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
+    try:
+        RDA.DA_run()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        MPI.COMM_WORLD.Abort(1)
+    RDA.collect_and_statistics(Stage.DA, skip_collect=False)
     pass
 
 
