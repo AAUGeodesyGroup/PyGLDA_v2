@@ -17,6 +17,10 @@ class basin_shp_process:
                  per-sub-basin areas within ~4 %, for the Danube); sub-basins never overlap
       'centre' : a cell belongs to the sub-basin whose polygon contains the cell centre (classic rule used for
                  the Amazon/demo_3 masks; about half of the cut boundary cells are dropped)
+    Both rules are vectorised with shapely 2 (_cover: one STRtree query per sub-basin, cells entirely inside a
+    polygon get cover 1 without clipping); the masks are identical to the earlier cell-by-cell loops (checked for
+    the Danube and the Amazon, with and without configureBox). For shapefiles with hundreds of units on the global
+    grid use global_shp2mask.py (same rules and file format, plus model land / removed-unit options).
     """
     default_rule = 'area'
     area_threshold = 0.4
@@ -102,7 +106,7 @@ class basin_shp_process:
 
     def _masks_by_centre(self, gdf):
         """classic rule: the cell centre is inside (or on the boundary of) the sub-basin polygon"""
-        import shapely.vectorized
+        import shapely
         lat1, lon1 = self._grid()
         lon, lat = np.meshgrid(lon1, lat1)
         mask_basin = {}
@@ -111,45 +115,55 @@ class basin_shp_process:
             bb = bd1.total_bounds
             crop_box = {"lat": [bb[3], bb[1]], "lon": [bb[0], bb[2]]}
             sub_lat, sub_lon, box_mask_id = self._crop_box(crop_box=crop_box)
-            mask1 = shapely.vectorized.touches(bd1.geometry.item(), sub_lon, sub_lat)
-            mask2 = shapely.vectorized.contains(bd1.geometry.item(), sub_lon, sub_lat)
+            inside = shapely.intersects_xy(bd1.geometry.item(), sub_lon, sub_lat)     # contains or touches
             mask_gl = np.full_like(lat, fill_value=0, dtype=bool)
-            mask_gl[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]] = mask1 + mask2
+            mask_gl[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]] = inside
             if self.box_mask is not None:
                 mask_gl = (mask_gl * self.box_mask).astype(bool)
             mask_basin[int(bd1.ID.values[0])] = mask_gl
         return mask_basin
 
-    def _masks_by_area(self, gdf):
-        """area rule: coverage of every cell by every sub-basin polygon; the cell goes to the sub-basin with the
-        largest coverage if the basin as a whole covers >= area_threshold of the cell"""
-        from shapely.geometry import box as shp_box
-        from shapely.prepared import prep
+    def _cover(self, gdf):
+        """
+        cover of the cells in the bounding box of gdf by every sub-basin polygon (intersection area / cell area, in
+        degrees), computed for all cells at once (shapely 2 vectorised; one STRtree query per polygon instead of a
+        Python loop over cells x sub-basins). Returns rows, cols (grid indices of the cells), the cell boxes and
+        their tree, ids, best (largest cover), win (its sub-basin ID; first in the shapefile order on ties) and total
+        """
+        import shapely
         res = self._res
         lat1, lon1 = self._grid()
         bb = gdf.total_bounds
         rows = np.where((lat1 + res / 2 > bb[1]) & (lat1 - res / 2 < bb[3]))[0]
         cols = np.where((lon1 + res / 2 > bb[0]) & (lon1 - res / 2 < bb[2]))[0]
+        R, C = np.meshgrid(rows, cols, indexing='ij')
+        R, C = R.ravel(), C.ravel()
+        cells = shapely.box(lon1[C] - res / 2, lat1[R] - res / 2, lon1[C] + res / 2, lat1[R] + res / 2)
+        tree = shapely.STRtree(cells)
         ids = [int(i) for i in gdf.ID.values]
-        geoms = {int(r.ID): r.geometry for _, r in gdf.iterrows()}
-        prepared = {k: prep(g) for k, g in geoms.items()}
-        cov = np.zeros((len(ids), len(lat1), len(lon1)))
-        for i in rows:
-            for j in cols:
-                cell = shp_box(lon1[j] - res / 2, lat1[i] - res / 2, lon1[j] + res / 2, lat1[i] + res / 2)
-                for k, id in enumerate(ids):
-                    if not prepared[id].intersects(cell):
-                        continue
-                    if prepared[id].contains(cell):
-                        cov[k, i, j] = 1.0
-                    else:
-                        cov[k, i, j] = geoms[id].intersection(cell).area / cell.area
-        total = cov.sum(0)                                   # coverage by the whole basin (sub-basins do not overlap)
-        inside = total >= self.area_threshold
-        winner = cov.argmax(0)
+        best, win, total = np.zeros(len(R)), np.zeros(len(R), dtype=np.int64), np.zeros(len(R))
+        for id, g in zip(ids, gdf.geometry.values):
+            shapely.prepare(g)
+            idx = tree.query(g, predicate='intersects')
+            full = shapely.contains(g, cells[idx])                    # cells entirely inside: cover 1 (no clipping)
+            a = np.ones(len(idx))
+            a[~full] = shapely.area(shapely.intersection(cells[idx[~full]], g)) / res ** 2
+            total[idx] += a
+            m = a > best[idx]
+            best[idx[m]], win[idx[m]] = a[m], id
+        return R, C, cells, tree, ids, best, win, total
+
+    def _masks_by_area(self, gdf):
+        """area rule: coverage of every cell by every sub-basin polygon; the cell goes to the sub-basin with the
+        largest coverage if the basin as a whole covers >= area_threshold of the cell"""
+        lat1, lon1 = self._grid()
+        R, C, cells, tree, ids, best, win, total = self._cover(gdf)
+        inside = total >= self.area_threshold               # coverage by the whole basin (sub-basins do not overlap)
         mask_basin = {}
-        for k, id in enumerate(ids):
-            m = inside & (winner == k)
+        for id in ids:
+            m = np.zeros((len(lat1), len(lon1)), dtype=bool)
+            sel = inside & (win == id)
+            m[R[sel], C[sel]] = True
             if self.box_mask is not None:
                 m = (m * self.box_mask).astype(bool)
             mask_basin[id] = m

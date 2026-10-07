@@ -607,7 +607,7 @@ class RDA:
         vv.DA_evaluation(fig_path=fig_path, basin_id=0, zoom=None)
         '''2-D maps of trend / annual amplitude / annual peak day: OL | DA | GRACE'''
         vv.harmonic_maps(allow_pop_up=False, fig_path=Path(configDA.basic.res_permanent)/RDA.case,
-                         variable=WaterGap_storage_variables.tws.name)
+                         variable=WaterGap_storage_variables.tws.name, style='pixel')
 
     @staticmethod
     def increment_diagnosis(tag=None, event_threshold_mm=40.0):
