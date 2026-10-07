@@ -361,6 +361,13 @@ def load_mask(mask_path:dir):
     lat_min, lat_max = float(mask_bbox.lat.min()), float(mask_bbox.lat.max())
     lon_min, lon_max = float(mask_bbox.lon.min()), float(mask_bbox.lon.max())
 
+    '''a global unit mask (attribute extent = 'global', written by global_shp2mask) is not cropped at all: the DA
+    output then has the full grid of the open loop (regional masks carry no such attribute and are unaffected)'''
+    with h5py.File(name=mask_path, mode='r') as f:
+        if f.attrs.get('extent') == 'global':
+            lat_min, lat_max = float(lat_coords.min()), float(lat_coords.max())
+            lon_min, lon_max = float(lon_coords.min()), float(lon_coords.max())
+
     box_crop = {'lat_min': lat_min,
                 'lat_max': lat_max,
                 'lon_min': lon_min,
@@ -380,10 +387,47 @@ def load_mask(mask_path:dir):
     local_mask['lat'] = lat
     local_mask['basin_num'] = num
 
-    local_mask['basin_2d'] = np.nan_to_num(mask_bbox.values, nan=0).astype(int) # regional box 2D --> basin grid 1D
+    '''regional box 2D --> basin grid 1D: every cell between the box edges, as in the cropped daily files of the DA.
+    (where(drop=True) would also remove an empty row or column INSIDE the box, e.g. an ocean column between two land
+    masses of a global mask, and the array would no longer fit the daily file; identical for a compact basin)'''
+    local_mask['basin_2d'] = basin_mask.sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)).values.astype(int)
 
     local_mask['global_2d'] = global_mask['basin'] # global 2D ---> basin grid 1D
     return box_crop, local_mask
+
+def unit_weights(mask_path, lat, lon, include_basin=True):
+    """
+    Sparse averaging matrix of a basin mask on the grid (lat, lon) of a 0.5-degree file: one row per key ('basin' first
+    if include_basin, then 'sub_basin_1', 'sub_basin_2', ...), cos(lat) weights of the key's cells normalised to 1, so
+    that  W @ field.reshape(-1)  gives the area-weighted mean of every key in one product (W @ field2d.reshape(T, -1).T
+    for a time series). The file grid may be the global grid or a box cropped from it (the regional daily output); a key
+    without a cell on the grid gets an all-zero row. A NaN cell inside a key gives NaN for that key, as a plain mean would.
+    Used by statistical_analysis.BasinAverageAnalysis (regional) and Global_DA.collect_and_statistics (global).
+    returns W (scipy.sparse.csr_matrix, n_key x n_lat*n_lon), keys (list)
+    """
+    from scipy import sparse
+    res = 0.5
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
+    i = np.rint((90 - res / 2 - lat) / res).astype(int)                 # rows of the global grid
+    j = np.rint((lon - (-180 + res / 2)) / res).astype(int)             # columns of the global grid
+    rows, cols, vals = [], [], []
+    with h5py.File(name=mask_path, mode='r') as f:
+        ids = sorted(int(k.split('_')[-1]) for k in f.keys() if k.startswith('sub_basin_'))
+        keys = (['basin'] if include_basin else []) + ['sub_basin_%d' % k for k in ids]
+        for r, key in enumerate(keys):
+            m = f[key][()][np.ix_(i, j)].astype(bool)                   # the key on the grid of the file
+            ii, jj = np.nonzero(m)
+            if len(ii) == 0:
+                continue
+            w = np.cos(np.deg2rad(lat[ii]))
+            rows.append(np.full(len(ii), r))
+            cols.append(ii * len(lon) + jj)
+            vals.append(w / w.sum())
+    if rows:
+        rows, cols, vals = np.concatenate(rows), np.concatenate(cols), np.concatenate(vals)
+    W = sparse.csr_matrix((vals, (rows, cols)), shape=(len(keys), len(lat) * len(lon)))
+    return W, keys
+
 
 def demo_Danube():
     """rasterise the HydroBASINS Danube shapefile with the default rule and plot the grid"""

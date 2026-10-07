@@ -112,6 +112,7 @@ class global_shp_process(basin_shp_process):
                 if rule == 'area':
                     hf.attrs['area_threshold'] = self.area_threshold
                 hf.attrs['model_mask'] = int(self.model_mask is not None)
+                hf.attrs['extent'] = 'global'                       # load_mask: no cropping, DA output on the full grid
                 hf.attrs['exclude'] = str(self.exclude_shp) if self.exclude_shp is not None else ''
             print('written %s: %d sub-basins, %d cells (rule %s%s%s%s)'
                   % (h5fn, len(mask_basin), mask_all.sum(), rule,

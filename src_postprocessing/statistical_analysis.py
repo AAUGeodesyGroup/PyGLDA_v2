@@ -30,40 +30,22 @@ class BasinAverageAnalysis:
         return self
 
     def get_basin_average(self):
+        """
+        area-weighted (cos lat) mean of every variable over the basin and every sub-basin -> basin_ts_<stage>.h5
+        (groups per variable, one dataset per key 'basin', 'sub_basin_k'). The weights of all keys are one sparse
+        matrix on the grid of the loaded files (shp2mask.unit_weights), so every variable is read once and averaged for
+        all keys in a single product - the former loop reloaded the whole field once per key.
+        """
+        from src_auxiliary.shp2mask import unit_weights
 
-        mask_global = self.bm['basin'][:]  # this has to be 0.5 degree
-        res = 0.5
-        err = res / 10
-        lat_coords = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
-        lon_coords = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
-        mask_global = xr.DataArray(
-            mask_global.astype(bool),
-            coords={"lat": lat_coords, "lon": lon_coords},
-            dims=["lat", "lon"],
-            name="region_mask"
-        )
-
-        lon_mesh_global, lat_mesh_global = np.meshgrid(lon_coords, lat_coords)
-        mask_whole_basin = mask_global.where(mask_global, drop=True)
-        mask_whole_basin = mask_whole_basin.notnull().values
+        W, keys = unit_weights(self.bm.filename, self.ds['lat'].values, self.ds['lon'].values)
+        n_time = self.ds.sizes['time']
 
         res = {}
         for key in self.__variable_list:
-            res[key] ={}
-            for basin in self.bm.keys():
-                '''produce the 2D mask for each basin'''
-                mask_sub_basin =  self.bm[basin][:].astype(bool)  # this has to be 0.5 degree
-                lat_local = lat_mesh_global[mask_sub_basin]
-                mask_global = self.bm['basin'][:].astype(bool)
-                mask_bbox = mask_whole_basin.copy()
-                mask_bbox[mask_whole_basin] = mask_sub_basin[mask_global]
-
-                '''load nc file and calculate the basin average'''
-                a = self.ds[key].values[:, mask_bbox]
-                b = np.cos(np.deg2rad(lat_local))
-                c = np.sum(a*b,1)/np.sum(b)
-                res[key][basin] = c.copy()
-                pass
+            field = self.ds[key].values.reshape(n_time, -1)                 # (time, lat*lon), read once
+            means = np.asarray(W @ field.T)                                 # (n_key, time)
+            res[key] = {k: means[r].copy() for r, k in enumerate(keys)}
 
         hf = h5py.File(str(Path(self.__state_dir) / ('basin_ts_%s.h5'%self.__stage.name)), 'w')
         # print(str(Path(self.__state_dir) / ('basin_ts_%s.h5'%self.__stage.name)))

@@ -34,11 +34,11 @@ def demo1():
     # RDA.read_config_and_save()
 
     '''before the data assimilation'''
-    RDA.config_basin_mask()
-    RDA.get_GRACE_obs(is_diagonal=False)
+    # RDA.config_basin_mask()
+    # RDA.get_GRACE_obs(is_diagonal=False)
 
     '''after the data assimilation'''
-    # RDA.visualization()
+    RDA.visualization()
     # RDA.increment_diagnosis()
     # RDA.da_evaluation(tag='run11a2')      # set a new tag for every run
 
@@ -80,5 +80,5 @@ def demo2():
 
 
 if __name__ == '__main__':
-    # demo1()
-    demo2()
+    demo1()
+    # demo2()
