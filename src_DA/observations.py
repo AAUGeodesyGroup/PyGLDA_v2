@@ -21,10 +21,11 @@ class GRACE_obs:
 
         self.__obs = obs_h5['ens_%s' % ens_id][:]
 
-        self.__cov = obs_h5['cov'][:]
-
-        if np.ndim(self.__cov[0]) < 2:
-            self.__cov = self.__cov[:, None, None]
+        '''the covariance of a month is read from the file when asked for (get_cov): the whole history
+        (n_month x n_sub x n_sub, 1 GB for 772 sub-basins and 216 months) was loaded on every MPI rank until
+        8 Oct 2026, although only the main rank uses one month at a time'''
+        self.__obs_fn = obs_fn
+        self.__cov_scalar = np.ndim(obs_h5['cov']) < 3                  # one sub-basin: cov stored as [n_month]
 
         obs_h5.close()
         pass
@@ -64,11 +65,14 @@ class GRACE_obs:
             return self.__obs[self.__date_index]
 
     def get_cov(self):
-
+        """covariance matrix [n_sub x n_sub] of the current month (set_date / set_month), read from the file"""
         if self.__date_index is None:
             return None
-        else:
-            return self.__cov[self.__date_index]
+        with h5py.File(self.__obs_fn, 'r') as f:
+            cov = f['cov'][self.__date_index]
+        if self.__cov_scalar:
+            cov = np.asarray(cov)[None, None]
+        return cov
 
     def get_obs_aux(self):
         obs_aux = {

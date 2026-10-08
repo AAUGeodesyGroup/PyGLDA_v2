@@ -2,6 +2,7 @@ import sys
 
 sys.path.append('../')
 
+import os
 import numpy as np
 from pathlib import Path
 import h5py
@@ -330,32 +331,49 @@ class basin_shp_process:
         return lat, lon, box_mask_id
 
 
-def load_mask(mask_path:dir):
-    """
-    This only applies to WaterGap
-    Parameters
-    ----------
-    mask_path
+_MASK_CACHE = {}
 
-    Returns
-    -------
 
+def load_mask(mask_path: dir):
     """
-    '''load global mask'''
-    with h5py.File(name=mask_path, mode='r') as f:
-        global_mask = {key: f[key][()] for key in f.keys()}
+    Basin mask of the DA (WaterGAP grid, 0.5 degree) -> (box_crop, local_mask)
+      box_crop   : lat/lon edges of the regional box (the basin bounding box; the whole grid for a global unit
+                   mask, attribute extent = 'global')
+      local_mask : 'basin', 'sub_basin_<k>' (bool, one value per basin cell in row-major order of the global grid),
+                   'unit_id' when the file has it, 'lat' of the basin cells, 'basin_num', 'unit_label' (index of
+                   the sub-basin of every basin cell, 0-based, -1 = none), 'basin_2d' (the box, int),
+                   'global_2d' (the global grid, int)
+    The datasets are read one at a time (the global file has 773 full-grid int64 datasets: 1.6 GB when read at
+    once), the sub-basin vectors are kept as bool (772 x 55 461 cells: 43 MB instead of 343 MB), and the result
+    of the last file is cached: the DA constructs ExtractStates, the design matrices and the threshold from the
+    same file on every rank (until 8 Oct 2026 six reads of ~7 s and four copies per rank). Callers never modify
+    the dictionary.
+    """
+    mask_path = str(mask_path)
+    key = (mask_path, os.path.getmtime(mask_path))
+    if key in _MASK_CACHE:
+        return _MASK_CACHE[key]
 
     res = 0.5
     err = res / 10
     lat_coords = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
     lon_coords = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
-    basin_mask = xr.DataArray(
-        global_mask['basin'].astype(bool),
-        coords={"lat": lat_coords, "lon": lon_coords},
-        dims=["lat", "lon"],
-        name="region_mask"
-    )
 
+    local_mask = {}
+    with h5py.File(name=mask_path, mode='r') as f:
+        basin = f['basin'][()]
+        basin_bool = basin.astype(bool)
+        is_global = f.attrs.get('extent') == 'global'
+        '''one dataset at a time: reduced to the basin cells immediately'''
+        keys = sorted((k for k in f.keys() if k.startswith('sub_basin_')), key=lambda k: int(k.split('_')[-1]))
+        local_mask['basin'] = basin[basin_bool]
+        for k in keys:
+            local_mask[k] = f[k][()][basin_bool].astype(bool)
+        if 'unit_id' in f:
+            local_mask['unit_id'] = f['unit_id'][()][basin_bool]
+
+    basin_mask = xr.DataArray(basin_bool, coords={"lat": lat_coords, "lon": lon_coords}, dims=["lat", "lon"],
+                              name="region_mask")
     mask_bbox = basin_mask.where(basin_mask, drop=True)
     # Extract the exact min/max coordinates of the target region
     lat_min, lat_max = float(mask_bbox.lat.min()), float(mask_bbox.lat.max())
@@ -363,10 +381,9 @@ def load_mask(mask_path:dir):
 
     '''a global unit mask (attribute extent = 'global', written by global_shp2mask) is not cropped at all: the DA
     output then has the full grid of the open loop (regional masks carry no such attribute and are unaffected)'''
-    with h5py.File(name=mask_path, mode='r') as f:
-        if f.attrs.get('extent') == 'global':
-            lat_min, lat_max = float(lat_coords.min()), float(lat_coords.max())
-            lon_min, lon_max = float(lon_coords.min()), float(lon_coords.max())
+    if is_global:
+        lat_min, lat_max = float(lat_coords.min()), float(lat_coords.max())
+        lon_min, lon_max = float(lon_coords.min()), float(lon_coords.max())
 
     box_crop = {'lat_min': lat_min,
                 'lat_max': lat_max,
@@ -374,26 +391,26 @@ def load_mask(mask_path:dir):
                 'lon_max': lon_max
                 }  # with this it is possible to crop the global nc file within a small box to reduce the datasize.
 
-    '''produce the local mask'''
-    local_mask = {}
-    num = 0
-    for key, vv in global_mask.items():
-        local_mask[key] = vv[global_mask['basin'].astype(bool)]
-        if key[:3] == 'sub': num += 1
-
     lon_mesh_global, lat_mesh_global = np.meshgrid(lon_coords, lat_coords)
-    lat = lat_mesh_global[global_mask['basin'].astype(bool)]
+    local_mask['lat'] = lat_mesh_global[basin_bool]
+    local_mask['basin_num'] = len(keys)
 
-    local_mask['lat'] = lat
-    local_mask['basin_num'] = num
+    '''sub-basin of every basin cell (the last one wins should a cell be in two)'''
+    label = np.full(int(basin_bool.sum()), -1, dtype=np.int32)
+    for k in keys:
+        label[local_mask[k]] = int(k.split('_')[-1]) - 1
+    local_mask['unit_label'] = label
 
     '''regional box 2D --> basin grid 1D: every cell between the box edges, as in the cropped daily files of the DA.
     (where(drop=True) would also remove an empty row or column INSIDE the box, e.g. an ocean column between two land
     masses of a global mask, and the array would no longer fit the daily file; identical for a compact basin)'''
     local_mask['basin_2d'] = basin_mask.sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)).values.astype(int)
 
-    local_mask['global_2d'] = global_mask['basin'] # global 2D ---> basin grid 1D
+    local_mask['global_2d'] = basin                   # global 2D ---> basin grid 1D
+    _MASK_CACHE.clear()
+    _MASK_CACHE[key] = (box_crop, local_mask)
     return box_crop, local_mask
+
 
 def unit_weights(mask_path, lat, lon, include_basin=True):
     """

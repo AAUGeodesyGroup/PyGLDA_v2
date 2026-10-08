@@ -33,6 +33,7 @@ How the Kalman increment of a sub-basin is distributed over the cells and storag
     (a plain string "enkf" / "non_negative" is accepted as well)
 """
 import numpy as np
+from scipy import sparse
 
 
 class Partition:
@@ -117,20 +118,22 @@ class NonNegativePartition(Partition):
 
     def _cap_weights(self, W, cols=None):
         """
-        W (n_state x n_obs): weights of every element in the increment of each observed sub-basin. Per sub-basin
-        and storage, weights above max_weight_ratio x the median positive weight are set to that limit. The
-        normalisation below (H w) keeps the sub-basin increment unchanged; only its distribution changes.
+        W (n_state x n_obs, scipy.sparse CSC with the pattern of the localization taper): weights of every element
+        in the increment of each observed sub-basin. Per sub-basin and storage, weights above max_weight_ratio x the
+        median positive weight are set to that limit. The normalisation below (H w) keeps the sub-basin increment
+        unchanged; only its distribution changes.
         """
         f = self.f
         names = f.bounds.names
         for j in (range(W.shape[1]) if cols is None else cols):
-            col = W[:, j].copy()
+            a, b = W.indptr[j], W.indptr[j + 1]
+            idx, col = W.indices[a:b], W.data[a:b].copy()                  # elements of the taper column, weights
             tot = col.sum()
             for iv in range(len(names)):
                 cap = self._ratio(names[iv])
                 if cap is None:
                     continue
-                rows = np.where((f._var_idx == iv) & (col > 0))[0]
+                rows = np.where((f._var_idx[idx] == iv) & (col > 0))[0]
                 if len(rows) < 3:
                     continue
                 med = np.median(col[rows])
@@ -141,7 +144,7 @@ class NonNegativePartition(Partition):
                 if ratio[k] > self.stats['largest_weight_ratio']:
                     self.stats['largest_weight_ratio'] = float(ratio[k])
                     self.stats['largest_weight_ratio_where'] = dict(
-                        storage=names[iv], cell=int(rows[k] // len(names)), sub_basin=j + 1,
+                        storage=names[iv], cell=int(idx[rows[k]] // len(names)), sub_basin=j + 1,
                         window_end=str(getattr(f, '_today', '')))
                 over = ratio > cap
                 if over.any():
@@ -153,7 +156,7 @@ class NonNegativePartition(Partition):
                     if tot > 0:
                         self.stats['weight_share_removed_max'] = max(self.stats['weight_share_removed_max'],
                                                                      removed / tot)
-            W[:, j] = col
+            W.data[a:b] = col
         return W
 
     def split(self, dX, A, HA, N, X=None):
@@ -178,31 +181,39 @@ class NonNegativePartition(Partition):
         var = np.sum(A * A, 1) / (N - 1)                                           # n_state
         sd_x = np.sqrt(var)
         sd_y = np.sqrt(np.sum(HA * HA, 1) / (N - 1))                               # n_obs
+        '''weights on the pattern of the localization taper (sparse, n_state x n_obs); the dense n_state x n_obs
+        arrays corr / W of the global case were 1 GB each (until 8 Oct 2026)'''
+        L = f._L_state.tocsc()                                                  # column access: elements of sub-basin j
+        rows = np.repeat(np.arange(L.shape[0]), np.diff(f._L_state.indptr))     # row of every non-zero (CSR order)
+        pxy = f.tapered_cross_cov(A, HA, N, taper=False)                        # CSR, pattern of L_state, untapered
         with np.errstate(invalid='ignore', divide='ignore'):
-            corr = (A @ HA.T) / (N - 1) / np.outer(sd_x, sd_y)                    # n_state x n_obs
+            corr = pxy.data / (sd_x[rows] * sd_y[pxy.indices])
         corr = np.nan_to_num(corr)
-        W = f._L_state * var[:, None] * np.maximum(corr, 0.0)                   # n_state x n_obs
+        W = sparse.csr_matrix((f._L_state.data * var[rows] * np.maximum(corr, 0.0), pxy.indices, pxy.indptr),
+                              shape=L.shape).tocsc()                            # explicit zeros kept (same pattern as L)
         if self.max_weight_ratio is not None:
             W = self._cap_weights(W)
         if self.spatial_blend:
-            W = self._blend_weights(W)
-        HW = f._DM(states=W)                                                    # n_obs x n_obs, column j -> (H w_.j)
-        hw = np.diag(HW).copy()
+            W = self._blend_weights(W, L)
+        hw = (f._DM(states=W)).diagonal().copy()                                # (H w_.j)_j
         bad = hw <= 0
         if bad.any():                                                              # fall back to variance-only shares
-            W[:, bad] = f._L_state[:, bad] * var[:, None]
+            for j in np.where(bad)[0]:
+                a, b = W.indptr[j], W.indptr[j + 1]
+                W.data[a:b] = L.data[a:b] * var[L.indices[a:b]]
             if self.max_weight_ratio is not None:
                 W = self._cap_weights(W, cols=np.where(bad)[0])
             if self.spatial_blend:
-                W = self._blend_weights(W, cols=np.where(bad)[0])
-            hw[bad] = np.diag(f._DM(states=W))[bad]
+                W = self._blend_weights(W, L, cols=np.where(bad)[0])
+            hw[bad] = (f._DM(states=W)).diagonal()[bad]
         ok = hw > 0
         scale = np.zeros_like(hw)
         scale[ok] = 1.0 / hw[ok]
-        dX_new = (W * scale[None, :]) @ delta                                      # n_state x N
+        S = (W @ sparse.diags(scale)).tocsc()                                      # normalised shares, H S = I (block)
+        dX_new = np.asarray(S @ delta)                                             # n_state x N
 
         if X is not None and (f.bounds.any_finite() or self.max_cell_factor is not None):
-            dX_new = self._apply_bounds(dX_new, W * scale[None, :], delta, X)
+            dX_new = self._apply_bounds(dX_new, S, delta, X)
 
         self.stats['n_updates'] += 1
         self.stats['n_obs_fallback'] += int(bad.sum())
@@ -212,27 +223,30 @@ class NonNegativePartition(Partition):
         self.stats['max_abs_inc_new'] = max(self.stats['max_abs_inc_new'], float(np.abs(dX_new).max()))
         return dX_new
 
-    def _blend_weights(self, W, cols=None):
+    def _blend_weights(self, W, L, cols=None):
         """per sub-basin and listed storage: w' = (1-b) w + b mean(w) over the storage's elements in the sub-basin
-        (elements with a localization weight > 0); the storage's total weight in the sub-basin is unchanged"""
+        (elements with a localization weight > 0); the storage's total weight in the sub-basin is unchanged.
+        W, L: sparse CSC with the same pattern (weights, localization taper)"""
         f = self.f
         names = f.bounds.names
         for j in (range(W.shape[1]) if cols is None else cols):
-            for v, b in self.spatial_blend.items():
+            a, b = W.indptr[j], W.indptr[j + 1]
+            idx, lcol = W.indices[a:b], L.data[a:b]
+            for v, bl in self.spatial_blend.items():
                 if v not in names:
                     continue
-                rows = np.where((f._var_idx == names.index(v)) & (f._L_state[:, j] > 0))[0]
+                rows = np.where((f._var_idx[idx] == names.index(v)) & (lcol > 0))[0]
                 if len(rows) == 0:
                     continue
-                w = W[rows, j]
+                w = W.data[a:b][rows]
                 if w.sum() <= 0:
                     continue
-                W[rows, j] = (1.0 - b) * w + b * w.mean() * f._L_state[rows, j] / max(f._L_state[rows, j].mean(), 1e-12)
+                W.data[a + rows] = (1.0 - bl) * w + bl * w.mean() * lcol[rows] / max(lcol[rows].mean(), 1e-12)
         return W
 
     def _apply_bounds(self, dX_new, S, delta, X, n_iter=12):
         """
-        S     : normalised shares (n_state x n_obs), H S = I on the block diagonal; dX_new = S @ delta
+        S     : normalised shares (n_state x n_obs, sparse CSC), H S = I on the block diagonal; dX_new = S @ delta
         delta : sub-basin increments (n_obs x N);  X : forecast states (n_state x N)
         For every sub-basin j: elements whose increment would cross a bound are fixed at the bound, the remaining
         increment of j is redistributed over the free elements with their shares; repeated until no new crossing.
@@ -244,10 +258,12 @@ class NonNegativePartition(Partition):
         out = dX_new.copy()
         n_capped, moved = 0, 0.0
         for j in range(S.shape[1]):
-            rows = np.where(S[:, j] > 0)[0]
+            a, b = S.indptr[j], S.indptr[j + 1]
+            pos = S.data[a:b] > 0
+            rows, s = S.indices[a:b][pos], S.data[a:b][pos]
             if len(rows) == 0:
                 continue
-            s = S[rows, j]
+            hj = f.h_row(j, rows)                             # row j of H on these elements (H S = I: sum(hj s) = 1)
             lo_j, hi_j = cap_lo[rows], cap_hi[rows]
             if self.max_cell_factor is not None:
                 if isinstance(self.max_cell_factor, dict):
@@ -279,15 +295,12 @@ class NonNegativePartition(Partition):
                 dj = np.where(hi & ~fixed, hi_j, dj)
                 fixed |= new_fix
                 # what the fixed elements contribute to the sub-basin increment, and what is left for the free ones
-                full = np.zeros_like(out); full[rows] = np.where(fixed, dj, 0.0)
-                rem = delta[j] - f._DM(states=full)[j]                           # (N,)
-                free_s = np.zeros_like(out); free_s[rows] = np.where(fixed, 0.0, s[:, None])
-                denom = f._DM(states=free_s)[j]                                  # (N,)
+                rem = delta[j] - hj @ np.where(fixed, dj, 0.0)                   # (N,)
+                denom = hj @ np.where(fixed, 0.0, s[:, None])                    # (N,)
                 ok = denom > 1e-12
                 scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
                 dj = np.where(fixed, dj, s[:, None] * scale[None, :])
-            full = np.zeros_like(out); full[rows] = dj
-            miss = float(np.abs(delta[j] - f._DM(states=full)[j]).max())        # increment that found no room
+            miss = float(np.abs(delta[j] - hj @ dj).max())                       # increment that found no room
             self.stats['increment_not_placed_mm_max'] = max(self.stats['increment_not_placed_mm_max'], miss)
             n_capped += int(fixed.sum())
             moved += float(np.abs(dj - out[rows, :]).sum())

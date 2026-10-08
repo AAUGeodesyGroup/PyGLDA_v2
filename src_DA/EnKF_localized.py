@@ -20,12 +20,13 @@ base class src_DA.EnKF.EnKF. The state vector is that of EnsStates / DM_basin_av
 storages per cell.
 """
 import numpy as np
+from scipy import sparse
 from src_DA.EnKF import EnKF
 from src_DA.configure_DA import config_DA
 from src_DA.observations import GRACE_obs
 from src_DA.ExtractStates import EnsStates
 from src_GHM.Interface.DailyStepRun import DailyModelRun as model_run_daily
-from src_DA.localization import Localization, BlockLocalization, sub_basin_membership
+from src_DA.localization import Localization, BlockLocalization, sub_basin_membership, owner_of_cells
 from src_DA.inflation import Inflation, NoInflation
 from src_DA.partition import Partition, EnKFPartition
 from src_DA.bounds import StateBounds
@@ -53,9 +54,13 @@ class EnKF_localized(EnKF):
         names = list(sv.DM.statesnn)
         n_cell = n_state // len(names)
         self._var_idx = np.tile(np.arange(len(names)), n_cell)
-        M = sub_basin_membership(sv.DM.local_mask)
-        owner_cell = np.where(M.sum(1) > 0, np.argmax(M, axis=1), -1)
-        self._owner = np.repeat(owner_cell, len(names))
+        self._owner = np.repeat(owner_of_cells(sub_basin_membership(sv.DM.local_mask)), len(names))
+        '''row j of the design matrix restricted to a set of elements (partition / inflation): every state element
+        has one non-zero in H (its own sub-basin), so H[j, rows] = h[rows] where owner[rows] == j'''
+        H = sv.DM.getDM()
+        if (H.getnnz(axis=0) > 1).any():
+            raise ValueError('%s: the design matrix has state elements in more than one observation' % self.METHOD)
+        self._h_state = np.asarray(H.sum(axis=0)).ravel()
         '''soil capacity: the same smax as the post-update threshold, so that the partition hands the water soil cannot
         hold to the other storages (conserved) instead of the threshold deleting it after the update'''
         upper = {}
@@ -111,7 +116,8 @@ class EnKF_localized(EnKF):
         print('%s: %d states x %d observations; localization %s (mean taper weight %.3f); inflation: %s; '
               'increment partition: %s; obs-error inflation: %s; obs-error correlation: %s; obs-perturbation '
               'centring: %s; soil upper bound (smax) in the partition: %s; snow upper bound: %s; snow lower bound: %s'
-              % (self.METHOD, n_state, n_obs, self.localization.describe(), self._L_state.mean(),
+              % (self.METHOD, n_state, n_obs, self.localization.describe(),
+                 self._L_state.sum() / (n_state * n_obs),
                  self.inflation.describe(), self.partition.KIND, self._oei if self._oei else 'none', self._obs_corr,
                  self._obs_centering, self._soil_upper_bound,
                  ('%.1f x forecast + %.0f mm' % rel['swe']) if 'swe' in rel else 'none',
@@ -139,11 +145,31 @@ class EnKF_localized(EnKF):
         HX = self._DM(states=X)
         HA = HX - np.mean(HX, 1)[:, None]
         Pyy = self._L_obs * (HA @ HA.T) / (N - 1) + R                             # localized obs-space covariance
-        Pxy = self._L_state * (A @ HA.T) / (N - 1)                                # localized cross-covariance
-        K = np.linalg.solve(Pyy.T, Pxy.T).T                                       # K = Pxy Pyy^-1
+        Pxy = self.tapered_cross_cov(A, HA, N)                                    # localized cross-covariance (sparse)
+        '''K (obs - HX) with K = Pxy Pyy^-1, without forming the n_state x n_obs gain'''
+        dX = Pxy @ np.linalg.solve(Pyy, obs - HX)
 
-        dX = self.partition.split(K @ (obs - HX), A, HA, N, X)
+        dX = self.partition.split(dX, A, HA, N, X)
         return self.inflation.posterior(X + dX, A, HA)
+
+    def tapered_cross_cov(self, A, HA, N, taper=True):
+        """
+        L_state o (A HA^T) / (N - 1) evaluated only on the non-zeros of the taper: sparse n_state x n_obs with the
+        pattern of L_state (block localization: one entry per state element). taper=False: the plain sample
+        cross-covariance (A HA^T) / (N - 1) on the same pattern (used by the non-negative partition for the
+        correlations, which are tapered afterwards by the weights themselves).
+        """
+        L = self._L_state
+        rows = np.repeat(np.arange(L.shape[0]), np.diff(L.indptr))
+        vals = np.einsum('ik,ik->i', A[rows], HA[L.indices]) / (N - 1)
+        if taper:
+            vals = L.data * vals
+        return sparse.csr_matrix((vals, L.indices, L.indptr), shape=L.shape)
+
+    def h_row(self, j, rows):
+        """row j of the design matrix on the state elements `rows`: the sub-basin-mean weights of the elements of
+        sub-basin j, 0 for elements of other sub-basins"""
+        return np.where(self._owner[rows] == j, self._h_state[rows], 0.0)
 
     def _center_perturbations(self, obs):
         """

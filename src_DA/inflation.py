@@ -137,10 +137,9 @@ class RTPS(Inflation):
                         break
                     # ... and the free elements get a common factor g so that the sub-basin spread hits the target:
                     # H_j (Aa_bounded * f_bounded + Aa_free * g) has variance target^2  ->  quadratic in g
-                    full = np.zeros_like(Aa); full[rows[bounded]] = Aa[rows[bounded]] * fr[bounded, None]
-                    c = f._DM(states=full)[j]
-                    full = np.zeros_like(Aa); full[rows[free]] = Aa[rows[free]]
-                    d = f._DM(states=full)[j]
+                    hj = f.h_row(j, rows)                                       # row j of H on the elements of j
+                    c = (hj * bounded) @ (Aa[rows] * fr[:, None])
+                    d = (hj * free) @ Aa[rows]
                     vd, cd, vc = np.var(d, ddof=1), np.cov(c, d, ddof=1)[0, 1], np.var(c, ddof=1)
                     disc = cd ** 2 - vd * (vc - target[j] ** 2)
                     g = (-cd + np.sqrt(disc)) / vd if (vd > 1e-12 and disc >= 0) else g

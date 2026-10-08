@@ -4,7 +4,6 @@ from pathlib import Path
 import xarray as xr
 import json
 import csv
-import h5py
 from src_auxiliary.shp2mask import load_mask
 
 
@@ -103,21 +102,17 @@ class model_state_threshold:
 
     @staticmethod
     def _sub_basin_labels(mask_path, box_crop, res=0.5):
-        """2-D integer field on the regional box: k for cells of sub_basin_k, 0 outside the basin"""
-        with h5py.File(mask_path, 'r') as f:
-            subs = {k: f[k][()] for k in f.keys() if k.startswith('sub')}
+        """2-D integer field on the regional box: k for cells of sub_basin_k, 0 outside the basin (from the cached
+        load_mask result: global_2d and unit_label; reading the 772 datasets of the global mask again was a 1.6 GB
+        transient per rank until 8 Oct 2026)"""
+        _, lm = load_mask(mask_path=mask_path)
         i0 = int(round((90 - res / 2 - box_crop['lat_max']) / res))
         i1 = int(round((90 - res / 2 - box_crop['lat_min']) / res)) + 1
         j0 = int(round((box_crop['lon_min'] + 180 - res / 2) / res))
         j1 = int(round((box_crop['lon_max'] + 180 - res / 2) / res)) + 1
-        lab = np.zeros((i1 - i0, j1 - j0), dtype=int)
-        for key, m in subs.items():
-            try:
-                k = int(key.split('_')[-1])
-            except ValueError:
-                continue
-            lab[m[i0:i1, j0:j1].astype(bool)] = k
-        return lab
+        lab_global = np.zeros(lm['global_2d'].shape, dtype=int)
+        lab_global[lm['global_2d'].astype(bool)] = lm['unit_label'] + 1          # 0 = cell of no sub-basin
+        return lab_global[i0:i1, j0:j1]
 
     # ------------------------------------------------------------------ bounds per storage
     def _bounds(self, var, x):
@@ -169,20 +164,28 @@ class model_state_threshold:
         return state
 
     def _record_month(self, var, month, old, diff, finite):
+        """per sub-basin: cells checked, raised to the lower bound, cut at the upper bound, water added, removed;
+        one bincount per quantity instead of a loop over the sub-basins (772 passes over the grid per storage and
+        day for the global case until 8 Oct 2026)"""
         lower = finite & (diff > 0)                      # raised to the lower bound
         upper = finite & (diff < 0)                      # cut at the upper bound
         lab = self.sub_labels if self.sub_labels.shape == old.shape else np.zeros(old.shape, dtype=int)
         rec = self.monthly[var].setdefault(month, {})
-        for k in np.unique(lab[finite]):
+        n = int(lab.max()) + 1
+        n_checked = np.bincount(lab[finite], minlength=n)
+        n_lower = np.bincount(lab[lower], minlength=n)
+        n_upper = np.bincount(lab[upper], minlength=n)
+        added = np.bincount(lab[lower], weights=diff[lower], minlength=n)
+        removed = np.bincount(lab[upper], weights=-diff[upper], minlength=n)
+        for k in np.flatnonzero(n_checked):
             if k == 0:
                 continue
-            m = lab == k
             r = rec.setdefault(int(k), [0, 0, 0, 0.0, 0.0])
-            r[0] += int((finite & m).sum())
-            r[1] += int((lower & m).sum())
-            r[2] += int((upper & m).sum())
-            r[3] += float(diff[lower & m].sum())
-            r[4] += float(-diff[upper & m].sum())
+            r[0] += int(n_checked[k])
+            r[1] += int(n_lower[k])
+            r[2] += int(n_upper[k])
+            r[3] += float(added[k])
+            r[4] += float(removed[k])
 
     def monthly_rows(self):
         rows = []
