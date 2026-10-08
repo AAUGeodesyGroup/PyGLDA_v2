@@ -1,7 +1,7 @@
 
 import numpy as np
 import h5py
-from src_auxiliary.shp2mask import basin_shp_process
+from src_auxiliary.shp2mask import basin_shp_process, mask_05_to_1
 from src_auxiliary.GeoMathKit import GeoMathKit
 import os
 from pathlib import Path
@@ -22,29 +22,55 @@ class GRACE_preparation:
 
     def generate_mask(self, box_mask=None, res_05=True, res_10=True, save_dir='../data/basin/mask'):
         """
-        generate and save basin mask for later use
+        generate and save basin mask for later use:
+          0.5 degree (signal)      rasterised from the shapefile (shp2mask.basin_shp_process)
+          1 degree   (covariance)  derived from the 0.5-degree mask by majority of the land cells (shp2mask.mask_05_to_1),
+                                   so that both resolutions describe the same cells; call
+                                   configure_global_land_ocean_mask first so that only land cells count
         """
-
 
         '''for signal: 0.5 degree'''
+        bs1 = basin_shp_process(res=0.5, basin_name=self.basin_name, save_dir=save_dir).configureBox(box_mask)
         if res_05:
-            bs1 = basin_shp_process(res=0.5, basin_name=self.basin_name, save_dir=save_dir).configureBox(box_mask).shp_to_mask(
-                shp_path=self.__shp_path, issave=True)
-
-        '''for cov: 1 degree'''
-        if res_10:
-            bs2 = basin_shp_process(res=1, basin_name=self.basin_name, save_dir=save_dir).configureBox(box_mask).shp_to_mask(
-                shp_path=self.__shp_path, issave=True)
-
+            bs1.shp_to_mask(shp_path=self.__shp_path, issave=True)
         self.save_mask_dir = bs1.save_dir
 
+        '''for cov: 1 degree, from the 0.5-degree mask'''
+        if res_10:
+            mask_05_to_1(mask05_path=Path(self.save_mask_dir) / ('%s_res_0.5.h5' % self.basin_name),
+                         land_05=getattr(self, '_05deg_mask', None))
+
         '''get the area information of each subbasin'''  ##TODO: a raw estimation of the area
-        self._sub_basin_area = gpd.read_file(self.__shp_path).area.values
+        self._sub_basin_area = self._area_from_shp()
         pass
 
-    def configure_global_land_ocean_mask(self, fn='../data/GRACE/GlobalLandMaskForGRACE.hdf5'):
+    def use_mask(self, mask_dir, res_10=True):
+        """
+        use an existing 0.5-degree mask <mask_dir>/<basin>_res_0.5.h5 instead of rasterising the shapefile (e.g. the
+        frozen global unit mask of global_shp2mask, which generate_mask could not reproduce: model land, removed units);
+        the 1-degree mask is derived from it when missing (res_10). The sub-basin areas come from the shapefile.
+        """
+        self.save_mask_dir = Path(mask_dir)
+        fn1 = self.save_mask_dir / ('%s_res_1.h5' % self.basin_name)
+        if res_10 and not fn1.exists():
+            mask_05_to_1(mask05_path=self.save_mask_dir / ('%s_res_0.5.h5' % self.basin_name),
+                         land_05=getattr(self, '_05deg_mask', None))
+        self._sub_basin_area = self._area_from_shp()
+        return self
+
+    def _area_from_shp(self):
+        """sub-basin areas in the order of the IDs: SUB_AREA [km2] when the shapefile has it, else the raw polygon area"""
+        gdf = gpd.read_file(self.__shp_path)
+        if 'SUB_AREA' in gdf.columns and 'ID' in gdf.columns:
+            return gdf.sort_values('ID').SUB_AREA.values.astype(float)
+        return gdf.area.values
+
+    def configure_global_land_ocean_mask(self, fn='../data/GRACE/global_mask/WaterGAPLandMask.hdf5'):
         """
         This is to prevent accounting for the oceanic GRACE into the land observations.
+        Land = WaterGAP land (src_auxiliary.watergap_land_mask: WaterGAPLandMask.hdf5), the same cells over which the
+        DA averages the model, so that the GRACE and the model unit means are consistent; the former GRACE land mask
+        (GlobalLandMaskForGRACE.hdf5) has the same layout and can still be given.
         lat: 90=>-90
         lon:-180=>180
         """
@@ -170,7 +196,7 @@ class GRACE_preparation:
             key = 'sub_basin_%d' % i
             '''flip upside down to be compatible with the TWS dataset'''
             mask[key] = np.flipud(mf[key][:] * self._1deg_mask)
-            assert np.max(mask[key]) > 0.1, 'Basin shape file is incompatible with GRACE-1deg land mask, please revise!'
+            assert np.max(mask[key]) > 0.1, 'Basin mask is incompatible with the 1-deg land mask, please revise!'
 
         '''load latitude'''
         err = res / 10

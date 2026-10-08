@@ -107,47 +107,103 @@ class DA_GRACE:
         pass
 
     def gather_OLmean(self):
-        """gather the OL mean to be reduced from GRACE to acquire the TWS anomaly"""
-        # TODO: this is obs-specific and one should think about how to compute the mean. from DA or OL?
+        """
+        Open-loop TWS mean per sub-basin, added to the GRACE anomalies to give observations in model TWS
+        (GRACE_perturbed_obs.remove_temporal_mean / add_temporal_mean): the GRACE mean is taken over the GRACE epochs
+        present in the assimilation period, so the open-loop mean is taken over exactly the same epochs, each one
+        averaged over its observation window (the mean of the daily OL TWS over the days of the GRACE month, as the
+        filter compares the window mean of the model with the observation). Until 7 Oct 2026 the open loop was
+        averaged over every day of fromdate..todate, i.e. also over months without GRACE (gaps, 2002-01..03), which
+        left a constant offset per sub-basin between the two means.
+        Output: <OL_mean>/<case>_<basin>.hdf5 with mean_unperturbed, mean_ensemble (over members 1..N), time_epoch
+        and duration of the epochs used.
+        """
+        import pandas as pd
+        configDA = self.configDA
+        days = pd.date_range(configDA.basic.fromdate, configDA.basic.todate)
 
-        self.start_date = np.datetime64(self.configDA.basic.fromdate)
-        self.end_date = np.datetime64(self.configDA.basic.todate)
+        '''step-1: GRACE epochs of the period that exist in the signal file, with their observation windows'''
+        obs_aux = self._obs_aux()
+        ref = obs_aux.getTimeReference()
+        signal_fn = Path(configDA.obs.GRACE['preprocess_res']) / ('%s_signal.hdf5' % configDA.basic.basin)
+        with h5py.File(signal_fn, 'r') as f:
+            available = set(f['time_epoch'][:].astype(str))
+        epochs = [(t, d) for t, d in zip(ref['time_epoch'], ref['duration']) if t in available]
+        if not epochs:
+            raise ValueError('gather_OLmean: no GRACE epoch of %s..%s in %s' %
+                             (configDA.basic.fromdate, configDA.basic.todate, signal_fn))
+        windows = []
+        for t, d in epochs:
+            d1, d2 = d.split('_')
+            w = (days >= pd.Timestamp(d1)) & (days <= pd.Timestamp(d2))
+            if not w.any():
+                raise ValueError('gather_OLmean: observation window %s of epoch %s is outside the OL period' % (d, t))
+            windows.append(w)
 
-        # getting time range from time input (including the first day).
-        timerange_main = round((self.end_date - self.start_date + 1) / np.timedelta64(1, 'D'))
-
+        '''step-2: open-loop mean of every member over these windows'''
         ens_TWS = []
-        for ens_id in range(self.configDA.basic.ensemble + 1):
-            ens_dir = Path(self.configDA.basic.res_permanent) / self.configDA.basic.case / 'OL' / ('Ens_%s' % ens_id)
-            mm = h5py.File(str(ens_dir / 'basin_ts_OL.h5'), 'r')['tws']
-            # assert len(mm['basin']) == timerange_main, 'Temporal mean inconsistency!'
-            subbasin_num = len(list(mm.keys())) - 1
-
-            basin_tws = []
-            for subbasin in range(1, subbasin_num + 1):
-                nn = mm['sub_basin_%s' % subbasin][:]
-
-                tws_temporal_mean = np.mean(nn)
-
-                basin_tws.append(tws_temporal_mean)
-
-                pass
-
+        for ens_id in range(configDA.basic.ensemble + 1):
+            ens_dir = Path(configDA.basic.res_permanent) / configDA.basic.case / 'OL' / ('Ens_%s' % ens_id)
+            with h5py.File(str(ens_dir / 'basin_ts_OL.h5'), 'r') as hf:
+                mm = hf['tws']
+                subbasin_num = len(list(mm.keys())) - 1
+                basin_tws = []
+                for subbasin in range(1, subbasin_num + 1):
+                    nn = mm['sub_basin_%s' % subbasin][:]
+                    if len(nn) != len(days):
+                        raise ValueError('gather_OLmean: basin_ts_OL.h5 of Ens_%d has %d days, the period %s..%s has '
+                                         '%d' % (ens_id, len(nn), configDA.basic.fromdate, configDA.basic.todate,
+                                                 len(days)))
+                    basin_tws.append(np.mean([nn[w].mean() for w in windows]))
             ens_TWS.append(basin_tws)
-
         ens_TWS = np.array(ens_TWS)
 
         mean_0 = ens_TWS[0]
         mean_1 = np.mean(ens_TWS[1:], axis=0)
 
-        fn = Path(self.configDA.obs.GRACE['OL_mean']) / (
-                '%s_%s.hdf5' % (self.configDA.basic.case, self.configDA.basic.basin))
-        ww = h5py.File(fn, 'w')
-        ww.create_dataset(data=mean_0, name='mean_unperturbed')
-        ww.create_dataset(data=mean_1, name='mean_ensemble')
-        ww.close()
-
+        fn = Path(configDA.obs.GRACE['OL_mean']) / ('%s_%s.hdf5' % (configDA.basic.case, configDA.basic.basin))
+        dt = h5py.special_dtype(vlen=str)
+        with h5py.File(fn, 'w') as ww:
+            ww.create_dataset(data=mean_0, name='mean_unperturbed')
+            ww.create_dataset(data=mean_1, name='mean_ensemble')
+            ww.create_dataset(data=[t for t, _ in epochs], name='time_epoch', dtype=dt)
+            ww.create_dataset(data=[d for _, d in epochs], name='duration', dtype=dt)
+        print('OL mean over %d GRACE epochs (%s .. %s) -> %s' % (len(epochs), epochs[0][0], epochs[-1][0], fn))
         pass
+
+    def _obs_aux(self):
+        """time reference (epochs and observation windows) of the observation kind in DA_setting.json for the
+        assimilation period; used by gather_OLmean and generate_perturbed_GRACE_obs"""
+        from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_GRACE_SH_monthly, aux_GRACE_mascon_monthly, \
+            aux_ESM3_5daily, aux_TUD_5daily
+
+        configDA = self.configDA
+        begin_day = configDA.basic.fromdate
+        end_day = configDA.basic.todate
+        kind = configDA.obs.GRACE['kind']
+        if kind == 'SH_monthly':
+            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
+            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
+            return aux_GRACE_SH_monthly().setTimeReference(month_begin=t1, month_end=t2,
+                                                           dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        if kind == 'ESA_SING':
+            return aux_ESAsing_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                         dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        if kind == 'ESA_SING_ESM3':
+            return aux_ESM3_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        if kind == 'Mascon_monthly':
+            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
+            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
+            return aux_GRACE_mascon_monthly().setTimeReference(month_begin=t1, month_end=t2,
+                                                               dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        if kind == 'TUD_5daily':
+            '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
+            return aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
+                                                     dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
+                                                     filename=configDA.obs.GRACE.get(
+                                                         'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
+        raise ValueError('unknown observation kind: %s' % kind)
 
     def make_state_envelope(self, variables=('riverstor', 'groundwstor'), force=False):
         """
@@ -179,44 +235,12 @@ class DA_GRACE:
         pass
 
     def generate_perturbed_GRACE_obs(self):
-        from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_GRACE_SH_monthly, aux_GRACE_mascon_monthly, \
-            aux_ESM3_5daily, aux_TUD_5daily
         from src_OBS.GRACE_perturbation import GRACE_perturbed_obs
 
         configDA = self.configDA
-        begin_day = configDA.basic.fromdate
-        end_day = configDA.basic.todate
-
         ob = GRACE_perturbed_obs(ens=configDA.basic.ensemble, basin_name=configDA.basic.basin)
         ob.configure_dir(input_dir=configDA.obs.GRACE['preprocess_res'], obs_dir=configDA.obs.dir)
-
-        if configDA.obs.GRACE['kind'] == 'SH_monthly':
-            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
-            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
-            obs_aux = aux_GRACE_SH_monthly().setTimeReference(month_begin=t1, month_end=t2,
-                                                              dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-        elif configDA.obs.GRACE['kind'] == 'ESA_SING':
-            obs_aux = aux_ESAsing_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
-                                                            dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-        elif configDA.obs.GRACE['kind'] == 'ESA_SING_ESM3':
-            obs_aux = aux_ESM3_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
-                                                         dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-
-        elif configDA.obs.GRACE['kind'] == 'Mascon_monthly':
-            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
-            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
-            obs_aux = aux_GRACE_mascon_monthly().setTimeReference(month_begin=t1, month_end=t2,
-                                                                  dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-        elif configDA.obs.GRACE['kind'] == 'TUD_5daily':
-            '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
-            obs_aux = aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
-                                                        dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
-                                                        filename=configDA.obs.GRACE.get(
-                                                            'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
-        else:
-            raise ValueError('unknown observation kind: %s' % configDA.obs.GRACE['kind'])
-
-        ob.configure_obs_aux(obs_aux=obs_aux)
+        ob.configure_obs_aux(obs_aux=self._obs_aux())
         ob.perturb_TWS().remove_temporal_mean()
         fn = Path(configDA.obs.GRACE['OL_mean']) / ('%s_%s.hdf5' % (configDA.basic.case, configDA.basic.basin))
         ob.add_temporal_mean(fn=str(fn))

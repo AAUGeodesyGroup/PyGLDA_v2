@@ -20,8 +20,10 @@ class yearly_merge:
 
     def __init__(self, basin_mask_dir='', basin_name='Brahmaputra', case_name='test', state_dir='', output_dir='',
                  stage=Stage.OL):
-        bm = h5py.File(name=Path(basin_mask_dir) /basin_name /('%s_res_0.5.h5' % basin_name),
-                       mode='r')['basin'][:]  # this has to be 0.5 degree
+        with h5py.File(name=Path(basin_mask_dir) / basin_name / ('%s_res_0.5.h5' % basin_name), mode='r') as f:
+            bm = f['basin'][:]  # this has to be 0.5 degree
+            '''global unit mask (global_shp2mask): the yearly files keep the full grid, see _merge_year_files_global'''
+            self.__global = f.attrs.get('extent') == 'global'
 
         # 1. Convert the 0/1 numpy array to an xarray DataArray with boolean values
         # Ensure the dimensions and coordinates match the original dataset
@@ -72,7 +74,7 @@ class yearly_merge:
         reading, concatenate the year, mask everything outside the basin (NaN) and save the
         masked, compressed yearly file with the basin mask embedded.
         """
-        self._merge_year_files(apply_mask=True)
+        self._merge_year_files_global() if self.__global else self._merge_year_files(apply_mask=True)
 
     def merge_by_year(self):
         """
@@ -83,7 +85,7 @@ class yearly_merge:
         The crop is still applied - on a file that already spans exactly the box it is a
         no-op, and it protects against a DA run configured without is_crop_save.
         """
-        self._merge_year_files(apply_mask=True)
+        self._merge_year_files_global() if self.__global else self._merge_year_files(apply_mask=True)
 
     # ------------------------------------------------------------------------------------
     def _merge_year_files(self, apply_mask: bool):
@@ -171,6 +173,71 @@ class yearly_merge:
             ds_year.close()
             ds_out.close()
             del ds_year, ds_out
+            gc.collect()
+
+    # ------------------------------------------------------------------------------------
+    def _merge_year_files_global(self, complevel=1, tile=(36, 72)):
+        """
+        Global unit mask (attribute extent = 'global' in the mask file, see global_shp2mask / shp2mask.load_mask):
+        the yearly files keep the FULL grid and the model values outside the units, with the unit mask embedded as
+        region_mask (1 = cell updated by the DA, 0 = model only), because the global product uses WaterGAP where no
+        assimilation is done. A year of global fields (~13 GB) cannot be held in memory on 31 ranks, so the days are
+        written one at a time into a NETCDF4 file with an unlimited time axis (zlib `complevel`, lat/lon `tile` as
+        the daily writer). The file layout (time, lat, lon; time as days since 1900-01-01; region_mask) is that of the
+        regional yearly files, so that every reader (statistical_analysis, state_envelope, export_product) is unchanged.
+        """
+        import netCDF4 as nc
+        to_logfile = getattr(sys.stdout, "name", "<stdout>") not in ("<stdout>", "<stderr>")
+        region_mask = self.__mask.values.astype(np.int8)
+        print(f"Merging daily output into yearly files | {self.__stage.name} | Ens_{self.__ens_id} | "
+              f"{self.begin_date} to {self.end_date} | full grid {region_mask.shape[0]}x{region_mask.shape[1]} cells "
+              f"(global unit mask, model values kept outside the units)", flush=True)
+
+        for year in self.__years_to_process:
+            year_start = self.begin_date if year == self.__years_to_process[0] else f"{year}-01-01"
+            year_end = self.end_date if year == self.__years_to_process[-1] else f"{year}-12-31"
+            days = [d for d in pd.date_range(start=year_start, end=year_end)
+                    if os.path.exists(os.path.join(self.__state_dir, f"daily_output_{d.strftime('%Y-%m-%d')}.nc"))]
+            if not days:
+                print(f"  {year}: no daily files found, skipped")
+                continue
+            output_filename = os.path.join(self.__output_dir, f"daily_output_{year}.nc")
+            first = os.path.join(self.__state_dir, f"daily_output_{days[0].strftime('%Y-%m-%d')}.nc")
+            with nc.Dataset(first) as s0, nc.Dataset(output_filename, 'w', format='NETCDF4') as out:
+                lat, lon = s0['lat'][:], s0['lon'][:]
+                if region_mask.shape != (len(lat), len(lon)):
+                    raise ValueError(f"{os.path.basename(first)} is {(len(lat), len(lon))} but the unit mask is "
+                                     f"{region_mask.shape}: the output of a global case must be on the full grid "
+                                     f"(mask attribute extent = global, see shp2mask.load_mask)")
+                out.createDimension('time', None)
+                out.createDimension('lat', len(lat))
+                out.createDimension('lon', len(lon))
+                tv = out.createVariable('time', 'f8', ('time',))
+                tv.units, tv.calendar = 'days since 1900-01-01', 'proleptic_gregorian'
+                out.createVariable('lat', 'f8', ('lat',))[:] = lat
+                out.createVariable('lon', 'f8', ('lon',))[:] = lon
+                names = [v for v in s0.variables if v not in ('lat', 'lon', 'time')]
+                for v in names:
+                    var = out.createVariable(v, s0[v].dtype, ('time', 'lat', 'lon'), zlib=True, complevel=complevel,
+                                             chunksizes=(1, min(tile[0], len(lat)), min(tile[1], len(lon))),
+                                             fill_value=np.nan)
+                    for att in s0[v].ncattrs():
+                        if att not in ('_FillValue', 'missing_value'):
+                            var.setncattr(att, s0[v].getncattr(att))
+                rm = out.createVariable('region_mask', 'i1', ('lat', 'lon'), zlib=True, complevel=complevel)
+                rm[:] = region_mask
+                rm.setncattr('description', 'unit mask: 1 = cell updated by the data assimilation, 0 = model only')
+                bar = tqdm(total=len(days), desc=f"  {year}", unit="file", colour="cyan", file=sys.stdout,
+                           mininterval=10.0 if to_logfile else 0.5)
+                for n, d in enumerate(days):
+                    with nc.Dataset(os.path.join(self.__state_dir, f"daily_output_{d.strftime('%Y-%m-%d')}.nc")) as s:
+                        for v in names:
+                            out[v][n, :, :] = s[v][:]
+                    tv[n] = nc.date2num(d.to_pydatetime(), tv.units, tv.calendar)
+                    bar.update(1)
+            bar.set_postfix_str(f"{os.path.basename(output_filename)}  "
+                                f"{os.path.getsize(output_filename) / 1e6:.1f} MB")
+            bar.close()
             gc.collect()
 
 

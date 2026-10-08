@@ -9,12 +9,14 @@ from src_OBS.obs_auxiliary import obs_auxiliary
 
 
 class GRACE_perturbed_obs:
+    SEED = 20021            # seed of the observation perturbations: a rerun of DA_run gives the same observation ensemble
 
     def __init__(self, ens=30, basin_name='MDB'):
         self.ens = ens
         self.basin_name = basin_name
         self.TWS = None
         self.obs_aux = None
+        self._rng = np.random.default_rng(self.SEED)
         pass
 
     def configure_dir(self, input_dir='/media/user/My Book/Fan/src_OBS/output',
@@ -92,9 +94,9 @@ class GRACE_perturbed_obs:
             '''perturb the signal'''
             if basin_num == 1:
                 '''in case there is only one subbasin'''
-                perturbed_TWS = np.random.normal(a, np.sqrt(mcov), self.ens)[:, None]
+                perturbed_TWS = self._rng.normal(a, np.sqrt(mcov), self.ens)[:, None]
             else:
-                perturbed_TWS = np.random.multivariate_normal(a, mcov, self.ens)
+                perturbed_TWS = self._rng.multivariate_normal(a, mcov, self.ens)
 
             new_time.append(time)
             COV.append(mcov)

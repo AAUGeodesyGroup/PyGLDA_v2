@@ -129,17 +129,18 @@ class RDA:
 
     @staticmethod
     def config_basin_mask():
-        from src_auxiliary.shp2mask import basin_shp_process
+        import numpy as np
+        import h5py
+        from src_auxiliary.shp2mask import basin_shp_process, mask_05_to_1
 
         '''for WaterGAP'''
         basin_shp = basin_shp_process(save_dir=Path(RDA.external_data_path) / 'Basin/mask',
                                       basin_name=RDA.basin, res=0.5)
         basin_shp.shp_to_mask(shp_path=RDA.shp_path, issave=True)
 
-        '''for GRACE'''
-        basin_shp = basin_shp_process(save_dir=Path(RDA.external_data_path) / 'Basin/mask',
-                                      basin_name=RDA.basin, res=1)
-        basin_shp.shp_to_mask(shp_path=RDA.shp_path, issave=True)
+        '''for GRACE (covariance): 1 degree derived from the 0.5-degree mask, WaterGAP land cells only'''
+        land_05 = np.flipud(h5py.File(RDA._land_mask(), 'r')['resolution_05']['mask'][:]).astype(bool)
+        mask_05_to_1(mask05_path=basin_shp.save_dir / ('%s_res_0.5.h5' % RDA.basin), land_05=land_05)
 
         pass
 
@@ -152,7 +153,7 @@ class RDA:
         GR = GRACE_CSR_mascon(basin_name=RDA.basin, shp_path=RDA.shp_path)
 
         GR.configure_global_land_ocean_mask(
-            fn=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
+            fn=RDA._land_mask())
         GR.generate_mask(save_dir=Path(RDA.external_data_path) / 'Basin/mask')
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
@@ -171,7 +172,7 @@ class RDA:
             g = configDA.obs.GRACE
             GR = GRACE_TUD_5daily(basin_name=RDA.basin, shp_path=RDA.shp_path)
             GR.configure_global_land_ocean_mask(
-                fn=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
+                fn=RDA._land_mask())
             GR.generate_mask(save_dir=Path(RDA.external_data_path) / 'Basin/mask')
             GR.set_extra_info(dir_in=dir_in,
                               ewh_file=g.get('ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'),
@@ -452,7 +453,8 @@ class RDA:
             Stage.OL -> configDA.basic.OL_output_temp_dir / Ens_k
             Stage.DA -> configDA.basic.DA_output_temp_dir / <case> / Ens_k
         The stage must already be collected (Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5 present for
-        every member), otherwise nothing is deleted unless force=True.
+        every member), otherwise nothing is deleted unless force=True. The OL scratch is shared between cases
+        (a global open loop is reused, e.g. by demo_Global), so Stage.OL is always refused without force=True.
         dry_run=True (default) only reports the files and their size. Run it as a single process
         (not under mpiexec), e.g. from demo1() after collect_and_statistics() has finished.
         """
@@ -582,7 +584,7 @@ class RDA:
             bp.save_GRACE(prefix=RDA.basin, save_dir=res_case)
             hm.run_GRACE(grace_dir=configDA.obs.GRACE['preprocess_res'], basin=RDA.basin,
                          basin_mask_path=configDA.basic.basin_mask,
-                         land_mask_path=Path(RDA.external_data_path) / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
+                         land_mask_path=RDA._land_mask())
             print('post-processing GRACE done: GRACE_%s.h5, Harmonic_GRACE.nc' % RDA.basin)
 
 
@@ -674,6 +676,13 @@ class RDA:
         from src_postprocessing.export_product import product_export
 
         return product_export(setting_dir=RDA.setting_dir, version=version).run()
+
+    # ------------------------------------------------------------------ internal helpers
+    @staticmethod
+    def _land_mask():
+        """land mask of the GRACE processing: WaterGAP land (src_auxiliary.watergap_land_mask), the cells over which
+        the DA averages the model, so that GRACE and model unit means are consistent"""
+        return Path(RDA.external_data_path) / 'GRACE/global_mask/WaterGAPLandMask.hdf5'
 
 
 

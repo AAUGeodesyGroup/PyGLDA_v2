@@ -43,6 +43,10 @@ PyGLDA v2 makes three minimal modifications to the WaterGAP 2.2e source, each co
 
 3. **`src_GHM/ReWaterGAP/model/verticalwaterbalance/waterbalance_vertical.py`** (performance only, 2026-10-05) — In `vert_water_balance`, the line `snow_water_storage_subgrid_out = snow_water_storage_subgrid.copy()` was replaced by `snow_water_storage_subgrid_out = snow_water_storage_subgrid`. `snow_water_balance` receives a view of each cell's 100 elevation-band storages and already updates them in place, so the copy (100 x 360 x 720 float64, 207 MB per model day and per ensemble member) only duplicated values that are overwritten cell by cell. Results are expected to be bit-identical; `temp/env_test/check_snow_copy.py` runs the original and the modified routine on the same input and compares the restart states and daily output. To revert, restore the `.copy()` on that line.
 
+## Changes in PyGLDA that alter the results of earlier cases
+
+- **GRACE land mask (2026-10-07).** The GRACE processing (`src_OBS/prepare_GRACE*.py`, called by `RDA.get_GRACE_obs`) now applies the WaterGAP land mask `GRACE/global_mask/WaterGAPLandMask.hdf5` (written once by `src_auxiliary/watergap_land_mask.py` from `watergap_22e_continentalarea.nc`; 67 420 cells at 0.5°, 18 316 at 1° = any of the four 0.5° cells is land) instead of the GRACE land mask `GlobalLandMaskForGRACE.hdf5`, so that the GRACE unit means are taken over the same cells as the model means. The former mask left out 5 964 WaterGAP land cells (9 %, mostly along the coast and north of 60°N). GRACE basin series, covariances and gridded GRACE files of earlier cases (e.g. demo_Danube) differ slightly after rerunning `get_GRACE_obs`. The 1° mask for the GRACE covariance is no longer rasterised from the shapefile but derived from the 0.5° DA mask (`shp2mask.mask_05_to_1`: a 1° cell goes to the sub-basin owning most of its 0.5° land cells).
+
 ## Requirements
 
 - Python >= 3.8

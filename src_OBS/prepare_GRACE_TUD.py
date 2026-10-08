@@ -237,7 +237,7 @@ def demo_Amazon():
     """stand-alone check: units, then the three products for the Amazon"""
     base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
     GR = GRACE_TUD_5daily(basin_name='Amazon', shp_path=str(base / 'Basin/shp/Amazon/Amazon.shp'))
-    GR.configure_global_land_ocean_mask(fn=str(base / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5'))
+    GR.configure_global_land_ocean_mask(fn=str(base / 'GRACE/global_mask/WaterGAPLandMask.hdf5'))
     GR.generate_mask(save_dir=str(base / 'Basin/mask'))
     GR.set_extra_info(dir_in=str(base / 'GRACE/Miguel_Tudelft'), unit='cm', corr_length_km=300.0)
     GR.inspect(day_begin='2002-04-01', day_end='2002-12-31')

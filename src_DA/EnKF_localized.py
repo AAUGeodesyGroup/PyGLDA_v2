@@ -33,6 +33,7 @@ from src_DA.bounds import StateBounds
 
 class EnKF_localized(EnKF):
     METHOD = 'EnKF_localized'
+    OBS_PERTURBATION_SEED = 20021            # obs_error_correlation 'diagonal': seed of the member perturbations
 
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
                  sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
@@ -170,9 +171,13 @@ class EnKF_localized(EnKF):
         """
         Diagonal R and member observations perturbed consistently with it. The perturbations of the members,
         eps_i = y_i - y_0 (GRACE ens_k - ens_0, drawn from N(0, C) with the full covariance C of the product), are
-        whitened with the Cholesky factor of C and rescaled with the standard deviations of the diagonal R:
-            eps_i' = diag(sqrt(R_jj)) L^-1 eps_i,  C = L L^T      ->   eps_i' ~ N(0, diag(R))
-        so the same random numbers are used, only their correlation is removed.
+        replaced by independent draws eps_i' ~ N(0, diag(R)) from a generator seeded with OBS_PERTURBATION_SEED
+        (one draw per update, the same sequence in every run), so that the spread of the member observations is
+        exactly the R used in the gain.
+        Until 7 Oct 2026 eps_i was whitened with a factor of C (eps_i' = diag(sqrt R_jj) L^-1 eps_i, C = L L^T),
+        which is exact only for a well-conditioned C: the sample covariance of 772 global units is rank-deficient
+        (fewer samples than units) or ill-conditioned, the eigenvalue floor then shrank most components of L^-1 eps,
+        and the member observations had a fraction of the spread sqrt(R_jj) (over-confident analyses).
         """
         Rd = np.diag(np.diag(R))
         raw, ref = getattr(self, '_obs_raw', None), getattr(self, '_obs_unperturbed', None)
@@ -182,13 +187,9 @@ class EnKF_localized(EnKF):
                       'diagonal (member perturbations keep their correlation)' % self.METHOD)
             return obs, Rd
         eps = raw - np.asarray(ref)[:, None]
-        try:
-            Lc = np.linalg.cholesky(obs_cov)
-        except np.linalg.LinAlgError:
-            w, V = np.linalg.eigh(obs_cov)
-            Lc = V @ np.diag(np.sqrt(np.maximum(w, 1e-12)))
-        z = np.linalg.solve(Lc, eps)
-        eps_new = np.sqrt(np.diag(R))[:, None] * z
+        if not hasattr(self, '_obs_rng'):
+            self._obs_rng = np.random.default_rng(self.OBS_PERTURBATION_SEED)
+        eps_new = np.sqrt(np.diag(R))[:, None] * self._obs_rng.standard_normal(eps.shape)
         self._n_obs_decorrelated += 1
         self._last_eps = eps_new                    # perturbation now contained in obs (used by the centring)
         return obs - eps + eps_new, Rd

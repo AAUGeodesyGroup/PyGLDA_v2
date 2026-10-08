@@ -217,7 +217,7 @@ def demo2():
     GR = GRACE_CSR_mascon(basin_name='Brahmaputra',
                           shp_path='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp')
 
-    GR.configure_global_land_ocean_mask(fn='/media/user/My Book/Fan/WaterGap/GRACE/global_mask/GlobalLandMaskForGRACE.hdf5')
+    GR.configure_global_land_ocean_mask(fn='/media/user/My Book/Fan/WaterGap/GRACE/global_mask/WaterGAPLandMask.hdf5')
 
     GR.generate_mask(save_dir='/media/user/My Book/Fan/WaterGap/Basin/mask')
 

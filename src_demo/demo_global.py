@@ -33,7 +33,7 @@ def demo1():
     # GDA.config_external_data()
     # GDA.read_config_and_save()                 # case, basin, shp, mask and ensemble size into DA_setting.json
     # GDA.check_units()                          # frozen unit set GlobalBasins v1.0
-    # GDA.get_GRACE_obs(is_diagonal=False)       # unit TWS + 772 x 772 COV -> GRACE/output/GlobalBasins_v1.0_*.hdf5
+    # GDA.get_GRACE_obs()                        # unit TWS + 772 x 772 COV -> GRACE/output/GlobalBasins_v1.0_*.hdf5
 
     '''after the data assimilation: global evaluation (to come)'''
     pass

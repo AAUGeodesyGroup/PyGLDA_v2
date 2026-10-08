@@ -11,6 +11,8 @@ Safety rules
   * only files named daily_output_*.nc inside Ens_* folders are touched; no other files, no folders
   * a stage whose results have not been collected yet (Res/<case>/<STAGE>/Ens_k/basin_ts_<STAGE>.h5
     missing for one of the members) is refused unless force=True
+  * the open-loop scratch <OL_output_temp_dir>/Ens_k is shared between cases (a global open loop is reused by
+    other cases, e.g. demo_Global on the open loop of demo_Danube); it is refused unless force=True
 """
 import re
 from pathlib import Path
@@ -35,9 +37,17 @@ def clean_daily_output(temp_dir, res_dir, stage: Stage, case=None, dry_run=True,
         raise ValueError('clean_daily_output: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
     stage_name = stage.name                       # folder / file names: Res/<case>/OL, basin_ts_OL.h5, ...
     temp_dir, res_dir = Path(temp_dir), Path(res_dir)
+    out = dict(files=0, bytes=0, deleted=False, skipped_reason=None)
     if case is not None and (temp_dir / case).is_dir():
         temp_dir = temp_dir / case
-    out = dict(files=0, bytes=0, deleted=False, skipped_reason=None)
+    elif stage == Stage.OL and not force:
+        '''<OL_output_temp_dir>/Ens_k is not case-specific: the global open loop there is reused by other cases
+        (e.g. demo_Global assimilates on the open loop of demo_Danube), and the collection check below only looks at
+        Res/<this case>. Deleting it needs force=True.'''
+        out['skipped_reason'] = ('%s is shared between cases (no folder %s): the open loop there may be used by '
+                                 'other cases' % (temp_dir, temp_dir / (case or '<case>')))
+        print('[%s] %s -> skipped; use force=True to delete it anyway' % (stage_name, out['skipped_reason']))
+        return out
 
     if not temp_dir.is_dir():
         out['skipped_reason'] = 'no folder %s' % temp_dir

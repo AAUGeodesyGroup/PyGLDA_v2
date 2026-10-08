@@ -457,26 +457,40 @@ def _warnings(summ, S, units, wdate, sig_sub, kk, res_dir, thr, TH):
     # 1. grid cells with extreme trends
     try:
         import netCDF4
-        H = {}
+        H, C = {}, {}
         for st in ('OL', 'DA', 'GRACE'):
             p = Path(res_dir) / ('Harmonic_%s.nc' % st)
             if p.exists():
                 with netCDF4.Dataset(p) as nc:
                     key = 'tws_trend_ensmean' if 'tws_trend_ensmean' in nc.variables else 'tws_trend'
                     H[st] = np.ma.filled(nc.variables[key][:], np.nan).astype(float)
-                    lat, lon = nc.variables['lat'][:], nc.variables['lon'][:]
+                    C[st] = (np.asarray(nc.variables['lat'][:], float), np.asarray(nc.variables['lon'][:], float))
                     if st == 'DA' and 'tws_trend_ensspread' in nc.variables:
                         H['DA_spread'] = np.ma.filled(nc.variables['tws_trend_ensspread'][:], np.nan)
         if 'DA' in H:
+            lat, lon = C['DA']
+
+            def at(st, la, lo):
+                '''value of map `st` at the cell (la, lo), looked up by coordinate: the maps need not share a grid
+                (Harmonic_GRACE.nc may be on another box than the model maps)'''
+                if st not in H:
+                    return None
+                la_s, lo_s = C[st]
+                i, j = np.argmin(np.abs(la_s - la)), np.argmin(np.abs(lo_s - lo))
+                if abs(la_s[i] - la) > 1e-6 or abs(lo_s[j] - lo) > 1e-6:
+                    return None
+                return float(H[st][i, j])
+
             big = np.zeros_like(H['DA'], bool)
             for st in ('OL', 'DA'):
-                if st in H:
+                if st in H and H[st].shape == H['DA'].shape:
                     big |= np.abs(np.nan_to_num(H[st])) > TH['trend_cell_mm_yr']
             iy, ix = np.where(big)
             order = np.argsort(-np.abs(np.nan_to_num(H['DA'][iy, ix])))
             cells = [dict(lat=float(lat[iy[o]]), lon=float(lon[ix[o]]),
-                          OL=float(H.get('OL', H['DA'])[iy[o], ix[o]]), DA=float(H['DA'][iy[o], ix[o]]),
-                          GRACE=float(H['GRACE'][iy[o], ix[o]]) if 'GRACE' in H else None,
+                          OL=at('OL', lat[iy[o]], lon[ix[o]]) if 'OL' in H else float(H['DA'][iy[o], ix[o]]),
+                          DA=float(H['DA'][iy[o], ix[o]]),
+                          GRACE=at('GRACE', lat[iy[o]], lon[ix[o]]),
                           DA_member_spread=float(H['DA_spread'][iy[o], ix[o]]) if 'DA_spread' in H else None)
                      for o in order]
             if cells:

@@ -8,6 +8,7 @@ reader) with the options a global run needs:
                   basin covers at least area_threshold of the cell (default 0.4, as shp2mask)
   rule 'centre' : a cell belongs to the sub-basin whose polygon contains (or touches) the cell centre
   output        : <save_dir>/<basin_name>/<basin_name>_res_<res>.h5 with 'basin' and 'sub_basin_<ID>' (int), attrs
+                  (+ <basin_name>_res_1.h5 for the GRACE covariance, derived from it by shp2mask.mask_05_to_1 in demo2)
                   'rule'; gzip-compressed (600+ layers of mostly zeros); read with shp2mask.load_mask
   mask_to_vec   : inherited from shp2mask
 demo1 checks that both codes give identical masks for the Danube.
@@ -26,7 +27,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src_auxiliary.shp2mask import basin_shp_process, load_mask
+from src_auxiliary.shp2mask import basin_shp_process, load_mask, mask_05_to_1
 
 
 class global_shp_process(basin_shp_process):
@@ -234,6 +235,8 @@ def demo2():
     gp.configure_model_mask(continental_area_nc=EXT / 'Input_data/static_input/watergap_22e_continentalarea.nc')
     gp.configure_exclude(EXT / 'Basin/shp/Global/GlobalBasins_removed.shp')
     gp.shp_to_mask(shp_path=EXT / 'Basin/shp/Global/GlobalBasins.shp', issave=True)
+    '''1-degree mask for the GRACE covariance, derived from the 0.5-degree mask (all its cells are model land)'''
+    mask_05_to_1(mask05_path=EXT / 'Basin/mask/GlobalBasins/GlobalBasins_res_0.5.h5')
     gp.plot_mask(shp_path=EXT / 'Basin/shp/Global/GlobalBasins.shp', fn=EXT / 'Basin/mask/GlobalBasins/GlobalBasins_mask',
                  allow_pop_up=False)
     box_crop, local_mask = load_mask(EXT / 'Basin/mask/GlobalBasins/GlobalBasins_res_0.5.h5')

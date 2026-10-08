@@ -89,22 +89,27 @@ class UnitConverter:
         derived from the local_mask returned by load_mask().
         """
         gm = local_mask['global_2d'].astype(bool)
+        b2 = np.asarray(local_mask['basin_2d'])
 
-        row_idx = np.where(np.any(gm, axis=1))[0]
-        col_idx = np.where(np.any(gm, axis=0))[0]
+        if b2.shape == gm.shape:
+            '''global unit mask (shp2mask.load_mask, attribute extent = 'global'): the box is the whole grid, no crop;
+            the bounding box of the units (rows 24..279 for GlobalBasins v1.0) would not match basin_2d'''
+            r0, r1, c0, c1 = 0, gm.shape[0], 0, gm.shape[1]
+        else:
+            '''regional mask: the box of load_mask is the bounding box of the basin cells'''
+            row_idx = np.where(np.any(gm, axis=1))[0]
+            col_idx = np.where(np.any(gm, axis=0))[0]
+            r0, r1, c0, c1 = row_idx[0], row_idx[-1] + 1, col_idx[0], col_idx[-1] + 1
 
-        cell_area_box = cell_area_global[row_idx[0]:row_idx[-1] + 1,
-                        col_idx[0]:col_idx[-1] + 1]
-        contfrac_box = contfrac_global[row_idx[0]:row_idx[-1] + 1,
-                       col_idx[0]:col_idx[-1] + 1]
+        cell_area_box = cell_area_global[r0:r1, c0:c1]
+        contfrac_box = contfrac_global[r0:r1, c0:c1]
 
-        assert cell_area_box.shape == local_mask['basin_2d'].shape
+        assert cell_area_box.shape == b2.shape, \
+            'UnitConverter.from_basin_mask: box %s of the model fields does not match basin_2d %s' % (
+                cell_area_box.shape, b2.shape)
 
-        instance= cls(cell_area_box, contfrac_box)
-        instance._r0 = row_idx[0]  # ← ADD
-        instance._r1 = row_idx[-1] + 1  # ← ADD
-        instance._c0 = col_idx[0]  # ← ADD
-        instance._c1 = col_idx[-1] + 1  # ← ADD
+        instance = cls(cell_area_box, contfrac_box)
+        instance._r0, instance._r1, instance._c0, instance._c1 = r0, r1, c0, c1
 
         return instance
 

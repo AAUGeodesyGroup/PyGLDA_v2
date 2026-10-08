@@ -33,8 +33,8 @@ class BasinAverageAnalysis:
         """
         area-weighted (cos lat) mean of every variable over the basin and every sub-basin -> basin_ts_<stage>.h5
         (groups per variable, one dataset per key 'basin', 'sub_basin_k'). The weights of all keys are one sparse
-        matrix on the grid of the loaded files (shp2mask.unit_weights), so every variable is read once and averaged for
-        all keys in a single product - the former loop reloaded the whole field once per key.
+        matrix on the grid of the loaded files (shp2mask.unit_weights), so every variable is read once, year by year,
+        and averaged for all keys in a single product - the former loop reloaded the whole field once per key.
         """
         from src_auxiliary.shp2mask import unit_weights
 
@@ -43,8 +43,16 @@ class BasinAverageAnalysis:
 
         res = {}
         for key in self.__variable_list:
-            field = self.ds[key].values.reshape(n_time, -1)                 # (time, lat*lon), read once
-            means = np.asarray(W @ field.T)                                 # (n_key, time)
+            da = self.ds[key]
+            '''one dask chunk (= one yearly file) at a time: a global variable over 18 years would be ~14 GB per rank'''
+            t_axis = da.get_axis_num('time')
+            sizes = da.chunks[t_axis] if da.chunks is not None else (n_time,)
+            parts, t0 = [], 0
+            for n in sizes:
+                block = da.isel(time=slice(t0, t0 + n)).values.reshape(n, -1)   # (days, lat*lon)
+                parts.append(np.asarray(W @ block.T))                           # (n_key, days)
+                t0 += n
+            means = np.concatenate(parts, axis=1)
             res[key] = {k: means[r].copy() for r, k in enumerate(keys)}
 
         hf = h5py.File(str(Path(self.__state_dir) / ('basin_ts_%s.h5'%self.__stage.name)), 'w')
@@ -594,14 +602,15 @@ class HarmonicMapAnalysis:
         prepare_GRACE_mascon.grid_TWS: <grace_dir>/<basin>_gridded_signal.hdf5 holds 'tws'
         (n_months, n_cells) in mm on the 0.5-degree model grid, the cells being the basin mask
         intersected with GRACE's 0.5-degree land mask (row-major order), and 'time_epoch'
-        ('YYYY-MM-15'). The cells are put back on the grid, cropped to the basin bounding box
-        (same box as the OL/DA yearly files) and every cell's monthly series is fitted.
+        ('YYYY-MM-15'). The cells are put back on the grid, cut to the box of the OL/DA yearly files
+        (basin bounding box; the whole grid for a global unit mask) and every cell's monthly series is fitted.
 
         Output: Res/<case>/Harmonic_GRACE.nc with tws_<quantity> on (lat, lon). GRACE values are
         anomalies, so 'bias' is not comparable with the model; trend, amplitudes, phases and
         peak days are.
 
-        land_mask_path : GlobalLandMaskForGRACE.hdf5 (group 'resolution_05'). Needed only when
+        land_mask_path : land mask of the GRACE processing, WaterGAPLandMask.hdf5 (group 'resolution_05';
+                         the former GlobalLandMaskForGRACE.hdf5 has the same layout). Needed only when
                          the land mask removed cells from the basin; if the cell count already
                          matches the bare basin mask it is not used.
         """
@@ -624,16 +633,19 @@ class HarmonicMapAnalysis:
             mask = basin_2d & land_05
             assert mask.sum() == n_cells, f"cell count mismatch: file {n_cells}, basin&land mask {mask.sum()}"
 
-        # cells back onto the global grid, then crop to the basin bounding box
+        # cells back onto the global grid, then the box of the OL/DA yearly files (shp2mask.load_mask: the basin
+        # bounding box for a regional mask, the whole grid for a global unit mask), so that Harmonic_GRACE.nc is on
+        # the same grid as Harmonic_OL/DA.nc
+        from src_auxiliary.shp2mask import load_mask
+        box, _ = load_mask(basin_mask_path)
         res = 0.5; err = res / 10
         lat_g = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
         lon_g = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
         full = np.full((n_months, lat_g.size, lon_g.size), np.nan)
         full[:, mask] = tws
-        rows, cols = np.where(basin_2d)
-        r0, r1, c0, c1 = rows.min(), rows.max() + 1, cols.min(), cols.max() + 1
-        cube = xr.DataArray(full[:, r0:r1, c0:c1], dims=('time', 'lat', 'lon'),
-                            coords={'time': pd.to_datetime(epochs), 'lat': lat_g[r0:r1], 'lon': lon_g[c0:c1]})
+        cube = xr.DataArray(full, dims=('time', 'lat', 'lon'),
+                            coords={'time': pd.to_datetime(epochs), 'lat': lat_g, 'lon': lon_g})
+        cube = cube.sel(lat=slice(box['lat_max'], box['lat_min']), lon=slice(box['lon_min'], box['lon_max']))
         cube = cube.sel(time=slice(self.date_begin, self.date_end))
         tfrac = self._year_fraction(cube['time'].values)
         print(f"Harmonic map analysis | GRACE | {basin} | {len(tfrac)} months in {self.date_begin} to {self.date_end} | "

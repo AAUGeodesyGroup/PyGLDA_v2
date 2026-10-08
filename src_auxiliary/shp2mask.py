@@ -429,6 +429,70 @@ def unit_weights(mask_path, lat, lon, include_basin=True):
     return W, keys
 
 
+def mask_05_to_1(mask05_path, out_path=None, land_05=None, verbose=True):
+    """
+    1-degree mask for the GRACE covariance (src_OBS.prepare_GRACE.basin_COV) derived from the 0.5-degree DA mask, so that
+    both resolutions describe the same cells (instead of rasterising the shapefile a second time at 1 degree):
+      - a 1-degree cell belongs to the sub-basin that owns most of its four 0.5-degree cells (land cells only when
+        `land_05` [360 x 720, lat 90 -> -90, bool] is given, e.g. the WaterGAP land of GRACE/global_mask/
+        WaterGAPLandMask.hdf5); a tie goes to the sub-basin with the smaller 0.5-degree area
+      - a sub-basin that wins no 1-degree cell keeps the cell where it has most 0.5-degree cells (that cell is then in
+        two sub-basins; reported)
+    Output <out_path> (default: <basin>_res_1.h5 next to the input) in the shp2mask layout: 'basin', 'sub_basin_<k>'
+    (int, 180 x 360, lat 90 -> -90), attributes of the 0.5-degree file plus 'derived_from'.
+    returns out_path
+    """
+    mask05_path = Path(mask05_path)
+    out_path = Path(out_path) if out_path is not None else mask05_path.with_name(
+        mask05_path.name.replace('_res_0.5.h5', '_res_1.h5'))
+    with h5py.File(mask05_path, 'r') as f:
+        ids = sorted(int(k.split('_')[-1]) for k in f.keys() if k.startswith('sub_basin_'))
+        attrs = dict(f.attrs)
+        '''step-1: count of 0.5-degree (land) cells of every sub-basin in every 1-degree cell'''
+        count = np.zeros((len(ids), 180, 360), dtype=np.int16)
+        area05 = np.zeros(len(ids), dtype=np.int64)
+        for r, k in enumerate(ids):
+            m = f['sub_basin_%d' % k][()].astype(bool)
+            if land_05 is not None:
+                m &= np.asarray(land_05, dtype=bool)
+            area05[r] = m.sum()
+            count[r] = m.reshape(180, 2, 360, 2).sum(axis=(1, 3))
+
+    '''step-2: majority rule, ties to the smaller sub-basin (stable sort on area, argmax takes the first maximum)'''
+    order = np.argsort(area05, kind='stable')
+    best = np.argmax(count[order], axis=0)                                  # index into `order`
+    owner = np.where(count.sum(axis=0) > 0, order[best], -1)                # (180, 360), -1 = no cell
+    masks1 = {k: owner == r for r, k in enumerate(ids)}
+
+    '''step-3: a sub-basin without a 1-degree cell keeps its best cell'''
+    rescued = []
+    for r, k in enumerate(ids):
+        if not masks1[k].any() and area05[r] > 0:
+            i, j = np.unravel_index(np.argmax(count[r]), count[r].shape)
+            masks1[k][i, j] = True
+            rescued.append(k)
+
+    '''step-4: write in the shp2mask layout'''
+    basin1 = np.zeros((180, 360), dtype=bool)
+    for k in ids:
+        basin1 |= masks1[k]
+    with h5py.File(out_path, 'w') as hf:
+        for k in ids:
+            hf.create_dataset('sub_basin_%d' % k, data=masks1[k].astype(int), compression='gzip')
+        hf.create_dataset('basin', data=basin1.astype(int), compression='gzip')
+        for a, v in attrs.items():
+            hf.attrs[a] = v
+        hf.attrs['derived_from'] = '%s, majority of the 0.5-degree%s cells, ties to the smaller sub-basin' % (
+            mask05_path.name, ' land' if land_05 is not None else '')
+        hf.attrs['n_empty_rescued'] = len(rescued)
+    if verbose:
+        print('written %s: %d sub-basins, %d cells at 1 degree from %d at 0.5 degree%s'
+              % (out_path, len(ids), basin1.sum(), area05.sum(),
+                 '; %d sub-basin(s) without a majority cell kept their best cell: %s' % (len(rescued), rescued)
+                 if rescued else ''))
+    return out_path
+
+
 def demo_Danube():
     """rasterise the HydroBASINS Danube shapefile with the default rule and plot the grid"""
     base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
