@@ -48,10 +48,12 @@ def make_state_envelope(res_dir, case: str, ens: int, basin: str, out_dir,
                 for v in variables:
                     if v not in ds:
                         raise KeyError('%s not in %s' % (v, fn))
-                    a = ds[v].values.astype(float)               # (time, lat, lon), NaN outside the basin
+                    a = ds[v].values                             # (time, lat, lon), file dtype (no float64 copy)
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore", category=RuntimeWarning)   # all-NaN outside the basin
-                        lo, hi = np.nanmin(a, axis=0), np.nanmax(a, axis=0)
+                        lo = np.nanmin(a, axis=0).astype(float)       # min / max are exact in the file dtype
+                        hi = np.nanmax(a, axis=0).astype(float)
+                    del a
                     vmin[v] = lo if vmin[v] is None else np.fmin(vmin[v], lo)
                     vmax[v] = hi if vmax[v] is None else np.fmax(vmax[v], hi)
             n_files += 1

@@ -12,7 +12,8 @@ class model_state_threshold:
     Physical bounds applied to the WaterGAP storages after the EnKF analysis step (regional 2-D fields, mm).
 
     Rules (only for the storages that are part of the DA state, configDA.model.layer == True):
-      soilmoist          0 <= S <= smax (maximum soil water content, static, from <Auxiliary_dir>/smax.nc)
+      soilmoist          0 <= S <= smax x land/continental fraction (smax from <Auxiliary_dir>/smax.nc; the fraction
+                         is the member's largest of the window, set_soil_scale)
       groundwstor        no bound by default. The open-loop envelope (min - (env_high-1)*range .. max + (env_high-1)*range)
                          was a safety net against metre-scale blow-ups of the 4-member standard EnKF partition
                          (Amazon run 3); with the non-negative partition and sub-basin-coherent additive inflation it
@@ -53,10 +54,12 @@ class model_state_threshold:
         self._lon_slice = slice(box_crop['lon_min'], box_crop['lon_max'])
         self.sub_labels = self._sub_basin_labels(configDA.basic.basin_mask, box_crop)
 
-        '''maximum soil water content'''
+        '''maximum soil water content (per land area, WaterGAP output smax.nc) and the factor that converts it to the
+        units of the daily files (per continental area), set for every window by set_soil_scale'''
         ds = xr.open_dataset(Path(configDA.basic.Auxiliary_dir) / 'smax.nc')
         self.smax = ds.sel(lon=self._lon_slice, lat=self._lat_slice)['smax'].values
         ds.close()
+        self.soil_scale = None
 
         '''open-loop envelope of river storage (optional)'''
         self.envelope = {}
@@ -114,10 +117,23 @@ class model_state_threshold:
         lab_global[lm['global_2d'].astype(bool)] = lm['unit_label'] + 1          # 0 = cell of no sub-basin
         return lab_global[i0:i1, j0:j1]
 
+    def set_soil_scale(self, scale):
+        """
+        Land / continental fraction of every cell of the regional box (2-D, the member's largest value of the current
+        window; None = 1). WaterGAP writes soil per continental area (soil x land fraction / continental fraction,
+        fan_waterbalance_vertical_init), smax.nc is per land area: the capacity of the daily soil is smax x scale.
+        With the unscaled smax (until 8 Oct 2026) the analysis could fill the soil of lake / wetland cells above
+        capacity and WaterGAP released the excess as runoff the next day. The largest value of the window is used
+        because the land fraction changes daily with the lakes and wetlands: no day's own soil is then above it.
+        """
+        self.soil_scale = None if scale is None else np.asarray(scale, dtype=float)
+
     # ------------------------------------------------------------------ bounds per storage
     def _bounds(self, var, x):
         """return (lower, upper) arrays or scalars for variable var, or None if unbounded"""
         if var == 'soilmoist':
+            if self.soil_scale is not None and np.shape(self.soil_scale) == np.shape(self.smax):
+                return 0.0, self.smax * self.soil_scale
             return 0.0, self.smax
         if var == 'swe':
             return 0.0, (np.inf if self.snow_max is None else self.snow_max)

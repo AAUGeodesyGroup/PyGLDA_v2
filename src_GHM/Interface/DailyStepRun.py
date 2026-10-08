@@ -582,6 +582,7 @@ class DailyModelRun:
     def passState(self, state:dict):
 
         self.vertical_waterbalance.canopy_storage = state['canopy_storage'].copy()
+        self._sync_snow_subgrid(state['snow_water_storage'])
         self.vertical_waterbalance.snow_water_storage = state['snow_water_storage'].copy()
         self.vertical_waterbalance.soil_water_content = state['soil_water_content'].copy()
         self.lateral_waterbalance.groundwater_storage = state['groundwater_storage'].copy()
@@ -592,6 +593,43 @@ class DailyModelRun:
         self.lateral_waterbalance.river_storage = state['river_storage'].copy()
         self.lateral_waterbalance.glores_storage = state['glores_storage'].copy()
 
+        pass
+
+
+    SNOW_SYNC_TOL = 1e-6        # mm: a cell snow differing less than this from the model's own is left as it is
+
+    def _sync_snow_subgrid(self, snow_new):
+        """
+        Bring the 100 elevation sub-cells of the snow storage in line with a cell snow value set from outside (the
+        analysis of the data assimilation). WaterGAP's snow routine works on the sub-cells only and recomputes the cell
+        snow every day as their mean (ReWaterGAP/model/verticalwaterbalance/snow.py), so setting only
+        snow_water_storage was undone on the next model day and the swe increment of the analysis was lost
+        (until 8 Oct 2026). Per cell, with old = mean of the current sub-cells and new = the given snow:
+            old > 0            sub-cells scaled by new / old (elevation structure kept, snow-free sub-cells stay free)
+            old = 0, new > 0   new on every sub-cell
+            new <= 0           sub-cells set to 0
+        A cell is touched only where the given snow differs from the cell snow the model currently holds (by more
+        than SNOW_SYNC_TOL): in the open loop, and on every DA day that is not a window end, the given state is a
+        copy of the model's own state, so nothing is touched by construction, whatever the sub-cells hold. NaN cells
+        are not touched. Not a change of the WaterGAP code: only of the state handed to it.
+        """
+        sub = self.vertical_waterbalance.snow_water_storage_subgrid             # (n_elev, lat, lon), mm
+        new = np.asarray(snow_new, dtype=float)
+        current = np.asarray(self.vertical_waterbalance.snow_water_storage, dtype=float)
+        with np.errstate(invalid='ignore'):
+            change = np.isfinite(new) & ~(np.abs(new - current) <= self.SNOW_SYNC_TOL)
+        if not change.any():
+            return
+        old = sub.mean(axis=0)
+        ii, jj = np.nonzero(change)
+        n, o = new[ii, jj], old[ii, jj]
+        cols = sub[:, ii, jj]                                                   # (n_elev, n_changed)
+        scaled = o > 0
+        cols[:, scaled] *= (np.maximum(n[scaled], 0.0) / o[scaled])[None, :]
+        fresh = (~scaled) & (n > 0)
+        cols[:, fresh] = n[fresh][None, :]
+        cols[:, (~scaled) & (n <= 0)] = 0.0
+        sub[:, ii, jj] = cols
         pass
 
 

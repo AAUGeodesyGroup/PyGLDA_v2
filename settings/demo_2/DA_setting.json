@@ -1,0 +1,83 @@
+{
+    "basic": {
+        "fromdate": "2002-01-01",
+        "todate": "2016-04-30",
+        "ensemble": 4,
+        "case": "demo_2",
+        "basin": "Danube",
+        "basin_shp": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Danube/Danube.shp",
+        "basin_mask": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/mask/Danube/Danube_res_0.5.h5",
+        "res_permanent": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Res",
+        "OL_output_temp_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/OL_output",
+        "DA_output_temp_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/DA_output",
+        "Ensemble_ini_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Ensemble_Initialization",
+        "Ensemble_input_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Ensemble_input",
+        "Auxiliary_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Auxiliary"
+    },
+    "obs": {
+        "name": "src_OBS",
+        "dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/obs",
+        "GRACE": {
+            "EWH_grid_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/SaGEA/signal_Mascon",
+            "cov_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/SaGEA/sample_DDK3",
+            "preprocess_res": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/output",
+            "OL_mean": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/OLmean",
+            "aux_for_time_epochs": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/SaGEA/signal_Mascon",
+            "kind": "Mascon_monthly"
+        }
+    },
+    "model": {
+        "name": "WaterGap",
+        "layer": {
+            "groundwstor": true,
+            "soilmoist": true,
+            "swe": true,
+            "locallakestor": false,
+            "localwetlandstor": false,
+            "globallakestor": false,
+            "globalwetlandstor": false,
+            "riverstor": true,
+            "reservoirstor": false,
+            "canopystor": false
+        }
+    },
+    "method": {
+        "fusion_method": "EnKF_localized",
+        "localization": {
+            "kind": "block"
+        },
+        "inflation": {
+            "kind": "adaptive_additive",
+            "split": "ol_spread",
+            "split_storages": [
+                "groundwstor",
+                "soilmoist",
+                "swe"
+            ],
+            "weight_current": 0.5,
+            "max_factor": 3.0,
+            "min_sigma": 5.0,
+            "remove_bias": true,
+            "bias_memory": 0.05,
+            "seed": 42
+        },
+        "increment_partition": {
+            "kind": "non_negative",
+            "max_weight_ratio": {
+                "groundwstor": 5
+            },
+            "spatial_blend": {
+                "groundwstor": 0.8
+            },
+            "max_cell_factor": 3
+        },
+        "obs_error_inflation": {},
+        "obs_error_correlation": "diagonal",
+        "obs_perturbation_centering": true,
+        "soil_upper_bound": true,
+        "snow_upper_bound": {
+            "factor": 2.0,
+            "offset_mm": 20.0
+        }
+    }
+}

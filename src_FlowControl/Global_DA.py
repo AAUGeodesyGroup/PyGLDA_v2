@@ -7,6 +7,8 @@ for the globe are overridden:
     check_units()               frozen unit set: mask, shapefile and IDs consistent (replaces config_basin_mask)
     get_GRACE_obs()             unit TWS, 772 x 772 GRACE covariance and gridded TWS with the regional GRACE
                                 processing on the frozen unit mask (no second rasterisation of the shapefile)
+    da_evaluation()             per-unit and grouped evaluation report (src_postprocessing.global_evaluation)
+    visualization()             PyGMT figures of that report (src_postprocessing.global_visualization)
 
 All other steps are the inherited regional ones: collect_and_statistics (the yearly merge writes the full grid for a
 global unit mask, see merge_standardize.yearly_merge), DA_run with the open-loop envelope, harmonic maps,
@@ -25,9 +27,7 @@ Order (driver: src_demo/demo_global.py)
     MPI:     GDA.collect_and_statistics(Stage.OL) -> GDA.DA_run() -> GDA.collect_and_statistics(Stage.DA)  (inherited)
 
 First version (7 Oct 2026). Known limits, to be revised step by step:
-  - the filter (src_DA) still holds dense n_state x n_obs matrices on every rank (design matrix, block taper):
-    ~1 GB each for 772 units -> a sparse path is the next step before a 30-member run on UCloud (89 GB)
-  - no global evaluation yet (visualization / increment_diagnosis / da_evaluation are made for a few sub-basins)
+  - increment_diagnosis is still the regional one (made for a few sub-basins)
 """
 from pathlib import Path
 from datetime import datetime
@@ -158,6 +158,54 @@ class GDA(RDA, metaclass=_CaseToRDA):
         GR.basin_COV(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['cov_dir'], dir_out=dir_out)
         GR.grid_TWS(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['EWH_grid_dir'], dir_out=dir_out)
         pass
+
+    # ------------------------------------------------------------------ evaluation
+    @staticmethod
+    def da_evaluation(tag=None, thresholds=None, extra_files=None):
+        """
+        Evaluation report of the global run (needs post_processing), replacing the regional report (made for one
+        basin and a few sub-basins). Written to Res/<case>/evaluation_global/<tag>/:
+          unit_metrics.csv     per unit: fit of OL / DA to GRACE, chi^2, gain, spread, trends, increments per
+                               storage, shapefile attributes
+          group_metrics.csv    area-weighted groups: global, region, basin class, SNR class, latitude band
+          group_series.csv     area-weighted window series of the groups
+          summary.txt / .json  overview, filter health, clipping, warnings; DA_setting.json and logs/ archived
+        tag : name of the run (None: date and time). Figures: GDA.visualization(tag).
+        """
+        from src_DA.configure_DA import config_DA
+        from src_postprocessing.global_evaluation import evaluate_global_run
+
+        configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
+        res_dir = Path(configDA.basic.res_permanent) / GDA.case
+        return evaluate_global_run(res_dir=res_dir, obs_file=Path(configDA.obs.dir) / ('%s_obs_GRACE.hdf5' % GDA.basin),
+                                   out_root=res_dir / 'evaluation_global', tag=tag, basin=GDA.basin,
+                                   shp_path=GDA.shp_path,
+                                   da_output_dir=Path(configDA.basic.DA_output_temp_dir) / GDA.case,
+                                   setting_file=Path(GDA.setting_dir) / 'DA_setting.json',
+                                   start=datetime.strptime(GDA.sim_begin_time, '%Y-%m-%d').date(),
+                                   thresholds=thresholds,
+                                   extra_files=list(extra_files or []) +
+                                   sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
+
+    @staticmethod
+    def visualization(tag, dpi=200):
+        """
+        Figures of the evaluation report Res/<case>/evaluation_global/<tag>/ (run GDA.da_evaluation(tag) first),
+        written into the same folder (src_postprocessing.global_visualization):
+          gfig1_unit_maps.png        RMS reduction, correlation DA - GRACE, median chi^2, trend DA - OL per unit
+          gfig2_group_series.png     area-weighted series GRACE / OL / DA: global land and regions
+          gfig3_harmonic_maps.png    trend, annual amplitude, day of the annual peak: OL, DA, GRACE, DA - OL
+                                     (needs the harmonic maps Res/<case>/Harmonic_{OL,DA,GRACE}.nc)
+          gfig4_filter_health.png    chi^2 distribution, innovation vs. expected size, added inflation
+          gfig5_rms_vs_snr_area.png  RMS reduction vs. GRACE SNR and unit area
+        """
+        from src_DA.configure_DA import config_DA
+        from src_postprocessing.global_visualization import plot_global_run
+
+        configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
+        res_dir = Path(configDA.basic.res_permanent) / GDA.case
+        return plot_global_run(report_dir=res_dir / 'evaluation_global' / tag, shp_path=GDA.shp_path,
+                               res_dir=res_dir, dpi=dpi)
 
 
 def demo1():

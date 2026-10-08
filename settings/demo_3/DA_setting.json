@@ -1,0 +1,59 @@
+{
+    "basic": {
+        "fromdate": "2002-01-01",
+        "todate": "2016-04-30",
+        "ensemble": 4,
+        "case": "demo_3",
+        "basin": "Amazon",
+        "basin_shp": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Amazon/Amazon.shp",
+        "basin_mask": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/mask/Amazon/Amazon_res_0.5.h5",
+        "res_permanent": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Res",
+        "OL_output_temp_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/OL_output",
+        "DA_output_temp_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/DA_output",
+        "Ensemble_ini_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Ensemble_Initialization",
+        "Ensemble_input_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Ensemble_input",
+        "Auxiliary_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/Auxiliary"
+    },
+    "obs": {
+        "name": "src_OBS",
+        "dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/obs",
+        "GRACE": {
+            "EWH_grid_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/Miguel_Tudelft",
+            "cov_dir": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/SaGEA/sample_DDK3",
+            "preprocess_res": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/output_TUD",
+            "OL_mean": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/OLmean",
+            "aux_for_time_epochs": "/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/Miguel_Tudelft",
+            "kind": "TUD_5daily",
+            "ewh_file": "TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc",
+            "unc_file": "TUD-L3-5dayEWH_UNC-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc",
+            "corr_length_km": 300
+        }
+    },
+    "model": {
+        "name": "WaterGap",
+        "layer": {
+            "groundwstor": true,
+            "soilmoist": true,
+            "swe": false,
+            "locallakestor": false,
+            "localwetlandstor": false,
+            "globallakestor": false,
+            "globalwetlandstor": false,
+            "riverstor": true,
+            "reservoirstor": false,
+            "canopystor": false
+        }
+    },
+    "method": {
+        "fusion_method": "EnKF_localized",
+        "localization": {
+            "kind": "block",
+            "length_km": 300,
+            "cutoff": 2.0
+        },
+        "inflation": 1.0,
+        "rtps_alpha": 0.7,
+        "obs_error_inflation": {},
+        "increment_partition": "non_negative"
+    }
+}

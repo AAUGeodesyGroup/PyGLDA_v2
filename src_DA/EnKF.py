@@ -79,6 +79,15 @@ class EnKF:
 
         pass
 
+    def _land_ratio_box(self):
+        """land / continental fraction of the model's current day on the regional box (the factor WaterGAP applies
+        to soil, snow and canopy when writing the daily files); 1 where undefined"""
+        pc = np.asarray(self._model.vertical_waterbalance._per_contfrac, dtype=float)
+        uc = self._model.unit_converter
+        if hasattr(uc, '_r0') and pc.shape != np.shape(self._sv.DM.local_mask['basin_2d']):
+            pc = pc[uc._r0:uc._r1, uc._c0:uc._c1]
+        return np.where(np.isfinite(pc), np.clip(pc, 0.0, 1.0), 1.0)
+
     def configure_design_matrix(self, DM: DM_basin_average):
         """
         design matrix for the observation equations. It should be constant over time.
@@ -171,6 +180,7 @@ class EnKF:
         historic_mean_states = None
         historic_min_states = None          # daily minimum / maximum over the window (window-aware bounds)
         historic_max_states = None
+        historic_land_ratio = None          # largest land / continental fraction of the window (soil capacity)
         obs = None
         obs_cov = None
         rr = -1
@@ -206,6 +216,7 @@ class EnKF:
                 historic_mean_states_excluded = None
                 historic_min_states = None
                 historic_max_states = None
+                historic_land_ratio = None
 
             if keepRecord:
                 '''record the previous states over areas of interest'''
@@ -221,11 +232,14 @@ class EnKF:
                     historic_max_states = np.maximum(historic_max_states, sv)
                     historic_mean_states += sv
                     historic_mean_states_excluded += sv_excluded
+                lr = self._land_ratio_box()
+                historic_land_ratio = lr if historic_land_ratio is None else np.fmax(historic_land_ratio, lr)
             else:
                 historic_mean_states = None
                 historic_mean_states_excluded = None
                 historic_min_states = None
                 historic_max_states = None
+                historic_land_ratio = None
 
             if not assimilationRecord:
                 continue
@@ -269,6 +283,9 @@ class EnKF:
             ens_states = comm.gather(root=main_thread, sendobj=historic_mean_states)
             ens_min = comm.gather(root=main_thread, sendobj=historic_min_states)
             ens_max = comm.gather(root=main_thread, sendobj=historic_max_states)
+            land_ratio_cells = None if historic_land_ratio is None else \
+                historic_land_ratio[np.asarray(self._sv.DM.local_mask['basin_2d']).astype(bool)]
+            ens_land_ratio = comm.gather(root=main_thread, sendobj=land_ratio_cells)
             historic_min_states = None
             historic_max_states = None
 
@@ -291,6 +308,10 @@ class EnKF:
                 del ens_states[OL_thread]
                 del ens_min[OL_thread]
                 del ens_max[OL_thread]
+                del ens_land_ratio[OL_thread]
+                '''soil capacity of the members in the units of the states (cells x members), see Threshold.set_soil_scale'''
+                self._ens_soil_scale = None if any(x is None for x in ens_land_ratio) else np.array(ens_land_ratio).T
+                ens_land_ratio = None
 
                 '''load ensemble states'''
                 ens_obs = np.array(ens_obs).T
@@ -316,6 +337,7 @@ class EnKF:
             states_ens_update_delta = comm.scatter(sendobj=delta_state, root=main_thread)
             delta_state = None  # free the memory
             '''update the states for each ensemble: equal increment for each day'''
+            self._thresholder.set_soil_scale(historic_land_ratio)        # soil capacity of this member and window
             for his_day_datetime in info[1]:
                 his_day = his_day_datetime.strftime("%Y-%m-%d")
                 states_old = self._sv.load_state_dict(date=his_day)

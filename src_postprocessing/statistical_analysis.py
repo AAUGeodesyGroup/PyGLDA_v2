@@ -378,6 +378,48 @@ class HarmonicMapAnalysis:
         ds = xr.concat(frames, dim='time').sortby('time').sel(time=slice(self.date_begin, self.date_end))
         return ds
 
+    def _load_member_columns(self, stage: Stage, ens_id: int):
+        """
+        Like _load_member, but only the grid cells that hold data: per variable an array (time, n_col) in the file
+        dtype and the flat indices of its columns on the (lat, lon) grid. Read one yearly file at a time and
+        reduced at once, so neither the ocean cells nor a full-grid copy of the period are held (the full-grid
+        cube of a global case was ~5 GB per rank with the fit, until 8 Oct 2026).
+        Returns lat, lon, time, {var: (cols, data)}
+        """
+        import pandas as pd
+        years = pd.date_range(self.date_begin, self.date_end).year.unique()
+        lat = lon = None
+        times, parts = [], {v: [] for v in self.variables}           # parts[v]: [(cols, data_year), ...]
+        for year in years:
+            fn = self._member_dir(stage, ens_id) / f"daily_output_{year}.nc"
+            if not fn.exists():
+                print(f"  [warn] missing {fn.name} for Ens_{ens_id} ({stage.name}), skipped")
+                continue
+            with xr.open_dataset(fn, cache=False) as ds:
+                ds = ds[self.variables].sortby('time').sel(time=slice(self.date_begin, self.date_end))
+                if lat is None:
+                    lat, lon = ds['lat'].values.copy(), ds['lon'].values.copy()
+                times.append(ds['time'].values.copy())
+                for v in self.variables:
+                    a = ds[v].transpose('time', 'lat', 'lon').values
+                    a = a.reshape(a.shape[0], -1)
+                    cols = np.flatnonzero(np.isfinite(a).any(axis=0))
+                    parts[v].append((cols, a[:, cols].copy()))
+                    del a
+        if lat is None:
+            raise FileNotFoundError(f"no yearly files for {stage.name} Ens_{ens_id} under {self._member_dir(stage, ens_id)}")
+        time = np.concatenate(times)
+        out = {}
+        for v in self.variables:
+            cols = np.unique(np.concatenate([c for c, _ in parts[v]]))          # cells with data in any year
+            data = np.full((time.size, cols.size), np.nan, dtype=parts[v][0][1].dtype)
+            t0 = 0
+            for c, d in parts[v]:
+                data[t0:t0 + d.shape[0], np.searchsorted(cols, c)] = d
+                t0 += d.shape[0]
+            out[v] = (cols, data)
+        return lat, lon, time, out
+
     @staticmethod
     def _year_fraction(time_index) -> np.ndarray:
         """datetime64 axis -> year fraction with mid-day epochs (year + (doy - 0.5) / days_in_year)"""
@@ -387,20 +429,45 @@ class HarmonicMapAnalysis:
         return t.year.values + (t.dayofyear.values - 0.5) / ndays
 
     # ------------------------------------------------------------------ fitting
-    def _fit_cube(self, cube: xr.DataArray, tfrac: np.ndarray) -> dict:
+    def _fit_cube(self, cube, tfrac: np.ndarray) -> dict:
         """
-        cube : (time, lat, lon) of one variable. Every grid cell is one series; all cells are
-        fitted in one least-squares call. Returns a dict quantity -> 2-D array (lat, lon).
+        cube : (time, lat, lon) of one variable. Every grid cell is one series. Returns a dict quantity -> 2-D array
+        (lat, lon). Only the cells with data are fitted (_fit_columns); cells without any value get what the fit
+        gives an all-NaN series (NaN, n_valid 0), exactly as when they were fitted.
         """
+        a = np.asarray(cube.values if hasattr(cube, 'values') else cube)
+        n_t, n_lat, n_lon = a.shape
+        a = a.reshape(n_t, n_lat * n_lon)
+        cols = np.flatnonzero(np.isfinite(a).any(axis=0))
+        return self._fit_columns(a[:, cols], cols, tfrac, (n_lat, n_lon))
+
+    FIT_BLOCK = 8000            # columns per least-squares call: bounds the float64 temporaries of the fit
+
+    def _fit_columns(self, obs_cols, cols, tfrac: np.ndarray, shape) -> dict:
+        """
+        obs_cols : (time, n_col) series of the grid cells `cols` (flat indices on a grid of `shape`), fitted in
+        blocks of FIT_BLOCK columns (src_auxiliary.ts; every series is fitted on its own, so the blocks do not
+        change the result); the cells without data get the result of an all-NaN series (NaN, n_valid 0).
+        Returns a dict quantity -> 2-D array `shape`.
+        """
+        n_t, n_col = np.shape(obs_cols)
+        fill = self._fit_block(np.full((n_t, 1), np.nan), tfrac)
+        out = {q: np.full(shape[0] * shape[1], v[0]) for q, v in fill.items()}
+        for b0 in range(0, n_col, self.FIT_BLOCK):
+            res = self._fit_block(np.asarray(obs_cols[:, b0:b0 + self.FIT_BLOCK], dtype=float), tfrac)
+            for q, v in res.items():
+                out[q][cols[b0:b0 + self.FIT_BLOCK]] = v
+        return {q: v.reshape(shape) for q, v in out.items()}
+
+    def _fit_block(self, obs, tfrac: np.ndarray) -> dict:
+        """harmonic fit of the columns of obs (time, n) -> dict quantity -> (n,)"""
         from src_auxiliary.ts import ts, decomposition
-        n_t, n_lat, n_lon = cube.shape
-        obs = cube.values.reshape(n_t, n_lat * n_lon)           # columns = cells
         tsd = ts().set_period(tfrac).setDecomposition(self.components)
         sig = tsd.getSignal(obs)
         err = tsd.getError()
 
-        def m(a):                                               # back to (lat, lon)
-            return np.asarray(a, dtype=float).reshape(n_lat, n_lon)
+        def m(a):
+            return np.asarray(a, dtype=float).ravel()
 
         out = {'bias': m(sig['bias']), 'bias_std': m(err['bias_std']),
                'residual_std': m(err['residual_std']), 'n_valid': m(err['n_valid'])}
@@ -437,20 +504,37 @@ class HarmonicMapAnalysis:
 
     # ------------------------------------------------------------------ driver
     def _fit_member(self, stage: Stage, ens_id: int) -> dict:
-        """load one member and fit it (per_member). Returns meta (lat, lon, time), maps {var: {q: 2-D}} or None,
-        and the daily cubes {var: (time, lat, lon)} for the ensemble mean (None for the unperturbed Ens_0)."""
-        ds = self._load_member(stage, ens_id)
-        meta = (ds['lat'].values, ds['lon'].values, ds['time'].values)
-        tfrac = self._year_fraction(meta[2])
+        """load one member (cells with data only) and fit it (per_member). Returns meta (lat, lon, time), maps
+        {var: {q: 2-D}} or None, and the daily series {var: (cols, (time, n_col))} for the ensemble mean (None for
+        the unperturbed Ens_0)."""
+        lat, lon, time, data = self._load_member_columns(stage, ens_id)
+        meta = (lat, lon, time)
+        tfrac = self._year_fraction(time)
         maps, cubes = {}, {}
         for v in self.variables:
-            cube = ds[v].transpose('time', 'lat', 'lon')
+            cols, d = data[v]
             if self.per_member:
-                maps[v] = self._fit_cube(cube, tfrac)
+                maps[v] = self._fit_columns(d, cols, tfrac, (lat.size, lon.size))
             if ens_id >= 1:                                     # ensemble mean excludes the unperturbed member 0
-                cubes[v] = np.asarray(cube.values, dtype=np.float64)
+                cubes[v] = (cols, d)
         return {'ens_id': ens_id, 'meta': meta, 'maps': maps if self.per_member else None,
                 'cubes': cubes if ens_id >= 1 else None}
+
+    @staticmethod
+    def _add_columns(acc, cols, d):
+        """running sum over members of column series (cols, (time, n_col) float64); a cell missing in one member
+        is NaN in the sum, as in a full-grid sum"""
+        d = np.asarray(d, dtype=np.float64)
+        if acc is None:
+            return cols.copy(), d.copy()
+        c0, s0 = acc
+        if np.array_equal(c0, cols):
+            return c0, s0 + d
+        cu = np.union1d(c0, cols)
+        out = np.full((s0.shape[0], cu.size), np.nan)
+        a = np.full_like(out, np.nan); a[:, np.searchsorted(cu, c0)] = s0
+        b = np.full_like(out, np.nan); b[:, np.searchsorted(cu, cols)] = d
+        return cu, a + b
 
     def _process(self, stage: Stage, ids, n_workers=1) -> dict:
         """fit the members `ids` (serially or with a process pool) and keep a running sum of members >= 1"""
@@ -465,8 +549,8 @@ class HarmonicMapAnalysis:
             if r['maps'] is not None:
                 local['maps'][r['ens_id']] = r['maps']
             if r['cubes'] is not None:
-                for v, c in r['cubes'].items():
-                    local['sums'][v] = c if local['sums'][v] is None else local['sums'][v] + c
+                for v, (cols, d) in r['cubes'].items():
+                    local['sums'][v] = self._add_columns(local['sums'][v], cols, d)
             print(f"  Ens_{r['ens_id']}: {'fitted' if self.per_member else 'loaded'} "
                   f"{len(r['meta'][2])} days x {r['meta'][0].size * r['meta'][1].size} cells", flush=True)
 
@@ -529,12 +613,23 @@ class HarmonicMapAnalysis:
                 raise RuntimeError(f'harmonic fit: ranks {bad} read a different time axis or grid than rank 0')
             gathered = comm.gather(local['maps'], root=root)
             sums = {}
+            n_cell = shp[1] * shp[2]
             for v in self.variables:
-                send = local['sums'][v] if local['sums'][v] is not None else np.zeros(shp)
-                send = np.ascontiguousarray(send, dtype=np.float64)
-                recv = np.empty(shp, dtype=np.float64) if rank == root else None
+                '''common set of cells with data over all ranks, then the reduce on these columns only'''
+                has = np.zeros(n_cell, dtype=np.uint8)
+                if local['sums'][v] is not None:
+                    has[local['sums'][v][0]] = 1
+                has_all = np.empty_like(has)
+                comm.Allreduce(has, has_all, op=MPI.MAX)
+                cols = np.flatnonzero(has_all)
+                send = np.zeros((shp[0], cols.size), dtype=np.float64)            # rank without members: 0
+                if local['sums'][v] is not None:
+                    c, d = local['sums'][v]
+                    send[:] = np.nan                                           # cells this rank has no data for
+                    send[:, np.searchsorted(cols, c)] = d
+                recv = np.empty_like(send) if rank == root else None
                 comm.Reduce(send, recv, op=MPI.SUM, root=root)
-                sums[v] = recv
+                sums[v] = (cols, recv) if rank == root else None
             if rank != root:
                 return None
             maps = {}
@@ -562,9 +657,8 @@ class HarmonicMapAnalysis:
                     data_vars[f'{v}_{q}_ensspread'] = (('lat', 'lon'), spread, {'units': self._units(q),
                                                        'description': 'std across ensemble members 1..N'})
             if sums.get(v) is not None and self.ens >= 1:
-                cube_mean = xr.DataArray(sums[v].reshape(len(time), lat.size, lon.size) / self.ens,
-                                         dims=('time', 'lat', 'lon'))
-                for q, arr in self._fit_cube(cube_mean, tfrac).items():
+                cols, ssum = sums[v]
+                for q, arr in self._fit_columns(ssum / self.ens, cols, tfrac, (lat.size, lon.size)).items():
                     data_vars[f'{v}_{q}_ensmean'] = (('lat', 'lon'), arr, {'units': self._units(q),
                                                      'description': 'fit of the ensemble-mean series (members 1..N)'})
 

@@ -141,6 +141,43 @@ def _read_adaptive_log(da_output_dir):
         return [{k: (v if k == 'date' else float(v)) for k, v in r.items()} for r in csv.DictReader(fh)]
 
 
+def observation_windows(durs, start, nday):
+    """observation windows inside the simulation and not starting on day 0 (no increment there):
+    [(index of the GRACE epoch, first day, last day)] with days counted from `start`"""
+    win = []
+    for k, (a, b) in enumerate(durs):
+        i0, i1 = (a - start).days, (b - start).days
+        if i0 >= 1 and i1 < nday:
+            win.append((k, i0, i1))
+    return win
+
+
+def window_statistics(ol_daily, da_daily, grace, sig, win):
+    """
+    Window statistics of one unit (shared by evaluate_run and src_postprocessing.global_evaluation).
+    ol_daily, da_daily : (nmem, nday) daily TWS of the members;  grace : GRACE of the windows;  sig : its sigma
+    win : observation_windows(...). Returns the window means of GRACE (anomalies on the OL mean), OL and DA, the
+    DA spread, the mean increment (jump of DA - OL on the first day of the window), the innovation d of the
+    reconstructed forecast mean, its spread sd_fc and chi^2 = d^2 / (sd_fc^2 + sigma^2).
+    """
+    def wmean(x):            # x (nmem, nday) -> (nmem, nwin)
+        return np.array([x[:, i0:i1 + 1].mean(1) for _, i0, i1 in win]).T
+
+    def jump(x, i0):         # (nmem,) jump on the first day of a window
+        return x[:, i0] - x[:, i0 - 1]
+
+    ol, da = wmean(ol_daily), wmean(da_daily)
+    g = np.asarray(grace, dtype=float)
+    g = g - np.mean(g - ol.mean(0))                                       # GRACE anomalies on the OL mean
+    inc = np.array([jump(da_daily, i0) - jump(ol_daily, i0) for _, i0, _ in win]).T
+    fc = da - inc
+    d = g - fc.mean(0)
+    sdf = fc.std(0, ddof=1)
+    chi2 = d ** 2 / (sdf ** 2 + sig ** 2)
+    return dict(gr=g, ol=ol.mean(0), da=da.mean(0), da_sd=da.std(0, ddof=1), inc=inc.mean(0), d=d,
+                sd_fc=sdf, chi2=chi2, sig=sig)
+
+
 # ------------------------------------------------------------------------------------------------ main entry
 def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=None, setting_file=None,
                  reference=None, start=dt.date(2002, 1, 1), key_months=None, thresholds=None, figures_dir=None,
@@ -184,35 +221,14 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     nmem = DA['basin']['tws'].shape[0]
 
     # observation windows inside the simulation (and not starting on day 0: no increment there)
-    win = []
-    for k, (a, b) in enumerate(durs):
-        i0, i1 = (a - start).days, (b - start).days
-        if i0 >= 1 and i1 < nday:
-            win.append((k, i0, i1))
+    win = observation_windows(durs, start, nday)
     kk = np.array([w[0] for w in win])
     wdate = [durs[k][0] for k in kk]
     wmon = np.array([d.month for d in wdate])
     tdec = np.array([_decyear(durs[k][0] + (durs[k][1] - durs[k][0]) / 2) for k in kk])
     sig = {u: (sig_basin[kk] if u == 'basin' else sig_sub[kk, j - 1]) for j, u in enumerate(units)}
 
-    def wmean(x):            # x (nmem, nday) -> (nmem, nwin)
-        return np.array([x[:, i0:i1 + 1].mean(1) for _, i0, i1 in win]).T
-
-    def jump(x, i0):         # (nmem,) jump on the first day of a window
-        return x[:, i0] - x[:, i0 - 1]
-
-    S = {}                   # per unit: window series and window statistics
-    for u in units:
-        ol, da = wmean(OL[u]['tws']), wmean(DA[u]['tws'])
-        g = GR[u][kk]
-        g = g - np.mean(g - ol.mean(0))                                   # GRACE anomalies on the OL mean
-        inc = np.array([jump(DA[u]['tws'], i0) - jump(OL[u]['tws'], i0) for _, i0, _ in win]).T
-        fc = da - inc
-        d = g - fc.mean(0)
-        sdf = fc.std(0, ddof=1)
-        chi2 = d ** 2 / (sdf ** 2 + sig[u] ** 2)
-        S[u] = dict(gr=g, ol=ol.mean(0), da=da.mean(0), da_sd=da.std(0, ddof=1), inc=inc.mean(0), d=d,
-                    sd_fc=sdf, chi2=chi2, sig=sig[u])
+    S = {u: window_statistics(OL[u]['tws'], DA[u]['tws'], GR[u][kk], sig[u], win) for u in units}
 
     # ---------------------------------------------------------------- numbers
     def fit(u, sel=slice(None)):

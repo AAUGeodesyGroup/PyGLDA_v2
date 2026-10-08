@@ -484,33 +484,36 @@ class RDA:
         # banner is printed inside da.run_DA(), after each rank's stdout redirect,
         # so it reaches the terminal (rank 1) and the top of every rank log
 
-        da = DA_GRACE(setting_dir=Path(RDA.setting_dir), case=RDA.case)
-        da.configure_setting(ens_size=RDA.ens, case_name=RDA.case, basin_name=RDA.basin,
-                             basin_dir=Path(RDA.external_data_path) / 'Basin', basin_shp=RDA.shp_path)
-        da.configure_date(begin_date=RDA.sim_begin_time, end_date=RDA.sim_end_time)
-        # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
-        if rank == 0:
-            da.save_configuration()
-        comm.barrier()
-
-        da.reload_setting()
-
-        if rank == 0:
-            da.gather_OLmean()
-
-            da.generate_perturbed_GRACE_obs()
-
-            '''open-loop envelope for river storage and groundwater (see src_DA.Threshold): rebuilt from the collected
-            open loop at every DA start, so that it always matches the current case, basin and period'''
-            da.make_state_envelope(force=True)
-
-        comm.barrier()
-
-        da.prepare_design_matrix()
-
+        '''the whole stage inside try: a failure on any rank (settings, rank-0 preparation, design matrix, filter)
+        aborts the MPI job with a report instead of leaving the other ranks waiting at a barrier'''
         try:
+            da = DA_GRACE(setting_dir=Path(RDA.setting_dir), case=RDA.case)
+            da.configure_setting(ens_size=RDA.ens, case_name=RDA.case, basin_name=RDA.basin,
+                                 basin_dir=Path(RDA.external_data_path) / 'Basin', basin_shp=RDA.shp_path)
+            da.configure_date(begin_date=RDA.sim_begin_time, end_date=RDA.sim_end_time)
+            # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
+
+            comm.barrier()                  # every rank has read DA_setting.json before rank 0 rewrites it
+            if rank == 0:
+                da.save_configuration()
+            comm.barrier()
+
+            da.reload_setting()
+
+            if rank == 0:
+                da.gather_OLmean()
+
+                da.generate_perturbed_GRACE_obs()
+
+                '''open-loop envelope for river storage and groundwater (see src_DA.Threshold): rebuilt from the
+                collected open loop at every DA start, so that it always matches the current case, basin and period'''
+                da.make_state_envelope(force=True)
+
+            comm.barrier()
+
+            da.prepare_design_matrix()
+
             da.run_DA(rank=rank)
-            pass
         except Exception:
             _abort_with_report(comm, rank, 'DA')
 

@@ -136,7 +136,12 @@ class EnKF_localized(EnKF):
             obs, R = self._decorrelate(obs, obs_cov, R)
         if self._obs_centering:
             obs = self._center_perturbations(obs)
-        self.bounds.set_window(ens_states, getattr(self, '_ens_min', None), getattr(self, '_ens_max', None))
+        scale = getattr(self, '_ens_soil_scale', None)
+        upper_scale = {'soilmoist': scale} if (self._soil_upper_bound and scale is not None and
+                                               np.shape(scale) == (ens_states.shape[0] // len(self.bounds.names),
+                                                                   ens_states.shape[1])) else None
+        self.bounds.set_window(ens_states, getattr(self, '_ens_min', None), getattr(self, '_ens_max', None),
+                               upper_scale=upper_scale)
 
         xm = np.mean(ens_states, 1)[:, None]
         A = self.inflation.prior(ens_states - xm, xm, obs, R)

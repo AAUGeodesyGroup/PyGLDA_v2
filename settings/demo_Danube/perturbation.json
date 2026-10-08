@@ -1,0 +1,277 @@
+{
+    "ensemble": 4,
+    "dir": {
+        "in": "/work/PyGLDA_v2_external_data/Input_data",
+        "out": "/work/PyGLDA_v2_external_data/Ensemble_input"
+    },
+    "correlation": {
+        "forcing": {
+            "isSpatialCorrelated": true,
+            "isTemporalCorrelated": false,
+            "customize": false
+        },
+        "par": {
+            "isSpatialCorrelated": true,
+            "customize": false
+        }
+    },
+    "forcing": {
+        "pr": {
+            "is_perturbed": true,
+            "perturb_method": "multiplicative",
+            "error_distribution": "gaussian",
+            "coefficients": [
+                0.3
+            ]
+        },
+        "tas": {
+            "is_perturbed": true,
+            "perturb_method": "additive",
+            "error_distribution": "gaussian",
+            "coefficients": [
+                2
+            ]
+        },
+        "rsds": {
+            "is_perturbed": false,
+            "perturb_method": "additive",
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.3
+            ]
+        },
+        "rlds": {
+            "is_perturbed": false,
+            "perturb_method": "additive",
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.3
+            ]
+        }
+    },
+    "par": {
+        "openwater_albedo": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "snow_albedo_thresh": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "pt_coeff_humid_arid": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": {
+                "humid": [
+                    0.885,
+                    1.26,
+                    1.65
+                ],
+                "arid": [
+                    1.365,
+                    1.74,
+                    2.115
+                ]
+            }
+        },
+        "snow_freeze_temp": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "snow_melt_temp": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "adiabatic_lapse_rate": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.004,
+                0.006,
+                0.01
+            ]
+        },
+        "runoff_frac_builtup": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "gamma": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "areal_corr_factor": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "max_daily_pet": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                7.25,
+                15,
+                22.5
+            ]
+        },
+        "critcal_gw_precipitation": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                2.5,
+                12.5,
+                20
+            ]
+        },
+        "gw_dis_coeff": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "reduction_exponent_lakewet": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "gw_recharge_constant": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "swb_outflow_coeff": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.001,
+                0.01,
+                0.1
+            ]
+        },
+        "lake_out_exp": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "activelake_depth": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                1,
+                5,
+                20
+            ]
+        },
+        "wetland_out_exp": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "activewetland_depth": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.5,
+                2,
+                5
+            ]
+        },
+        "swb_drainage_area_factor": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "reduction_exponent_res": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "stat_corr_fact": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "river_roughness_coeff_mult": {
+            "is_perturbed": false,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0,
+                1,
+                2
+            ]
+        },
+        "max_canopy_storage_coefficient": {
+            "is_perturbed": true,
+            "error_distribution": "triangle",
+            "coefficients": [
+                0.1,
+                0.3,
+                1.4
+            ]
+        }
+    }
+}
