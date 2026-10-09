@@ -10,8 +10,12 @@ Builds the localized EnKF from the "method" block of DA_setting.json (used by sr
         "obs_error_correlation": "full" | "diagonal",
         "obs_perturbation_centering": false | true,
         "soil_upper_bound": true | false        (soil <= smax inside the bound-aware partition; default true)
-        "snow_upper_bound": {"factor": 2.0, "offset_mm": 20}  (snow <= factor x forecast + offset; false = none)
-        "snow_lower_bound": {"factor": 0.5}     (snow >= factor x forecast: one update removes at most 50 %; false = none)
+        "snow_bounds": {"lower_factor": 0.5,                          snow >= f x forecast
+                        "upper_factor": 2.0, "upper_offset_mm": 20,   snow <= f x forecast + o
+                        "envelope_factor": 1.5, "envelope_offset_mm": 10}
+                                                 snow <= f x the open loop's largest snow of the calendar month + o
+                       (null / false switches a limit off; without envelope_factor the envelope cap is off;
+                        read by src_DA.configure_DA.snow_bounds)
     }
 
 Settings written before the restructuring (Oct 2026) are translated:
@@ -21,11 +25,13 @@ Settings written before the restructuring (Oct 2026) are translated:
                                              -> {"kind": "additive", "sigma": {...}, "months": [..], "seed": 42}
     "additive_inflation": {"mode": "adaptive", ...}  -> {"kind": "adaptive_additive", ...}
     "increment_partition": "non_negative"    -> {"kind": "non_negative"}
+    "snow_upper_bound", "snow_lower_bound", "snow_envelope"  -> "snow_bounds" (src_DA.configure_DA.snow_bounds)
 Only one inflation scheme can be active; a configuration with several stops with an error.
 """
 from src_DA.localization import make_localization
 from src_DA.inflation import make_inflation
 from src_DA.partition import make_partition
+from src_DA.configure_DA import snow_bounds
 
 
 def inflation_config(method):
@@ -74,5 +80,4 @@ def build_filter(configDA, model, obs, sv, sv_excluded):
                           obs_error_correlation=getattr(m, 'obs_error_correlation', 'full'),
                           obs_perturbation_centering=getattr(m, 'obs_perturbation_centering', False),
                           soil_upper_bound=getattr(m, 'soil_upper_bound', True),
-                          snow_upper_bound=getattr(m, 'snow_upper_bound', None),
-                          snow_lower_bound=getattr(m, 'snow_lower_bound', None))
+                          snow_bounds=snow_bounds(m))

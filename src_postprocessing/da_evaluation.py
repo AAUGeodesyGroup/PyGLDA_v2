@@ -395,11 +395,14 @@ def _method_string(setting_file):
         parts.append('R=%s' % m['obs_error_correlation'])
     if m.get('obs_perturbation_centering'):
         parts.append('centred obs perturbations')
-    if isinstance(m.get('snow_upper_bound'), dict):
-        parts.append('snow <= %s x forecast + %s mm' % (m['snow_upper_bound'].get('factor'),
-                                                         m['snow_upper_bound'].get('offset_mm')))
-    if isinstance(m.get('snow_lower_bound'), dict):
-        parts.append('snow >= %s x forecast' % m['snow_lower_bound'].get('factor'))
+    from src_DA.configure_DA import snow_bounds
+    sb = snow_bounds(m)
+    if sb['upper_factor'] is not None:
+        parts.append('snow <= %s x forecast + %s mm' % (sb['upper_factor'], sb['upper_offset_mm']))
+    if sb['lower_factor'] is not None:
+        parts.append('snow >= %s x forecast' % sb['lower_factor'])
+    if sb['envelope_factor'] is not None:
+        parts.append('snow <= %s x OL monthly max + %s mm' % (sb['envelope_factor'], sb['envelope_offset_mm']))
     if m.get('obs_error_inflation'):
         parts.append('obs_error_inflation=%s' % m['obs_error_inflation'])
     return ', '.join(parts)

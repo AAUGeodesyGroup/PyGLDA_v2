@@ -162,11 +162,17 @@ class config_DA:
               soil_upper_bound    true: soil <= smax (Auxiliary/smax.nc) inside the bound-aware partition, the water
                                   soil cannot hold goes to the other storages; false: only the post-update threshold
                                   clips soil at smax (the water is then lost)
-              snow_upper_bound    {"factor": 2.0, "offset_mm": 20}: snow <= factor x forecast + offset; false: none
-              snow_lower_bound    {"factor": 0.5}: snow >= factor x forecast (one update removes at most 50 %);
-                                  false: none
+              snow_bounds         all limits of the analysed snow in one block (read with snow_bounds() below):
+                                  {"lower_factor": 0.5,                          snow >= f x forecast
+                                   "upper_factor": 2.0, "upper_offset_mm": 20,   snow <= f x forecast + o (per window)
+                                   "envelope_factor": 1.5, "envelope_offset_mm": 10}
+                                                 snow <= f x the largest open-loop snow of the calendar month + o
+                                                 (per cell; stops the growth of packs that never melt)
+                                  a missing lower / upper entry takes the default above, null / false switches it off;
+                                  without envelope_factor the envelope cap is off
             Old flat keys (inflation as a number, rtps_alpha, rtps_space, additive_inflation) are still read and
-            translated by src_DA.filter_factory.'''
+            translated by src_DA.filter_factory; the old snow keys (snow_upper_bound, snow_lower_bound,
+            snow_envelope) by snow_bounds().'''
             self.localization = {'kind': 'block', 'length_km': 300, 'cutoff': 2.0}
             self.inflation = {'kind': 'none'}
             self.increment_partition = {'kind': 'enkf'}
@@ -174,9 +180,58 @@ class config_DA:
             self.obs_error_correlation = 'full'     # 'diagonal': R without correlations between sub-basins (test)
             self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
             self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
-            self.snow_upper_bound = {'factor': 2.0, 'offset_mm': 20.0}   # snow <= factor x forecast + offset (false: none)
-            self.snow_lower_bound = {'factor': 0.5}                       # snow >= factor x forecast (false: none)
+            self.snow_bounds = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0}  # envelope off
 
+
+
+SNOW_BOUNDS_DEFAULT = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0,
+                       'envelope_factor': None, 'envelope_offset_mm': 10.0}
+
+
+def snow_bounds(method):
+    """
+    The snow limits of the "method" block (object or dict) as one dict, the only reader of these settings:
+        lower_factor                       snow >= f x forecast                                 (None = off)
+        upper_factor, upper_offset_mm      snow <= f x forecast + o, per window                  (None = off)
+        envelope_factor, envelope_offset_mm  snow <= f x max_OL(cell, calendar month) + o        (None = off)
+    New block "snow_bounds" (10 Oct 2026); missing entries take the defaults (envelope off), null / false switches a
+    limit off. The old keys of earlier settings are translated and replace the corresponding entries:
+        "snow_lower_bound": {"factor": f} | false
+        "snow_upper_bound": {"factor": f, "offset_mm": o} | false
+        "snow_envelope":    {"factor": f, "offset_mm": o} | false
+    Results are identical to the old keys.
+    """
+    get = method.get if isinstance(method, dict) else (lambda k, d=None: getattr(method, k, d))
+    sb = dict(SNOW_BOUNDS_DEFAULT)
+    new = get('snow_bounds', None)
+    if isinstance(new, dict):
+        unknown = [k for k in new if k not in SNOW_BOUNDS_DEFAULT]
+        if unknown:
+            raise ValueError('snow_bounds: unknown entries %s (allowed: %s)' % (unknown, list(SNOW_BOUNDS_DEFAULT)))
+        sb.update(new)
+
+    '''old keys (settings before 10 Oct 2026): true / null = default, false / {} = off'''
+    old = get('snow_lower_bound', None)
+    if isinstance(old, dict) or old is False:
+        sb['lower_factor'] = float(old.get('factor', 0.5)) if old else None
+    old = get('snow_upper_bound', None)
+    if isinstance(old, dict) or old is False:
+        sb['upper_factor'] = float(old.get('factor', 2.0)) if old else None
+        sb['upper_offset_mm'] = float(old.get('offset_mm', 20.0)) if old else sb['upper_offset_mm']
+    old = get('snow_envelope', None)
+    if isinstance(old, dict) or old is False:
+        sb['envelope_factor'] = float(old.get('factor', 1.5)) if old else None
+        sb['envelope_offset_mm'] = float(old.get('offset_mm', 10.0)) if old else sb['envelope_offset_mm']
+
+    '''false / 0 -> off, numbers as float'''
+    for k in ('lower_factor', 'upper_factor', 'envelope_factor'):
+        sb[k] = float(sb[k]) if sb[k] not in (None, False) else None
+    for k in ('upper_offset_mm', 'envelope_offset_mm'):
+        sb[k] = float(sb[k] or 0.0)
+    if sb['envelope_factor'] is not None and (sb['envelope_factor'] < 1.0 or sb['envelope_offset_mm'] < 0.0):
+        raise ValueError('snow_bounds: envelope_factor must be >= 1 and envelope_offset_mm >= 0, got %s, %s'
+                         % (sb['envelope_factor'], sb['envelope_offset_mm']))
+    return sb
 
 
 def demo1():

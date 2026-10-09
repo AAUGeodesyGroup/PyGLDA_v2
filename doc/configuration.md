@@ -89,7 +89,7 @@ Recommendations from the Amazon and Danube tests:
   depth perturbation and GRACE cannot resolve them separately; see §2 for the consequence on the ensemble.
 
 Physical bounds applied after every update (`src_DA/Threshold.py`, not configurable from JSON): soil 0 ≤ S ≤ smax;
-snow ≥ 0 (no fixed upper limit; the filter limits snow relative to the forecast, see `snow_upper_bound`); river ≥ 1e-3 mm and inside the open-loop envelope [0.5·min, 1.5·max]; groundwater inside the OL
+snow ≥ 0 (no fixed upper limit; the filter limits snow, see `snow_bounds`); river ≥ 1e-3 mm and inside the open-loop envelope [0.5·min, 1.5·max]; groundwater inside the OL
 envelope widened by half its range (signed storage); canopy / wetlands / reservoirs ≥ 0; lakes unbounded. The
 envelope `state_envelope_<basin>.nc` is recomputed from `Res/<case>/OL` at every DA start. Clipping statistics
 are printed per member and saved to `DA_output/<case>/Ens_k/threshold_log.json`.
@@ -156,7 +156,7 @@ GRACE constrains only the sum of the storages, so where the correction ends up i
 
 The two OL-based tables are computed once at the start from `Res/<case>/Res_OL.h5` (or `"split_source": "<path>"`) for the storages of the DA state; `"min_share": 0.05` puts a floor under every share. `"split_storages": ["groundwstor", "soilmoist", "swe"]` restricts the noise to these storages and re-normalises the shares over them: river storage stays in the DA state (the update still corrects it) but gets no random noise, which would otherwise flow out within days as noise in each member's discharge (default: all storages of the state). They are written to `filter_summary.json` (`inflation.split_table[storage][month][sub-basin]`), and the shares used in every window are columns `share_<storage>` of `adaptive_inflation_log.csv`.
 
-Noise in a bounded storage is weighted per cell by the room to the nearer bound, min(S − lb, ub − S): snow by its amount (as before), soil by the distance to 0 or to smax, so a nearly full winter soil gets almost none; what a bounded storage cannot take goes to groundwater. Use soil in the split only with `"soil_upper_bound": true` (default). Example (run 11a / 11b):
+Noise in a bounded storage is weighted per cell by the room to the nearer bound, min(S − lb, ub − S): snow by its amount, or with the snow envelope cap on (`envelope_factor` of `snow_bounds`) by min(S, cap − S), so a pack at or above its cap (perennial high-Alpine cells) gets no noise and keeps no growing spread; soil by the distance to 0 or to smax, so a nearly full winter soil gets almost none; what a bounded storage cannot take goes to groundwater. Use soil in the split only with `"soil_upper_bound": true` (default). Example (run 11a / 11b):
 
 ```json
 "inflation": {"kind": "adaptive_additive", "split": "ol_spread",
@@ -180,13 +180,33 @@ Noise in a bounded storage is weighted per cell by the room to the nearer bound,
 
 `true` (default) or `false`. With the `non_negative` partition, soil is kept at or below its capacity `smax` (`Auxiliary_dir/smax.nc`, the same field the post-update threshold uses) already inside the update: the window-aware limit smax − (daily max − window mean) keeps every day of the window ≤ smax, and the part of a sub-basin increment that soil cannot hold goes to the other storages of the sub-basin with their shares (mostly groundwater). Without it (`false`, runs ≤ 10) only the threshold clipped soil at smax after the update and that water was deleted (Danube run 9: about 12.5 m per member summed over cells and days, all at the upper bound). The sub-basin TWS increments are the same either way; only where the water goes changes. `filter_summary.json` → `bounds.upper_fields` lists the bounded cells and the smax range. No effect with the `enkf` partition, which ignores bounds.
 
-#### `snow_upper_bound`
+#### `snow_bounds`
 
-`{"factor": 2.0, "offset_mm": 20}` (default) or `false`. Upper limit for snow per member and window, relative to the member's own forecast: snow ≤ factor × forecast + offset (window-aware: every day of the window stays below factor × that member's highest day + offset). The analysis can at most double a snow pack and add a few cm where there is little snow. Snow errors are mostly relative (precipitation under-catch in the mountains, melt timing), so a fixed value has no physical meaning; the former fixed 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a). WaterGAP itself has no cell-mean snow limit; it only stops accumulating in one of the 100 sub-grid elevation levels of a cell once that level holds 1000 mm. The post-update threshold now only keeps snow ≥ 0. `filter_summary.json` → `bounds.relative_upper`.
+All limits of the analysed snow in one block (until 9 Oct 2026 three keys; see the end of this section). Default:
 
-#### `snow_lower_bound`
+```json
+"snow_bounds": {
+    "lower_factor": 0.5,
+    "upper_factor": 2.0, "upper_offset_mm": 20.0,
+    "envelope_factor": 1.5, "envelope_offset_mm": 10.0
+}
+```
 
-`{"factor": 0.5}` (default) or `false`. Lower limit for snow per member and window, relative to the member's own forecast: snow ≥ factor × forecast, i.e. one update removes at most (1 − factor) of a snow pack (window-aware: every day of the window keeps at least factor × its own forecast, LB = window mean − (1 − factor) × the member's lowest day). Without it only snow ≥ 0 applied, and the partition could empty a single cell: Danube run12 removed 496 mm from one cell of one member in one window (2019-02), although GRACE has no information below the sub-basin scale. The removal the bound refuses goes to the other cells and storages of the sub-basin (bound-aware `non_negative` partition), so the sub-basin TWS increment is unchanged. Counterpart of `snow_upper_bound` (which limits additions). `filter_summary.json` → `bounds.relative_lower`. No effect with the `enkf` partition, which ignores bounds.
+| Entry | Limit | Default | Limits what |
+|---|---|---|---|
+| `lower_factor` f | snow ≥ f × forecast | 0.5 | how much one window can remove |
+| `upper_factor` f, `upper_offset_mm` o | snow ≤ f × forecast + o | 2.0, 20 mm | how much one window can add |
+| `envelope_factor` f, `envelope_offset_mm` o | snow ≤ f × max_OL(cell, calendar month) + o | off (Danube, Global: 1.5, 10 mm) | how high a pack can grow over the years |
+
+A missing `lower_factor` / `upper_*` entry takes its default, `null` or `false` switches that limit off; without `envelope_factor` the envelope cap is off. The forecast-relative limits act per member and window; the envelope cap per cell. The filter uses all that are on (the strictest one wins), and no limit ever removes snow a member already has in its forecast. All are applied inside the bound-aware `non_negative` partition (what a snow cell cannot take goes to the other cells and storages of the sub-basin, so the sub-basin TWS increment is unchanged); the envelope cap is also a safety clip in the post-update threshold. No effect with the `enkf` partition, which ignores bounds. Read by `src_DA.configure_DA.snow_bounds()` (the only reader).
+
+**Lower limit (`lower_factor`).** Lower limit for snow per member and window, relative to the member's own forecast: snow ≥ factor × forecast, i.e. one update removes at most (1 − factor) of a snow pack (window-aware: every day of the window keeps at least factor × its own forecast, LB = window mean − (1 − factor) × the member's lowest day). Without it only snow ≥ 0 applied, and the partition could empty a single cell: Danube run12 removed 496 mm from one cell of one member in one window (2019-02), although GRACE has no information below the sub-basin scale. The removal the bound refuses goes to the other cells and storages of the sub-basin (bound-aware `non_negative` partition), so the sub-basin TWS increment is unchanged. `filter_summary.json` → `bounds.relative_lower`.
+
+**Upper limit relative to the forecast (`upper_factor`, `upper_offset_mm`).** Upper limit for snow per member and window, relative to the member's own forecast: snow ≤ factor × forecast + offset (window-aware: every day of the window stays below factor × that member's highest day + offset). The analysis can at most double a snow pack and add a few cm where there is little snow. Snow errors are mostly relative (precipitation under-catch in the mountains, melt timing), so a fixed value has no physical meaning; the former fixed 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a). WaterGAP itself has no cell-mean snow limit; it only stops accumulating in one of the 100 sub-grid elevation levels of a cell once that level holds 1000 mm. The post-update threshold now only keeps snow ≥ 0. `filter_summary.json` → `bounds.relative_upper`.
+
+**Envelope cap (`envelope_factor`, `envelope_offset_mm`).** Absolute upper limit for snow per cell and calendar month, from the open loop: snow ≤ factor × max_OL(cell, month) + offset, where max_OL is the largest snow of that calendar month over all years and perturbed members of the collected open loop (`swe_max_month` in `<Auxiliary_dir>/state_envelope_<basin>.nc`, built at every DA start in `DA_run` together with the river envelope, all ranks in parallel). Used in two places: inside the bound-aware `non_negative` partition (window-aware: every day of the window stays below the cap of the window's month, or the larger cap of the two months a window spans; the part a snow cell cannot take goes to the other cells and storages of the sub-basin, so the sub-basin TWS increment is unchanged), and as a safety clip in the post-update threshold (`Threshold`, day by day with that day's month). Like the other snow bounds it never removes snow a member already has in its forecast (bound = max(cap, forecast)). It stops the ratchet of the relative bounds in cells whose snow never melts: Danube run13 built a perennial pack in three Hohe Tauern cells (one member 139 → 694 mm), because the relative upper bound moves up with the pack and the analysed snow goes into the coldest elevation bands. Cells or months without open-loop values have no cap; snow-free months get a cap of `envelope_offset_mm`. Needs `swe` in the DA state. `filter_summary.json` → `bounds.snow_envelope`, `bounds.windows_with_absolute_cap`; threshold log → `_settings.snow_envelope`.
+
+**Old keys** (settings written before 10 Oct 2026) are still read and give identical results: `"snow_lower_bound": {"factor": f}` → `lower_factor`; `"snow_upper_bound": {"factor": f, "offset_mm": o}` → `upper_factor`, `upper_offset_mm`; `"snow_envelope": {"factor": f, "offset_mm": o}` → `envelope_factor`, `envelope_offset_mm`; `false` → that limit off. If an old key is present it replaces the corresponding entry of `snow_bounds`.
 
 #### Output
 

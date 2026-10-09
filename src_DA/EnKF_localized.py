@@ -39,8 +39,7 @@ class EnKF_localized(EnKF):
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
                  sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
                  partition: Partition = None, obs_error_inflation: dict = None, obs_error_correlation: str = 'full',
-                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_upper_bound=None,
-                 snow_lower_bound=None):
+                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_bounds: dict = None):
         super().__init__(DA_setting, model, obs, sv, sv_excluded)
         self.localization = localization or BlockLocalization()
         self.inflation = inflation or NoInflation()
@@ -72,22 +71,35 @@ class EnKF_localized(EnKF):
                 raise ValueError('soil_upper_bound: smax %s / basin mask %s (%d cells) do not match the state vector '
                                  '(%d cells)' % (smax.shape, mk.shape, int(mk.sum()), n_cell))
             upper['soilmoist'] = smax[mk]
-        '''snow: relative upper bound per member (default 2 x forecast + 20 mm), "snow_upper_bound": null = none'''
-        sub = snow_upper_bound
-        if sub is None or sub is True:
-            sub = {'factor': 2.0, 'offset_mm': 20.0}
-        rel = {}
-        if isinstance(sub, dict) and sub and 'swe' in names:
-            rel['swe'] = (float(sub.get('factor', 2.0)), float(sub.get('offset_mm', 20.0)))
-        '''snow: relative lower bound per member (default 0.5: one update removes at most half of a snow pack),
-        "snow_lower_bound": null = default, false = none'''
-        slb = snow_lower_bound
-        if slb is None or slb is True:
-            slb = {'factor': 0.5}
-        rel_lo = {}
-        if isinstance(slb, dict) and slb and 'swe' in names:
-            rel_lo['swe'] = float(slb.get('factor', 0.5))
+        '''snow limits ("snow_bounds", read by src_DA.configure_DA.snow_bounds; None = defaults):
+        relative upper bound per member (default 2 x forecast + 20 mm) and relative lower bound (default 0.5: one
+        update removes at most half of a snow pack)'''
+        from src_DA.configure_DA import snow_bounds as read_snow_bounds
+        sb = read_snow_bounds({}) if snow_bounds is None else snow_bounds
+        rel, rel_lo = {}, {}
+        if 'swe' in names and sb['upper_factor'] is not None:
+            rel['swe'] = (sb['upper_factor'], sb['upper_offset_mm'])
+        if 'swe' in names and sb['lower_factor'] is not None:
+            rel_lo['swe'] = sb['lower_factor']
         self.bounds = StateBounds(names, n_cell, upper=upper, relative_upper=rel, relative_lower=rel_lo)
+        '''snow: absolute cap per window from the monthly open-loop maximum, factor x max_OL(cell, month) + offset
+        (envelope_factor / envelope_offset_mm of "snow_bounds"; None = off). The same cap as Threshold
+        (snow_cap_month), on the state cells; the month of the window is set by EnKF.run_mpi (_window_months, the
+        largest cap of the months it spans)'''
+        self._snow_env = None
+        self._snow_cap_now = None                        # cap of the current window (update), None = off
+        if sb['envelope_factor'] is not None and 'swe' in names:
+            th = self._thresholder
+            if th.snow_cap is None or th.snow_env_month is None:
+                print('%s: WARNING the snow envelope cap is on but no monthly open-loop snow maximum was loaded -> no snow cap'
+                      % self.METHOD)
+            else:
+                mk = np.asarray(sv.DM.local_mask['basin_2d']).astype(bool)
+                env = np.asarray(th.snow_env_month, dtype=float)
+                if env.shape[1:] != mk.shape:
+                    raise ValueError('snow_bounds envelope: monthly maximum %s does not match the basin box %s'
+                                     % (env.shape[1:], mk.shape))
+                self._snow_env = env[:, mk]                                       # (12, n_cell)
 
         '''observation-error inflation per sub-basin (1-based keys): R' = D R D keeps the error correlations'''
         self._oei = dict(obs_error_inflation or {})
@@ -121,7 +133,10 @@ class EnKF_localized(EnKF):
                  self.inflation.describe(), self.partition.KIND, self._oei if self._oei else 'none', self._obs_corr,
                  self._obs_centering, self._soil_upper_bound,
                  ('%.1f x forecast + %.0f mm' % rel['swe']) if 'swe' in rel else 'none',
-                 ('%.2f x forecast' % rel_lo['swe']) if 'swe' in rel_lo else 'none'))
+                 ('%.2f x forecast' % rel_lo['swe']) if 'swe' in rel_lo else 'none')
+              + '; snow cap (monthly open-loop maximum): %s'
+              % (('%.1f x max_OL(month) + %.0f mm' % self._thresholder.snow_cap) if self._snow_env is not None
+                 else 'none'))
 
     # ------------------------------------------------------------------ analysis step
     def update(self, obs, obs_cov, ens_states):
@@ -140,8 +155,10 @@ class EnKF_localized(EnKF):
         upper_scale = {'soilmoist': scale} if (self._soil_upper_bound and scale is not None and
                                                np.shape(scale) == (ens_states.shape[0] // len(self.bounds.names),
                                                                    ens_states.shape[1])) else None
+        '''snow cap of this window (None = off), also used by the inflation to weight the snow noise'''
+        self._snow_cap_now = self._snow_cap_window()
         self.bounds.set_window(ens_states, getattr(self, '_ens_min', None), getattr(self, '_ens_max', None),
-                               upper_scale=upper_scale)
+                               upper_scale=upper_scale, upper_window=self._snow_cap_now)
 
         xm = np.mean(ens_states, 1)[:, None]
         A = self.inflation.prior(ens_states - xm, xm, obs, R)
@@ -156,6 +173,15 @@ class EnKF_localized(EnKF):
 
         dX = self.partition.split(dX, A, HA, N, X)
         return self.inflation.posterior(X + dX, A, HA)
+
+    def _snow_cap_window(self):
+        """{'swe': cap per state cell} for the months of the current window, or None"""
+        months = getattr(self, '_window_months', None)
+        if self._snow_env is None or not months:
+            return None
+        fac, off = self._thresholder.snow_cap
+        mx = np.fmax.reduce(self._snow_env[[int(m) - 1 for m in sorted(set(months))]], axis=0)   # NaN: no cap
+        return {'swe': fac * mx + off}
 
     def tapered_cross_cov(self, A, HA, N, taper=True):
         """
@@ -239,7 +265,9 @@ class EnKF_localized(EnKF):
     def filter_summary(self):
         return dict(method=self.METHOD, localization=self.localization.describe(),
                     inflation=self.inflation.summary(), partition=self.partition.summary(),
-                    bounds=dict(self.bounds.summary(), soil_upper_bound=self._soil_upper_bound),
+                    bounds=dict(self.bounds.summary(), soil_upper_bound=self._soil_upper_bound,
+                                snow_envelope=None if self._snow_env is None else
+                                dict(zip(('factor', 'offset_mm'), self._thresholder.snow_cap))),
                     obs_error_inflation=self._oei,
                     obs_error_correlation=self._obs_corr, n_obs_decorrelated=self._n_obs_decorrelated,
                     obs_perturbation_centering=self._obs_centering, n_obs_centered=self._n_obs_centered,

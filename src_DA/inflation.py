@@ -204,8 +204,10 @@ class AdditiveInflation(Inflation):
             a sub-basin with little snow gets less than sigma; members are kept within the window-aware bounds;
           - storages with a lower AND an upper bound (soil: 0..smax, needs soil_upper_bound): e weighted by the room
             to the nearer bound, min(S - lb, ub - S), so a nearly full (winter) or nearly empty soil gets little
-            noise and is not clipped; the same CV_MAX cap applies to the room. For snow (no static upper bound) this is
-            the snow amount, as before.
+            noise and is not clipped; the same CV_MAX cap applies to the room. Snow has no static upper bound: its room
+            is the snow amount, or, with the snow envelope cap on ("envelope_factor" of "snow_bounds", 10 Oct 2026),
+            min(S, cap - S) with the cap of the window, so a pack at or above its cap (perennial high-Alpine cells)
+            gets no noise and does not keep building ensemble spread there.
           Variance a bounded storage cannot take (no snow, full soil) goes to the unbounded storages (groundwater,
           lakes) in the adaptive scheme.
         The perturbations stay in the members after the update (they are part of Xa), so they act as model error
@@ -268,13 +270,19 @@ class AdditiveInflation(Inflation):
 
     def _room(self, v, x, rows):
         """how much noise a bounded storage can take in each cell (rows: its state elements): the distance to the
-        nearer static bound, min(S - lb, ub - S); for snow (no static upper bound) this is the snow amount as before"""
+        nearer static bound, min(S - lb, ub - S); for snow (no static upper bound) the snow amount, limited by the
+        distance to the snow cap of the window when the envelope cap is on (EnKF_localized._snow_cap_now)"""
         f = self.f
         w = np.maximum(x - f.bounds.lb[rows], 0.0)
         ub = f.bounds.ub[rows]
         fin = np.isfinite(ub)
         if fin.any():
             w = np.where(fin, np.minimum(w, np.maximum(ub - x, 0.0)), w)
+        cap = getattr(f, '_snow_cap_now', None)
+        if v == 'swe' and cap is not None:
+            c = np.asarray(cap['swe'], dtype=float)[rows // len(f.bounds.names)]      # state element -> cell
+            fin = np.isfinite(c)
+            w = np.where(fin, np.minimum(w, np.maximum(c - x, 0.0)), w)
         return w
 
     def summary(self):

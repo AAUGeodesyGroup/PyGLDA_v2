@@ -25,7 +25,14 @@ class model_state_threshold:
                          read from <Auxiliary_dir>/state_envelope_<basin>.nc (see src_DA.state_envelope);
                          without the file only the floor is applied
       swe                S >= 0 (no fixed upper limit: the filter limits snow relative to each member's forecast,
-                         see src_DA.bounds; snow_max sets an absolute safety limit if wanted, default none)
+                         see src_DA.bounds; snow_max sets an absolute safety limit if wanted, default none).
+                         With "envelope_factor": f, "envelope_offset_mm": o in "snow_bounds" (9 Oct 2026):
+                             S <= f x max_OL(cell, calendar month of the day) + o
+                         from swe_max_month of <Auxiliary_dir>/state_envelope_<basin>.nc (the open loop's largest snow
+                         of that month over all years and members). The filter applies the same cap inside the
+                         bound-aware partition (EnKF_localized), so this clip is a safety net; like the partition it
+                         never removes snow the member already had in its forecast of that day (set_snow_forecast):
+                         the bound is max(cap, forecast). Without the file only S >= 0 is applied (warning)
       canopystor, reservoirstor, localwetlandstor, globalwetlandstor      S >= 0
       locallakestor, globallakestor                                       no bound (lakes may be negative)
     Capacities of lakes, wetlands and reservoirs exist inside WaterGAP (lateral water balance: max_*_storage,
@@ -63,9 +70,21 @@ class model_state_threshold:
 
         '''open-loop envelope of river storage (optional)'''
         self.envelope = {}
+        '''snow cap from the monthly open-loop maximum (envelope_factor / envelope_offset_mm of "snow_bounds",
+        src_DA.configure_DA.snow_bounds; envelope_factor missing / null = off)'''
+        from src_DA.configure_DA import snow_bounds
+        method = getattr(configDA, 'method', None)
+        sb = snow_bounds(method if method is not None else {})
+        self.snow_cap = None                            # (factor, offset_mm) when on
+        self.snow_forecast = None                       # forecast snow of the day being clipped (set_snow_forecast)
+        self.snow_env_month = None                      # (12, lat, lon) of the box, mm; NaN = no cap
+        if sb['envelope_factor'] is not None and 'swe' in self.layers:
+            self.snow_cap = (sb['envelope_factor'], sb['envelope_offset_mm'])
         env_fn = Path(configDA.basic.Auxiliary_dir) / ('state_envelope_%s.nc' % configDA.basic.basin)
         if env_fn.exists():
             env = xr.open_dataset(env_fn).sel(lon=self._lon_slice, lat=self._lat_slice)
+            if self.snow_cap is not None and 'swe_max_month' in env:
+                self.snow_env_month = env['swe_max_month'].transpose('month', 'lat', 'lon').values.astype(float)
             for var in [v for v in self.layers if v in self.ENVELOPE_VARS]:
                 if var == 'groundwstor' and not (self.gw_lower or self.gw_upper):
                     continue                                # groundwater unbounded (default)
@@ -91,6 +110,9 @@ class model_state_threshold:
             env.close()
         elif 'riverstor' in self.layers:
             print('model_state_threshold: %s not found -> riverstor bounded by the positive floor only' % env_fn)
+        if self.snow_cap is not None and self.snow_env_month is None:
+            print('model_state_threshold: WARNING the snow envelope cap is on but %s has no swe_max_month -> no snow cap'
+                  % env_fn)
 
         self.non_negative_vars = ['canopystor', 'reservoirstor', 'localwetlandstor', 'globalwetlandstor']
         self.unbounded_vars = ['locallakestor', 'globallakestor']
@@ -129,14 +151,32 @@ class model_state_threshold:
         self.soil_scale = None if scale is None else np.asarray(scale, dtype=float)
 
     # ------------------------------------------------------------------ bounds per storage
-    def _bounds(self, var, x):
-        """return (lower, upper) arrays or scalars for variable var, or None if unbounded"""
+    def set_snow_forecast(self, snow):
+        """forecast snow (lat, lon) of the day that is clipped next: the cap never removes snow the member already had
+        (consistent with the partition, src_DA.bounds); None = cap as it is"""
+        self.snow_forecast = None if snow is None else np.asarray(snow, dtype=float)
+
+    def snow_cap_month(self, month):
+        """snow cap (lat, lon) of a calendar month 1..12, mm (inf where the open loop has no value), or None"""
+        if self.snow_cap is None or self.snow_env_month is None:
+            return None
+        fac, off = self.snow_cap
+        cap = fac * self.snow_env_month[int(month) - 1] + off
+        return np.where(np.isfinite(cap), cap, np.inf)
+
+    def _bounds(self, var, x, month=None):
+        """return (lower, upper) arrays or scalars for variable var, or None if unbounded; month (1..12) selects the
+        monthly snow cap"""
         if var == 'soilmoist':
             if self.soil_scale is not None and np.shape(self.soil_scale) == np.shape(self.smax):
                 return 0.0, self.smax * self.soil_scale
             return 0.0, self.smax
         if var == 'swe':
-            return 0.0, (np.inf if self.snow_max is None else self.snow_max)
+            hi = np.inf if self.snow_max is None else self.snow_max
+            cap = None if month is None else self.snow_cap_month(month)
+            if cap is not None and self.snow_forecast is not None and np.shape(self.snow_forecast) == np.shape(cap):
+                cap = np.where(np.isfinite(self.snow_forecast), np.maximum(cap, self.snow_forecast), cap)
+            return 0.0, (hi if cap is None else np.minimum(hi, cap))
         if var == 'riverstor':
             if var in self.envelope:
                 lo, hi = self.envelope[var]
@@ -157,7 +197,7 @@ class model_state_threshold:
         for var in self.layers:
             if var not in state:
                 continue
-            b = self._bounds(var, state[var])
+            b = self._bounds(var, state[var], month=None if month is None else int(month[5:7]))
             st = self.stats[var]
             st['n_calls'] += 1
             if b is None:
@@ -233,7 +273,10 @@ class model_state_threshold:
                             ('envelope' if var in self.envelope else 'fixed'))   # envelope only holds ENVELOPE_VARS
         out['_settings'] = dict(env_low=self.env_low, env_high=self.env_high, river_floor=self.river_floor,
                                 gw_lower=self.gw_lower, gw_upper=self.gw_upper,
-                                snow_max=self.snow_max, n_threshold_calls=self.n_updates)
+                                snow_max=self.snow_max, n_threshold_calls=self.n_updates,
+                                snow_envelope=None if self.snow_cap is None else
+                                dict(factor=self.snow_cap[0], offset_mm=self.snow_cap[1],
+                                     monthly_max_loaded=self.snow_env_month is not None))
         return out
 
     def print_summary(self):

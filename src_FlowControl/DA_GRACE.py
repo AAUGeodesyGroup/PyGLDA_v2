@@ -205,7 +205,7 @@ class DA_GRACE:
                                                          'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
         raise ValueError('unknown observation kind: %s' % kind)
 
-    def make_state_envelope(self, variables=None, force=False):
+    def make_state_envelope(self, variables=None, force=False, comm=None):
         """
         Per-cell min/max of selected storages over the collected open loop (Res/<case>/OL/Ens_1..N), written to
         <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage (and, only with
@@ -216,17 +216,25 @@ class DA_GRACE:
         riverstor when it is part of the DA state; nothing to do (and no file read) otherwise. Until 8 Oct 2026
         the envelope of river storage and groundwater was rebuilt at every DA start, reading two full-grid
         variables of every member and year on rank 0 while the other ranks waited, even when no storage used it.
+        With the snow envelope cap on ("envelope_factor" in "snow_bounds") and swe in the state the monthly snow maximum swe_max_month is
+        added in the same pass (snow cap, src_DA.Threshold / EnKF_localized).
+        comm: all ranks of the communicator call it and each reads its own member (src_DA.state_envelope);
+        the file is reused while the open-loop files are unchanged (fingerprint), force=True rebuilds it.
         """
         from src_DA.state_envelope import make_state_envelope
         cfg = self.configDA
         if variables is None:
             variables = ['riverstor'] if cfg.model.layer.get('riverstor', False) else []
-        if not variables:
+        '''monthly snow maximum for the snow cap ("envelope_factor" in "snow_bounds", swe in the DA state)'''
+        from src_DA.configure_DA import snow_bounds
+        cap_on = snow_bounds(cfg.method)['envelope_factor'] is not None
+        monthly = ['swe'] if (cap_on and cfg.model.layer.get('swe', False)) else []
+        if not variables and not monthly:
             print('state envelope: not needed (no state variable is bounded by the open-loop envelope)')
             return None
         return make_state_envelope(res_dir=cfg.basic.res_permanent, case=cfg.basic.case, ens=cfg.basic.ensemble,
                                    basin=cfg.basic.basin, out_dir=cfg.basic.Auxiliary_dir, variables=variables,
-                                   force=force)
+                                   force=force, comm=comm, monthly=monthly)
 
     def prepare_design_matrix(self):
         dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)

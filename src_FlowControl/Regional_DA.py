@@ -505,11 +505,11 @@ class RDA:
 
                 da.generate_perturbed_GRACE_obs()
 
-                '''open-loop envelope for river storage and groundwater (see src_DA.Threshold): rebuilt from the
-                collected open loop at every DA start, so that it always matches the current case, basin and period'''
-                da.make_state_envelope(force=True)
-
             comm.barrier()
+
+            '''open-loop envelope of the bounded storages (see src_DA.Threshold), rebuilt at every DA start on all ranks:
+            each rank reads its own member of the collected open loop (src_DA.state_envelope)'''
+            da.make_state_envelope(comm=comm, force=True)
 
             da.prepare_design_matrix()
 

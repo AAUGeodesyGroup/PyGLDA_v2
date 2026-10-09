@@ -7,8 +7,8 @@ Static bounds per storage (mm):
     groundwater, lakes                                     unbounded
 Relative upper bounds (StateBounds(..., relative_upper={var: (factor, offset_mm)})), per member and window:
     snow                                                   <= factor x the member's own forecast + offset_mm
-                                                              (default 2 x forecast + 20 mm, see EnKF_localized
-                                                              "snow_upper_bound"): the analysis may at most double a
+                                                              (default 2 x forecast + 20 mm, "upper_factor" /
+                                                              "upper_offset_mm" of "snow_bounds"): the analysis may at most double a
                                                               snow pack and add a few cm where there is little snow.
     Snow errors are mostly relative (precipitation under-catch, melt timing), so a fixed number is not meaningful:
     the earlier 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a).
@@ -16,7 +16,7 @@ Relative upper bounds (StateBounds(..., relative_upper={var: (factor, offset_mm)
     holds 1000 mm.
 Relative lower bounds (StateBounds(..., relative_lower={var: factor})), per member and window:
     snow                                                   >= factor x the member's own forecast
-                                                              (default 0.5, see EnKF_localized "snow_lower_bound"):
+                                                              (default 0.5, "lower_factor" of "snow_bounds"):
                                                               one update removes at most half of a snow pack. GRACE
                                                               has no information below the sub-basin scale, and the
                                                               partition otherwise empties single cells (Danube run12:
@@ -29,6 +29,14 @@ Per-cell upper bounds from fields (StateBounds(..., upper={var: values per cell}
                                                               by EnKF_localized when soil_upper_bound is on.
     With it the bound-aware partition moves the water that soil cannot hold to the other storages of the
     sub-basin instead of Threshold deleting it after the update.
+Absolute upper bounds per window (set_window(..., upper_window={var: values per cell})):
+    snow                                                   <= f x max_OL(cell, month of the window) + offset
+                                                              ("envelope_*" of "snow_bounds", EnKF_localized): the
+                                                              open loop's largest snow of that calendar month over
+                                                              all years and members. Stops the ratchet of the relative
+                                                              bound in cells whose pack never melts (Danube run13: one
+                                                              Hohe Tauern cell 139 -> 694 mm). Window-aware like the
+                                                              others: every day of the window stays below it.
 Window-aware bounds: the increment of a window is added equally to every day of the window and the threshold
 (src_DA.Threshold) is then applied day by day. With the daily minimum / maximum of each member over the window
 (passed by EnKF.run_mpi), "every day stays within [lb, ub]" means for the window-mean analysis Xa
@@ -97,6 +105,7 @@ class StateBounds:
                           for v in set(self.relative_upper) | set(self.relative_lower)}
         self.LB = self.UB = None
         self.n_window_bounds = 0
+        self.n_window_caps = {}
 
     def is_bounded(self, var):
         """True if the storage has a finite lower bound (snow, soil, river, ...)"""
@@ -106,9 +115,26 @@ class StateBounds:
     def any_finite(self):
         return bool(np.isfinite(self.lb).any() or np.isfinite(self.ub).any())
 
-    def set_window(self, ens_states, ens_min=None, ens_max=None):
-        """effective bounds LB, UB (n_state x N) for the window-mean analysis"""
+    def set_window(self, ens_states, ens_min=None, ens_max=None, upper_scale=None, upper_window=None):
+        """effective bounds LB, UB (n_state x N) for the window-mean analysis.
+        upper_scale: optional {storage: (n_cell x N)} factor on the static upper bound of that storage, per cell and
+        member (soil: land / continental fraction, see Threshold.set_soil_scale)
+        upper_window: optional {storage: (n_cell,)} absolute upper bound of this window, mm (inf / NaN = none), e.g.
+        the monthly snow cap; every day of the window must stay below it"""
         lb, ub = self.lb[:, None], self.ub[:, None]
+        if upper_scale:
+            nv = len(self.names)
+            ub = np.broadcast_to(ub, np.shape(ens_states)).copy()
+            for v, sc in upper_scale.items():
+                if v not in self.names or sc is None:
+                    continue
+                sc = np.asarray(sc, dtype=float)
+                r = np.arange(self.names.index(v), ub.shape[0], nv)
+                if sc.shape != (r.size, ub.shape[1]):
+                    raise ValueError('StateBounds: upper_scale of %s has shape %s, expected %s'
+                                     % (v, sc.shape, (r.size, ub.shape[1])))
+                fin = np.isfinite(ub[r])
+                ub[r] = np.where(fin, ub[r] * sc, ub[r])
         if ens_min is not None and ens_max is not None and \
                 np.shape(ens_min) == ens_states.shape == np.shape(ens_max):
             with np.errstate(invalid='ignore'):
@@ -125,6 +151,20 @@ class StateBounds:
             xmax = np.asarray(ens_max, dtype=float)[r] if has_max else xs[r]
             rel = xs[r] + (fac - 1.0) * np.maximum(xmax, 0.0) + off       # every day <= fac * x_max + off
             self.UB[r] = np.minimum(self.UB[r], rel)
+        for v, cap in (upper_window or {}).items():
+            if v not in self.names or cap is None:
+                continue
+            nv = len(self.names)
+            r = np.arange(self.names.index(v), xs.shape[0], nv)
+            cap = np.asarray(cap, dtype=float).ravel()
+            if cap.size != r.size:
+                raise ValueError('StateBounds: upper_window of %s has %d values for %d cells' % (v, cap.size, r.size))
+            cap = np.where(np.isfinite(cap), cap, np.inf)[:, None]
+            xmax = np.asarray(ens_max, dtype=float)[r] if has_max else xs[r]
+            with np.errstate(invalid='ignore'):
+                capw = cap - (xmax - xs[r])                                    # every day <= cap
+            self.UB[r] = np.minimum(self.UB[r], np.where(np.isfinite(capw), capw, np.inf))
+            self.n_window_caps[v] = self.n_window_caps.get(v, 0) + 1
         has_min = ens_min is not None and np.shape(ens_min) == xs.shape
         for v, fac in self.relative_lower.items():
             r = self._rel_rows[v]
@@ -136,5 +176,6 @@ class StateBounds:
 
     def summary(self):
         return dict(n_window_bounds=self.n_window_bounds, upper_fields=self.upper_fields,
+                    windows_with_absolute_cap=dict(self.n_window_caps),
                     relative_upper={v: dict(factor=f, offset_mm=o) for v, (f, o) in self.relative_upper.items()},
                     relative_lower={v: dict(factor=f) for v, f in self.relative_lower.items()})

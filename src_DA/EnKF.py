@@ -321,6 +321,9 @@ class EnKF:
                 self._ens_max = np.array(ens_max).T
                 ens_min = ens_max = None
 
+                '''calendar months of the window (monthly snow cap of EnKF_localized)'''
+                self._window_months = sorted({d.month for d in info[1]})
+
                 '''kalman filter: update step'''
                 states_update = self.update(obs=ens_obs, obs_cov=obs_cov, ens_states=ens_states)
                 # print(np.shape(states_update.T), '=============================')
@@ -344,6 +347,8 @@ class EnKF:
 
                 if rank != OL_thread:
                     '''do not update the OL thread'''
+                    if self._thresholder.snow_cap is not None and 'swe' in states_old:
+                        self._thresholder.set_snow_forecast(states_old['swe'].copy())   # cap never removes it
                     new_state = self._sv.restore_states(old_states=states_old,
                                                         new_states=states_ens_update_delta.flatten(), isdelta=True)
                     '''possible negative value exists in the updated states. replace the negative value with zero'''

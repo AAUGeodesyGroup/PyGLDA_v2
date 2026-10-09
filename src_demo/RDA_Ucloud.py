@@ -33,9 +33,13 @@ def demo1():
     # RDA.config_external_data()        # done 2026-10-05 on UCloud (paths rewritten in settings/demo_Danube)
     # RDA.read_config_and_save()        # done 2026-10-05 (ensemble 30, todate 2019-12-31)
 
-    '''before the data assimilation'''
-    # RDA.config_basin_mask()
-    # RDA.get_GRACE_obs(is_diagonal=False)   # done 2026-10-05 (2002-01..2019-12, GRACE/output)
+    '''run13 = verification of the code changes of 7-8 Oct (doc/ucloud_notes.md, READ FIRST): run12 setup, same OL;
+    order: (1) demo1 "before" steps, (2) demo2 (DA_run + collect DA), (3) demo1 "after" steps'''
+
+    '''before the data assimilation: rebuild the masks and GRACE obs with the WaterGAP land mask
+    (needs GRACE/global_mask/WaterGAPLandMask.hdf5 on this machine)'''
+    # RDA.config_basin_mask()               # run13: done 2026-10-08 22:26 (new WaterGAP land mask, 1-degree mask from 0.5)
+    # RDA.get_GRACE_obs(is_diagonal=False)   # run13: done 2026-10-08 22:29
 
     '''after the data assimilation'''
     RDA.visualization()
@@ -81,5 +85,5 @@ def demo2():
 
 
 if __name__ == '__main__':
-    # demo1()
-    demo2()
+    demo1()
+    # demo2()

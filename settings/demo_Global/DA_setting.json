@@ -36,7 +36,7 @@
             "localwetlandstor": false,
             "globallakestor": false,
             "globalwetlandstor": false,
-            "riverstor": false,
+            "riverstor": true,
             "reservoirstor": false,
             "canopystor": false
         }
@@ -75,12 +75,12 @@
         "obs_error_correlation": "diagonal",
         "obs_perturbation_centering": true,
         "soil_upper_bound": true,
-        "snow_upper_bound": {
-            "factor": 2.0,
-            "offset_mm": 20.0
-        },
-        "snow_lower_bound": {
-            "factor": 0.5
+        "snow_bounds": {
+            "lower_factor": 0.5,
+            "upper_factor": 2.0,
+            "upper_offset_mm": 20.0,
+            "envelope_factor": 1.5,
+            "envelope_offset_mm": 10.0
         }
     }
 }
