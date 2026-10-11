@@ -10,34 +10,36 @@ from src_DA.EnumDA import Stage
 
 DATA_ROOT = '/work/PyGLDA_v2_external_data'
 
-GDA.case = 'demo_Global'
+GDA.case = 'GDA_Ucloud'
 GDA.basin = 'GlobalBasins_v1.0'
 GDA.ens = 30
 GDA.setting_dir = str(CODE_ROOT / 'settings' / GDA.case)
 GDA.external_data_path = DATA_ROOT
 GDA.shp_path = DATA_ROOT + '/Basin/shp/Global_v1.0/GlobalBasins_v1.0.shp'
 
-'''for spin-up (not run here: perturbation, spin-up and open loop are the global ones of demo_Danube)'''
+'''for spin-up: each member with its own parameters and forcing; WaterGAP repeats the first year spin_up_years times
+and then runs the whole spin-up period, so 8 x 2000 + 2000-2001 = 10 model years (groundwater with gw_dis_coeff down
+to 0.005 1/d settles in ~600 days; Job 8, 10 Oct 2026)'''
 GDA.spin_up_start = '2000-01-01'
 GDA.spin_up_end = '2001-12-31'
-GDA.spin_up_years = 5
+GDA.spin_up_years = 8
 
-'''for open-loop and data assimilation: 2-year pilot'''
+'''for open-loop and data assimilation: 5-year pilot (pilot1, 10 Oct 2026)'''
 GDA.sim_begin_time = '2002-01-01'
-GDA.sim_end_time = '2003-12-31'
+GDA.sim_end_time = '2006-12-31'
 
 
 def demo1():
-    '''serial: python demo_global.py Config_ReWaterGAP.json'''
+    '''serial: python GDA_Ucloud.py Config_ReWaterGAP.json'''
 
     '''before the data assimilation'''
-    # GDA.config_external_data()            # paths of this machine into the JSON files of settings/demo_Global
+    # GDA.config_external_data()            # paths of this machine into the JSON files of settings/GDA_Ucloud
     # GDA.read_config_and_save()            # case, basin, shp, mask, ensemble size and period into DA_setting.json
     # GDA.check_units()                     # frozen unit set GlobalBasins v1.0
     # GDA.get_GRACE_obs()                   # unit TWS + 772 x 772 COV + gridded TWS -> GRACE/output/GlobalBasins_v1.0_*
 
     '''after the data assimilation (needs collect_and_statistics of OL and DA)'''
-    # GDA.da_evaluation(tag='pilot1')       # new tag for every run -> Res/demo_Global/evaluation_global/pilot1
+    # GDA.da_evaluation(tag='pilot1')       # new tag for every run -> Res/GDA_Ucloud/evaluation_global/pilot1
     # GDA.visualization(tag='pilot1')       # figures of that report, same folder
 
     '''house-keeping: remove the temporary daily DA output of a collected run (dry run first);
@@ -47,7 +49,7 @@ def demo1():
 
 
 def demo2():
-    '''MPI: mpiexec -n <ens+1> python -u demo_global.py Config_ReWaterGAP.json'''
+    '''MPI: mpiexec -n <ens+1> python -u GDA_Ucloud.py Config_ReWaterGAP.json'''
     from mpi4py import MPI
 
     '''settings are synced between machines: rank 0 first writes the paths of this machine into the JSON files'''
@@ -55,6 +57,11 @@ def demo2():
     if comm.Get_rank() == 0:
         GDA.config_external_data()
     comm.barrier()
+
+    '''ensemble of this case: production perturbation (settings/GDA_Ucloud/perturbation.json), spin-up, open loop'''
+    GDA.model_perturbation()                   # parameters + correlated forcing -> Ensemble_input (spin-up years + pilot period)
+    GDA.spin_up()                              # 10 model years per member -> Ensemble_Initialization
+    GDA.OL_run()                               # 2002-2006 -> OL_output
 
     GDA.collect_and_statistics(Stage.OL)       # global yearly OL files, Res_OL.h5 (needed by the ol_spread split), harmonic maps
 

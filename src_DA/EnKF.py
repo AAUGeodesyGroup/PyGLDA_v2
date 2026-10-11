@@ -41,6 +41,11 @@ class EnKF:
         self._thresholder = model_state_threshold(configDA=DA_setting)
         self.threshold = self._thresholder.threshold
 
+        '''soil capacity multiplier of this member (ensemble perturbation "smax_multiplier", see src_DA.perturbation_par and
+        ReWaterGAP model/parameters.py; 1 = standard WaterGAP): the soil bound of the filter and of the threshold is
+        smax.nc x land fraction x this factor, applied with the land fraction in run_mpi'''
+        self._smax_multiplier = self._member_smax_multiplier()
+
         '''obtain info'''
         self._obs_helper = self.helper_resolve_time(obs.get_obs_aux())
 
@@ -53,6 +58,19 @@ class EnKF:
                                                    contfrac_global=self._model.unit_converter.contfrac_global)
 
         pass
+
+    def _member_smax_multiplier(self):
+        """smax_multiplier of the member this rank runs (one value per member), 1.0 if the parameter file has none"""
+        try:
+            m = np.asarray(self._model.parameters.global_params['smax_multiplier'].values, dtype=float)
+        except (AttributeError, KeyError):
+            return 1.0
+        m = m[np.isfinite(m)]
+        if m.size == 0:
+            return 1.0
+        if np.ptp(m) > 0:
+            raise ValueError('smax_multiplier varies in space; the DA soil bound supports one value per member')
+        return float(m[0])
 
     def _replace_state(self, original_state_a: dict, updated_internal_c: dict) -> None:
         """
@@ -232,7 +250,7 @@ class EnKF:
                     historic_max_states = np.maximum(historic_max_states, sv)
                     historic_mean_states += sv
                     historic_mean_states_excluded += sv_excluded
-                lr = self._land_ratio_box()
+                lr = self._land_ratio_box() * self._smax_multiplier     # member's soil capacity factor
                 historic_land_ratio = lr if historic_land_ratio is None else np.fmax(historic_land_ratio, lr)
             else:
                 historic_mean_states = None

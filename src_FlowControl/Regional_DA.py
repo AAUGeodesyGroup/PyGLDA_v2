@@ -204,7 +204,8 @@ class RDA:
         """
         from mpi4py import MPI
         import sys, os
-        from src_DA.Perturbation import perturbation
+        from src_DA.perturbation_par import perturbation_par
+        from src_DA.perturbation_forcing import perturbation_forcing
 
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
@@ -228,9 +229,9 @@ class RDA:
             if rank == 1:
                 print('\n=================== Model perturbation ===================')
                 print('%d members (+ unperturbed) | %s to %s | %d ranks' % (RDA.ens, t1, t2, size), flush=True)
-            pp = perturbation(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2)
-            pp.perturb_par(comm=comm)
-            pp.perturb_forcing(comm=comm)
+            '''parameters first, then forcing (with "seed": null both use numpy's global generator in this order)'''
+            perturbation_par(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2).perturb_par(comm=comm)
+            perturbation_forcing(dp=dp, ens_size=RDA.ens).setDate(month_begin=t1, month_end=t2).perturb_forcing(comm=comm)
         except Exception:
             _abort_with_report(comm, rank, 'perturbation')
 

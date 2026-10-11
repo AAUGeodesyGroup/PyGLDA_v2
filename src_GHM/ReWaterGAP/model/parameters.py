@@ -36,6 +36,13 @@ modname = modname.split('.')[0]
 # +++++++++++++++++++++++++++++++++++++++++++++++++
 args = cli.parse_cli()
 
+# PyGLDA (10 Oct 2026): multipliers of model quantities that are not in the parameter file, written per ensemble
+# member by src_DA/perturbation_par.py and applied where WaterGAP reads the quantity (fan_waterbalance_vertical_init.py,
+# waterbalance_lateral.py). A parameter file without them (the original WaterGAP file) gets 1.0 everywhere, i.e.
+# the standard model, bit-identical.
+MULTIPLIERS = ('lai_multiplier', 'degreeday_multiplier', 'smax_multiplier', 'gw_recharge_factor_multiplier',
+               'max_gw_recharge_multiplier', 'netabs_gw_multiplier', 'netabs_sw_multiplier')
+
 
 class Parameters:
     """WaterGAP parameters."""
@@ -52,6 +59,12 @@ class Parameters:
             
             
             self.global_params = xr.open_dataset(param_path, decode_times=False)
+
+            # PyGLDA: missing ensemble multipliers -> 1.0 everywhere (see MULTIPLIERS)
+            template = self.global_params['max_daily_pet']
+            for name in MULTIPLIERS:
+                if name not in self.global_params:
+                    self.global_params[name] = xr.ones_like(template, dtype=float)
 
         except FileNotFoundError:
             log.config_logger(logging.ERROR, modname, 'Global parameter data  '

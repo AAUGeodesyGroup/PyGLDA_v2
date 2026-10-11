@@ -104,6 +104,7 @@ class StateBounds:
         self._rel_rows = {v: np.arange(self.names.index(v), nv * n_cell, nv)
                           for v in set(self.relative_upper) | set(self.relative_lower)}
         self.LB = self.UB = None
+        self.ub_member = None          # static upper bound of the window per member (n_state x N), set_window
         self.n_window_bounds = 0
         self.n_window_caps = {}
 
@@ -135,6 +136,9 @@ class StateBounds:
                                      % (v, sc.shape, (r.size, ub.shape[1])))
                 fin = np.isfinite(ub[r])
                 ub[r] = np.where(fin, ub[r] * sc, ub[r])
+        '''static upper bound of every member (soil: smax x land fraction x the member's smax_multiplier), before the
+        window extremes; the inflation weights the soil noise by the room to it (AdditiveInflation._room)'''
+        self.ub_member = np.broadcast_to(ub, np.shape(ens_states)).copy()
         if ens_min is not None and ens_max is not None and \
                 np.shape(ens_min) == ens_states.shape == np.shape(ens_max):
             with np.errstate(invalid='ignore'):

@@ -243,6 +243,531 @@ No runs, no edits of src_* / settings; script under temp/exp_logs/, in tmux.
 Report in §7 with a one-line verdict: "the OL snow spread in C1-C3 is driven by <parameter>: yes/no".
 Expected effort: < 30 min.
 
+**Job 7 — check of the new parameter perturbation code (step 1 of the Döll et al. 2024 ensemble; Fan, 9 Oct; added
+after Job 6).** Cowork committed (md5-verified on the workstation; sync first, then compare these md5s):
+```
+e2555d56e8dc85a65ac3ee913ec3293c  src_DA/Perturbation.py
+5c60a59cf33d5b591c404b2b5ec28ce2  src_GHM/ReWaterGAP/model/parameters.py                         (CRLF)
+f5052d4c9e05ef3513a643148b1567db  src_GHM/Extension/fan_waterbalance_vertical_init.py           (CRLF)
+fa4e5eb490f1ecfd14996d2dc2e679d7  src_GHM/ReWaterGAP/model/lateralwaterbalance/waterbalance_lateral.py (CRLF)
+48ee58844bb8af23fd29cc2c6611a92b  src_DA/EnKF.py
+d10b9be54254ff206f516c1a50ebcb6f  settings/demo_Danube/perturbation.json  (= settings/demo_Global/perturbation.json)
+2e0a6b2cb6522d5333ddf92c86238746  README.md
+5906846b4c08fd6463f90ff37a3c80ce  doc/configuration.md
+```
+What changed: every parameter of Döll et al. (2024, Table 1) except the forcing multipliers is now an entry of
+perturbation.json (`type` value | multiplier, distribution triangle | gaussian | uniform, optional `seed`). Seven
+parameters that are not in the parameter file are new multiplier fields (default 1 everywhere when absent):
+`lai_multiplier`, `degreeday_multiplier`, `smax_multiplier`, `gw_recharge_factor_multiplier`,
+`max_gw_recharge_multiplier` (applied in fan_waterbalance_vertical_init.py), `netabs_gw_multiplier`,
+`netabs_sw_multiplier` (applied in waterbalance_lateral.py). The `par` block of perturbation.json (and of `save_default_json`) now holds ONLY these 20
+Döll parameters; the 11 other entries (all off: openwater_albedo, snow_albedo_thresh, runoff_frac_builtup,
+areal_corr_factor, reduction_exponent_lakewet, gw_recharge_constant, lake_out_exp, wetland_out_exp,
+swb_drainage_area_factor, reduction_exponent_res, stat_corr_fact) were removed (same members with a fixed seed). parameters.py adds the missing ones as ones, so the
+EXISTING Ensemble_input files (without these fields) must give exactly the old model. EnKF reads the member's
+`smax_multiplier` for the soil bound. The current perturbation.json perturbs the same 8 parameters as before
+(all new entries are off), so nothing about the current ensemble changes. Tested by Cowork (perturbation files old
+vs new identical with a fixed seed; vertical init bit-identical without multipliers and scaled exactly with them).
+NOT yet tested: a running model, in particular the net-abstraction multipliers -> this job.
+
+Rules: READ-ONLY on everything that exists (Ensemble_input, Ensemble_Initialization, OL_output, Res). Write ONLY
+under `$W = /work/PyGLDA_v2_external_data/temp_job7/` and your scripts/logs under `temp/exp_logs/job7/`. Do not edit
+`src_*`, `settings/`, `exp_Ucloud.py`. Your own driver (in temp/exp_logs/job7/) uses `OpenLoop` exactly as
+`RDA.OL_run` does (settings dir `settings/demo_Global`, `configure_time('2002-01-01', '2002-01-31')`,
+`configure_Ens_output`, `configure_Ens_input`, `model_resume()`), with ONE difference: in
+`configure_ini_for_resume` READ from the real restarts but SAVE into `$W/init_save` (never into
+Ensemble_Initialization; OL_run saves into the read folder). OpenLoop's `mkdir(parents=False)`: create the parent
+folders yourself. tmux session `job7`, plain `mpiexec -n <N>`.
+
+7a — no-change check (new code + existing member files must reproduce the old open loop):
+1. `mpiexec -n 4`: members Ens_0..Ens_3, input = the real `Ensemble_input`, read init = the real
+   `Ensemble_Initialization` (2001-12-31), output `$W/7a/Ens_k`, Jan 2002.
+2. Compare every output variable of every day of Jan 2002 with `OL_output/Ens_k` (k = 0..3): max |difference|,
+   expected exactly 0. If not 0: run the same with the code before this commit (Fan's last GitHub commit, in a
+   separate checkout under `$W/oldcode`, not in the working tree) and report which of the two differs from
+   OL_output (a difference that already exists with the old code is not caused by step 1).
+
+7b — each new multiplier acts, alone, where expected:
+1. Build `$W/7b_input/Ens_k`, k = 0..7: `parameters/WaterGAP_2.2e_global_parameters_gswp3_w5e5.nc` = a copy of the
+   real Ens_0 file, plus for k = 1..7 ONE field set to a constant (xarray, `full_like(ds['max_daily_pet'], value)`,
+   NaN pattern of max_daily_pet): 1 lai_multiplier 1.5, 2 degreeday_multiplier 1.5, 3 smax_multiplier 1.5,
+   4 gw_recharge_factor_multiplier 0.5, 5 max_gw_recharge_multiplier 0.5, 6 netabs_gw_multiplier 2,
+   7 netabs_sw_multiplier 2; k = 0 unchanged. `monthly_climate_forcing` of every k = symlink to the real
+   `Ensemble_input/Ens_0/monthly_climate_forcing`.
+2. Read init: `$W/7b_init/Ens_k` = symlink to the real `Ensemble_Initialization/Ens_0` for every k (all start from
+   the same state). `mpiexec -n 8`, output `$W/7b/Ens_k`, Jan 2002.
+3. Check: Ens_0 equals 7a Ens_0 exactly; every k = 1..7 runs without error and differs from Ens_0. Report per k the
+   global (land-area-weighted) and Danube-mean difference vs Ens_0 on 31 Jan for the storages (canopy, snow, soil,
+   groundwater, surface water, TWS) and, if in the output, the fluxes. Plausibility (direction, not size): 1 LAI up
+   -> canopy storage up; 2 degree-day up -> snow down where it melts; 3 smax up -> soil storage up; 4 / 5 less
+   recharge -> groundwater down, soil or runoff up; 6 groundwater abstraction x2 -> groundwater down in irrigated
+   regions (e.g. NW India, North China Plain, US High Plains); 7 surface-water abstraction x2 -> surface water / river
+   storage down in irrigated regions. Flag any multiplier whose run is identical to Ens_0 or goes the wrong way.
+
+Report in §7 with a one-line verdict ("7a identical: yes/no; 7b all seven act as expected: yes/no, exceptions ...").
+Then stop; keep `$W` until Fan says otherwise. Expected effort: two 1-month runs (4 and 8 ranks), < 1 h.
+
+**Job 8 — parameter sensitivity test and range optimisation for the GLOBAL GRACE DA ensemble (Fan, 9 Oct; added after
+Job 7). Work AUTONOMOUSLY through all rounds (8a -> 8b ... -> 8z) until the stop condition, then report.**
+Goal (Fan): starting from the reference table below, find the parameter set and ranges that are realistic at both ends,
+matter for GRACE TWS, and give an ensemble whose spread fits the OL-GRACE mismatch. You do NOT change `settings/`,
+`src_*` or `exp_Ucloud.py`: every parameter file you test is written by your own script into the job folder; at the
+end you propose the final table in §7 and Cowork / Fan put it into `settings/demo_Global_v2/perturbation.json`.
+
+Reference table (= `settings/demo_Global_v2/perturbation.json`, md5 58d8568578344af5e38db1984d4e2f5d; all triangular,
+middle = standard WaterGAP value; "x" = multiplier of a field of the parameter file, "new" = multiplier written as a
+new variable, applied by WaterGAP, default 1; "value" = the one global value of the file is replaced, NaN kept):
+```
+ id  parameter (json key)                         kind   min      standard  max      acts on
+ P1  pt_coeff_humid_arid  humid (cells == 1.26)   value  0.885    1.26      1.65     ET -> soil
+ P2  pt_coeff_humid_arid  arid  (cells == 1.74)   value  1.365    1.74      2.115    ET -> soil
+ P3  max_daily_pet                                value  6        15        22       ET (arid) -> soil
+ P4  smax_multiplier                              new    0.5      1         2        soil capacity
+ P5  gamma                                        x      0.5      1         2        runoff vs soil
+ P6  snow_melt_temp  (K)                          value  269.4    273.15    276.9    snow
+ P7  degreeday_multiplier                         new    0.5      1         2        snow melt rate
+ P8  critcal_gw_precipitation                     value  2.5      12.5      20       gw recharge (arid)
+ P9  gw_recharge_factor_multiplier                new    0.5      1         2        gw recharge
+ P10 gw_dis_coeff                                 value  0.001    0.01      0.02     gw recession
+ P11 netabs_gw_multiplier                         new    0.5      1         1.5      gw pumping
+ P12 river_roughness_coeff_mult                   x      1/3      1         5/3      river storage
+ P13 activewetland_depth (m)                      value  0.5      2         5        wetlands
+```
+Global DA state: groundwater, soil, snow, river, local + global wetlands (lakes, reservoirs, canopy are NOT in the
+state; each member's excluded storages are subtracted from its GRACE value).
+
+**Common set-up of every model run (W = /work/PyGLDA_v2_external_data/temp_job8):**
+- Driver: your own script in `temp/exp_logs/job8/`, using `OpenLoop` exactly as in Job 7 (rank r = member r), with
+  `setting_dir = settings/demo_Global` (only its `Config_ReWaterGAP.json` is read). Never write into
+  Ensemble_input, Ensemble_Initialization, OL_output, Res or settings.
+- Input per member: `$W/<round>/input/Ens_k/parameters/WaterGAP_2.2e_global_parameters_gswp3_w5e5.nc` (built from
+  the ORIGINAL `Input_data/Parameters/...nc`, see "Parameter files") and `monthly_climate_forcing` = symlink to the
+  UNPERTURBED `Ensemble_input/Ens_0/monthly_climate_forcing` (all members the same forcing: only the parameter acts).
+- PERIOD (final, Cowork 9 Oct 22:05; Fan let Cowork decide, short enough for many rounds by 10:00): spin-up 3 years
+  per member from cold start (no restart read): `configure_time('2000-01-01', '2001-12-31')`,
+  `model_spinup(spinup_years=1)` (= one cycle of 2000 + 2000-2001); restarts saved to `$W/<round>/init/Ens_k` (create
+  parents; OpenLoop uses mkdir(parents=False)). Then 5 diagnostic years 2002-2006 (GRACE 2002-04 .. 2006-12, ~57
+  months; includes the 2003 European and 2005 Amazon droughts). 8 model years per run ~ 60 min at 1.2 s per day.
+  NOTE: 3 years do not fully equilibrate slow groundwater (gw_dis_coeff 0.001 1/d: ~3-year e-folding) - see the drift
+  flag below.
+- Run 2002-01-01 .. 2006-12-31 YEAR BY YEAR (one mpiexec per year, read and save restarts in `$W/<round>/init`):
+  after each year compute the MONTHLY means of all output variables per member into
+  `$W/<round>/monthly/Ens_k/<year>.nc`, then delete that year's daily files (they are ~0.35 GB per member-month).
+  Delete the spin-up daily output too. Check free disk before each year; stop and report below 300 GB.
+- tmux session `job8`, plain `mpiexec -n <members>`, no thread-limit variables.
+
+**Parameter files (your script):** copy the original file and change ONE parameter (rounds 8a/8b) or all
+(ensemble round): value type -> replace the non-NaN cells (P1: only cells == 1.26, P2: only cells == 1.74; assert the
+file holds the standard value as in perturbation_par); "x" -> multiply the field (NaN kept); "new" -> add the variable
+`xr.full_like(ds['max_daily_pet'], value, dtype=float)`. For the ensemble round use the code itself:
+`src_DA/perturbation_par.perturbation_par` and `src_DA/perturbation_forcing.perturbation_forcing` with a COPY of
+`settings/demo_Global_v2/perturbation.json` in `$W` whose `dir` points into `$W` and whose `par` holds the round's
+table (do not edit the original).
+
+**Diagnostics (one script, the same in every round; write CSV tables + a short markdown into `$W/<round>/report/`):**
+Per member k, from the monthly means 2002-01 .. 2006-12 (GRACE months from 2002-04):
+- per DA unit: the global DA is done on the GlobalBasins_v1.0 units (Fan, 9 Oct: "those 727 units"; the frozen
+  mask `Basin/mask/GlobalBasins_v1.0/GlobalBasins_v1.0_res_0.5.h5` of settings/demo_Global/DA_setting.json holds 772
+  units per the project notes - use the mask as it is, report the number of units you find), area-weighted with
+  `shp2mask.unit_weights` (cos-lat, WaterGAP land), ALL medians / percentages below are over these units; and for
+  global land: monthly TWS (total_water_storage) and each storage (soil, gw, snow, river, local+global
+  wetlands, lakes+reservoirs, canopy).
+- GRACE: the monthly mascon grid the DA uses (`obs.EWH_grid_dir` of DA_setting.json) averaged on the same units, the
+  same months. Anomalies: subtract each series' mean over the common months. GRACE error per unit: the diagonal of the
+  observation covariance the DA uses for the global units (run `GDA.get_GRACE_obs` (src_FlowControl/Global_DA.py) on a COPY of
+  settings/demo_Global in `$W` if the global obs file does not exist; if that fails use 20 mm and say so).
+- Metrics per unit and member: RMS(TWSA_k - GRACE), correlation, seasonal amplitude ratio A_k / A_GRACE (annual
+  harmonic), linear trend; S_k = RMS(TWSA_k - TWSA_0) (sensitivity), the same S per storage; mean level of each
+  storage minus member 0; trend of each storage minus member 0 (drift); snow: number of "perennial" cells (Aug 15 -
+  Sep 15 mean swe > 10 mm in >= 3 of the 5 years) and the 2006 minus 2002 change of the global snow mass; discharge:
+  for each GRACE unit the cell with the largest mean streamflow: mean flow change (%) and the shift of the
+  climatological peak month vs member 0.
+- Flags per member: NaN / negative storages; drift: |trend_k - trend_0| > 5 mm/yr in any storage over > 5 % of the
+  land area (groundwater excepted for P9, P10 and P11: with 3 spin-up years their groundwater is still adjusting, and
+  P11 SHOULD change the trend - report these groundwater trends separately instead of flagging); perennial snow cells > 1.2 x
+  member 0 or global snow mass growing > 2 %/yr; outlet mean flow change > 50 % in > 10 % of the units.
+
+**Round 8a — one-at-a-time screening, 27 members:** member 0 = standard file; members 2p-1 / 2p = parameter Pp at its
+min / max (p = 1..13, order of the table). One spin-up (3 years) + run 2002-2006 with `mpiexec -n 27`.
+
+**Decision rules (apply them yourself after each round; write every decision with its numbers into §7):**
+For each end e (min or max) of each parameter, over the GRACE units (median over units unless said otherwise):
+1. UNREALISTIC end if any flag above, OR the median RMS vs GRACE is > 25 % above member 0's, OR the median amplitude
+   ratio moves outside 0.5 .. 2 while member 0 is inside. -> shrink that end halfway towards the standard value
+   (multipliers and P10 halfway in log space: new = sqrt(end x standard); others arithmetic) and re-test only that end
+   in the next round.
+2. INSENSITIVE parameter if at BOTH ends the median S < 3 mm and S < 10 mm in > 90 % of the units AND the S of the
+   storage it acts on is < 3 mm in > 90 % of the units -> candidate for removal (mark it; it is removed only if it
+   stays insensitive in the ensemble round).
+3. An end is ACCEPTED when it passes rule 1. A parameter whose end has been halved 3 times and still fails -> fix that
+   end at the last value that passed, or remove the parameter if neither end passes (say which).
+4. Never widen beyond the reference table (no range is extended in this job).
+**Round 8b, 8c, ... — re-test only the ends changed by rule 1** (members = 0 plus the changed ends; reuse member 0 of
+8a; same spin-up / run / diagnostics). Repeat until no end changes or after 4 rounds.
+
+**Step 8g — generate ALL perturbed forcing ONCE, then reuse it in every forcing test (Fan, 9 Oct 22:15: "produce the
+perturbed forcing field first ... use the same forcing field for all the tests to save time").** Run it once, before
+8f (it may run while no model round is using the CPUs). Generate with `perturbation_forcing` (correlated mode, `par`
+all off, `seed` 2026, months 2000-01 .. 2006-12, MPI over the members) into
+`$W/forcing/<config>/Ens_k/monthly_climate_forcing/` (k = 1..n; Ens_0 = symlink to the unperturbed
+Ensemble_input/Ens_0 forcing, do not copy it):
+- F0 (reference: pr 0.5, tas 2, 300 km, 1 day): n = 30 members (8f uses Ens_1..8, 8z uses all 30);
+- F1, F2, F5, F6, F8: n = 8 members each (F3, F4, F7, F9 dropped by Fan).
+Never regenerate: 8f and 8z (and its seed-2027 rerun, which then reuses F0 too - drop the second seed if it would need
+new forcing) only symlink `monthly_climate_forcing` of their members to these folders. If 8f picks a config other than
+F0, generate the 22 missing members of that config once (k = 9..30, same seed, same settings: the first 8 stay
+identical) and use them in 8z. Rounds 8a / 8b ... keep the UNPERTURBED forcing (only the parameter acts).
+Before generating, measure the size of one member-month and check: (30 + 5 x 8 = 70 members) x 84 months must fit
+with > 300 GB left; if not, reduce F1-F8 to 6 members and say so.
+
+**Round 8f — FORCING sensitivity (Fan, 9 Oct 21:50: "forcing field should be included as well"). Run it right after
+8a, before 8b.** The forcing noise is random, so it is tested with small forcing-only ensembles, not min / max runs.
+Parameters: all standard (the original file, member 0 of 8a). Forcing: the members generated ONCE in step 8g
+(`$W/forcing/<config>/Ens_1..8`, symlinked; nothing is generated in 8f). Same 3 + 5 year period and diagnostics.
+Configs (8 members each in 8f; F0 is the reference = settings/demo_Global_v2):
+```
+ config  pr (lognormal std)  tas (gaussian K)  length_km  time_scale_days
+ F0      0.5                 2                 300        1
+ F1      0.25                2                 300        1
+ F2      0.75                2                 300        1
+ F5      0.5                 2                 100        1
+ F6      0.5                 2                 1000       1
+ F8      0.5                 2                 500        1
+```
+(48 runs: 2 batches of <= 27 ranks, F0-F2 / F5, F6, F8, 8 members each.) Diagnostics per config and unit: forcing-only spread
+(std of the members' TWSA, time mean) and its split per storage; bias = RMS(ensemble mean TWSA - member 0 of 8a)
+(should be ~0: lognormal mean 1); forcing-only spread-skill R_F = spread / sqrt(max(MSE(member 0 - GRACE) -
+sigma_GRACE^2, (5 mm)^2)); the flags above for every member (perennial snow with tas 3 K!).
+Decision rules for the forcing: (a) a config is UNREALISTIC if its bias median > 5 mm or any flag; (b) forcing alone
+must not over-disperse: keep the largest pr / tas that gives median R_F <= 0.7 and R_F <= 1 in >= 90 % of the units
+(parameters and inflation add the rest); (c) L and tau: keep 300 km / 1 day unless F5 / F6 / F7 changes the median
+spread by > 30 % - then report it and use the setting closer to median R_F = 0.5 within the bounds of (b); (d) never go
+beyond the configs above. Carry the chosen forcing into 8z (and say so in §7).
+
+**Ensemble round 8z — the candidate table as a real ensemble:** 30 members + Ens_0 (31 ranks), triangular with the
+accepted ranges, insensitive candidates still in, `seed` 2026, forcing perturbation as in
+settings/demo_Global_v2 (correlated mode: pr lognormal 0.5, tas 2 K, 300 km, 1 day), generated with the code (see
+Parameter files), period: spin-up 3 years as above, run 2002-2006. Diagnostics per unit: ensemble-mean RMS vs GRACE (vs
+member 0), ensemble spread (std of the members' TWSA, time mean), spread-skill ratio
+R = spread / sqrt(max(MSE(ens mean - GRACE) - sigma_GRACE^2, (5 mm)^2)); share of the spread per storage; flags as
+above for every member. Then:
+- remove the insensitive candidates whose removal changes the median spread by < 5 % (from the per-member S, no rerun);
+- if the median R > 1.5: the ensemble is too wide -> shrink all multiplier / value ranges by the same factor towards
+  the standard (log space for multipliers) so that R ~ 1.2, and rerun 8z ONCE; if the median R < 0.5: report it (the
+  adaptive inflation of the DA covers missing spread; do not widen).
+**Stop condition:** 8z (or its one rerun) without new flags. Then write at the top of §7: "JOB 8 DONE <date>", the final
+table (parameter, kind, min / standard / max, kept / removed, one-line reason), the round-by-round history, median R,
+RMS vs GRACE of the ensemble mean vs member 0, and the share of the spread per storage. Keep `$W/*/monthly` and the
+reports, delete only daily files. Expected effort: ~1 h per run (8 model years); 8a + 8f (3 batches) + 1-2 re-test rounds + 8z ~ 7-8 h.
+**Time frame (Fan, 9 Oct evening): keep Job 8 running without stopping until Saturday 10 Oct 2026, 10:00 (Danish time,
+CEST).** If the stop condition is reached earlier, use the remaining time, in this order: (i) rerun 8z with a second
+seed (2027) and report how much R, the spread shares and the RMS change (robustness); (ii) nothing else - keep to
+the 3 + 5 year period, do not extend it. If the UCloud
+job would expire before 10:00, write a resume note in §7 (round, member, year, restart folder) so it can be continued.
+Update §7 after every round, so Fan and Cowork can follow during the night.
+**Sync with Cowork during the night:** Cowork reads §7 about every 2 hours (until 10:00) and may add instructions in
+the block "Job 8 — Cowork review" right below. BEFORE starting each new round (and before 8z), re-read that block
+from the synced file; its instructions override the decision rules above. Answer each review point in §7.
+
+**Job 8 — Cowork review (Cowork writes here; newest first):**
+- 11 Oct 12:20 (Cowork): thanks - fixed: settings/GDA_Ucloud/perturbation.json dir.out = .../Ensemble_input, new md5
+  1421d1eb23668ffcb08c255128a1530e (committed, syncing). Rerun the stage chain from model_perturbation once it has
+  synced. Your two code gaps (mkdir parents for preprocess_res / Ensemble_input / Ensemble_Initialization / OL_output
+  / DA_output) are noted for Fan; the empty folders you re-created are the right workaround for now.
+- 11 Oct 12:00 (Cowork, ORDER FROM FAN - read before continuing Job 9): **NO '_v2' / version suffixes anywhere; the case
+  is renamed GDA_Ucloud.** Fan: outputs always go to the SAME folders so the next run overwrites them (saves space);
+  this applies to settings as well. Done on the workstation (synced): new `settings/GDA_Ucloud/` = production
+  perturbation.json (md5 24faa2cb), DA_setting.json (md5 83e729c1: case GDA_Ucloud, OL_output, DA_output,
+  Ensemble_input, Ensemble_Initialization, GRACE/output, GRACE/OLmean - plain names) and Config_ReWaterGAP.json
+  (56a3dcbf); new driver `src_demo/GDA_Ucloud.py` (md5 22b0fc62, case GDA_Ucloud, otherwise = demo_global.py).
+  Fan deletes settings/demo_* (all of them, incl. demo_Global and demo_Global_v2) and src_demo/demo_global.py himself.
+  FOR JOB 9: (1) stop the running step 1 (tmux job9) if it still writes into GRACE/output_v2; delete
+  GRACE/output_v2 and any other *_v2 folder you created; (2) wait until settings/GDA_Ucloud/ and
+  src_demo/GDA_Ucloud.py have synced with the md5s above; (3) rerun Job 9 from step 1 with `GDA_Ucloud.py` and
+  setting_dir settings/GDA_Ucloud - everything else in the Job 9 spec unchanged (read 'demo_Global_v2' there as
+  'GDA_Ucloud' and drop every '_v2'). Results: Res/GDA_Ucloud/, GRACE obs: GRACE/output/GlobalBasins_v1.0_*.
+  Rule from now on for all jobs: never create versioned copies of output folders; overwrite in place.
+- 10 Oct 16:55 (Cowork, ORDER FROM FAN, extends 16:40): **also clear the DEMO files**: every folder or file under
+  /work (any depth, outside Input_data / GRACE/output* / Basin) whose name contains 'demo' or 'Demo' (demo data
+  downloads, demo case outputs, demo products), and the public data product output of 6 Oct. List them with sizes
+  in the same table before deleting. Still KEEP: Input_data, GRACE/output*, Basin, Res, temp/exp_logs.
+- 10 Oct 16:40 (Cowork, ORDER FROM FAN, extends 15:35): **also DELETE ALL OUTPUT OF THE PREVIOUS EXPERIMENTS**
+  (Danube, Amazon, Job 1-7 tests). Delete under /work/PyGLDA_v2_external_data: temp_job8 (as 15:35), every
+  OL_output*, DA_output*, Ensemble_input*, Ensemble_Initialization*, every temp_* / test folder, and GRACE/OLmean*
+  (regenerable). KEEP: Input_data, GRACE/output* (processed observations), Basin, Res (the small result series of
+  run12 etc. - the paper figures come from them; Fan may order their deletion separately), temp/exp_logs (reports).
+  Procedure: `du -sh` of each folder before, delete, then write here the table 'folder | size | deleted / kept',
+  the total freed and 'ALL OUTPUT DELETED <time>'. Then STOP; do not extend the job.
+- 10 Oct 15:35 (Cowork, ORDER FROM FAN: UCloud storage is full): **STOP after this and DELETE ALL JOB 8 OUTPUT.**
+  1. Make sure nothing is running (kill the tmux session job8 if any window is still active).
+  2. Record `du -sh /work/PyGLDA_v2_external_data/temp_job8` (one number, before).
+  3. Delete /work/PyGLDA_v2_external_data/temp_job8 COMPLETELY: all rounds (inputs, init / restarts, monthly files,
+     reports copies), all forcing sets under 8g (F0-F11, the seed-2027 sets), everything. The forcing for the
+     production run is regenerated by the code from settings/demo_Global_v2/perturbation.json when the DA starts.
+  4. KEEP: temp/exp_logs/job8/ (scripts, markdown reports, CSV tables - the evidence for the paper; it is small) and
+     the project folders Ensemble_input, Ensemble_Initialization, OL_output*, DA_output*, Res, GRACE, Input_data,
+     Basin - do not touch them.
+  5. Write here: the size freed, `du -sh` of the remaining top-level folders under /work/PyGLDA_v2_external_data,
+     and 'JOB 8 OUTPUT DELETED <time>'. Then STOP; do not start anything else and do not extend the job.
+- 10 Oct 13:50 (Cowork; river check + 8z5 read): (1) RIVER: accepted as is - the big rivers carry 0.5-0.95 of the
+  seasonal spread with river spread 1.2-2.7 x sigma_GRACE; the weak floodplain units are a WaterGAP storage limit, not
+  a P12 range question. P12 stays 1/3 / 1 / 5/3. (2) 8z5: **log-symmetric table ADOPTED**; I agree that the outlet-flow
+  criterion is soft for joint ensembles (designed for OAT ends; the same members sit at 8-13 % in 8z4 unflagged).
+  Applied to settings/demo_Global_v2/perturbation.json: P1 humid 1.073 / 1.26 / 1.48, P4 smax 0.707 / 1 / 1.414,
+  P10 gw_dis_coeff 0.005 / 0.01 / 0.02, P13 wetland depth 1 / 2 / 4 m; forcing F11 (pr lognormal 1.0, tas 1 K,
+  300 km, 1 d); seed 2026. Local test: 30 members, all 13 values in range. This is the PRODUCTION TABLE; please
+  rewrite the 'Proposed table' in the JOB 8 DONE block to it (kept / reason columns updated) and add a final line
+  'production = 8z5 table + F11; expected: spread ~22 mm, R_state ~0.49, K_eff ~0.56, mean shift ~ -1 mm, snow bias
+  ~ -1 mm'. (3) After 8fL: report the outlet-flow metric for the 8z5 members at the > 15 % level for the record, then
+  write 'JOB 8 CLOSED' and stop; nothing else is needed. Thanks - excellent work through the night.
+- 10 Oct 12:45 (Cowork, Fan's request): RIVER-STORAGE CHECK, diagnostics only (from the 8z4 monthly files, no new
+  run; do it as soon as a window is free, before or alongside the L test). Fan: 'river storage should have a
+  reasonable spread, large enough for the flooding areas'. Report, per unit for (a) the flood units (wetland
+  amplitude >= 10 mm) and (b) the large-river units - the unit containing the outlet / main stem of Amazon, Congo,
+  Ganges-Brahmaputra, Mekong, Mississippi, Parana, Niger, Zambezi, Ob, Yenisei, Lena, Danube, Yangtze (name them by
+  the mask id and the river you identify from the largest mean streamflow): member-0 river seasonal amplitude (mm),
+  GRACE seasonal amplitude, river spread (time-mean member std, mm), river spread / river amplitude, river share
+  of the SEASONAL spread (covariance-consistent), the same for wetlands, and the ratio river spread / GRACE sigma.
+  Also the distribution over the 178 flood units: median and p10 / p90 of river spread (mm) and of the river share,
+  and how many flood units have river + wetlands >= 0.5 of the seasonal spread. One table in section 7 plus a CSV in
+  $W/8z4/report/. Decision afterwards is Cowork's (candidate lever: P12 river roughness range).
+- 10 Oct 12:30 (Cowork; 8z4 read): DECISION OVERRIDES the 10:10 rule: **tas 1 K is ADOPTED** - it removes most of
+  the snow bias (-3.9 -> -1.2 mm) at zero cost in spread, R, K and RMS, and the long-term snow share is a
+  precipitation effect that no tas value changes (your correction noted, thanks). Applied to
+  settings/demo_Global_v2/perturbation.json (tas coefficients [1.0]; tested locally: offset std 0.996 K, pr
+  unchanged, Ens_0 unchanged). 8z5 continues with F10 as launched (the tas amplitude does not touch spread / R /
+  mean shift, so its decision rule holds); the production forcing is F11 whatever 8z5 decides. The L test stays
+  as queued. Also please add to the 8z5 report: the snow-unit long-term snow share and the wetlands flood-unit
+  share, so the final table has all T1-T5 numbers in one place.
+- 10 Oct 12:07 (Cowork): job extension to 18:26 seen, thanks. YES to the optional L test after 8z5 (F5 / F6 / F8 vs
+  F2, forcing-only, 8 members each): report per L the median TWS spread, R_F, and the spread share of the DA state
+  vs the excluded storages; no decision rule, it is documentation for the paper (300 km stays unless a run shows a
+  flag or a clearly better spread-per-realism trade-off, which I will judge). Waiting for 8z4.
+- 10 Oct 10:25 (Cowork; 8z3 read): (1) SYNC NOTE: an earlier version of this file briefly overwrote your 8z3 section
+  (10:07) - restored above/below from my copy; please check it is complete. (2) 8z4 (tas 1 K, applied table) as
+  started at 10:17: fine, keep the 10:10 rule. (3) ONE MORE ROUND AFTER IT, **8z5 = log-symmetric table** (your 8z3
+  suggestion (b); the +4 / +15 mm mean shift and the two seed-2027 flags are a bias the filter would 'correct'
+  every window), seed 2026, forcing = whichever tas passes in 8z4 (F11 if adopted, else F10), 30 members, same
+  period / spin-up / diagnostics. Changed ends (all others as applied): P1 PT humid max 1.65 -> 1.48
+  (= 1.26^2 / 1.073); P4 smax max 2 -> 1.414; P10 gw_dis_coeff min 0.00316 -> 0.005; P13 wetland depth 0.5 / 2 / 5
+  -> 1 / 2 / 4 m (P5, P7, P9 already log-symmetric; P2, P6, P11, P12 arithmetic-symmetric; P3, P8 arid only,
+  unchanged). DECISION RULE 8z5 vs 8z4: adopt if ALL hold: (i) ensemble-mean minus member-0 TWS level <= 5 mm
+  median and <= 25 mm at p90; (ii) median TWS spread and R_state each drop by <= 15 %; (iii) T2 and T4 still pass;
+  (iv) no flag. Report the mean shift per storage (soil, gw, wetlands, snow) and the 8z2-style table in section 7.
+  If it fails on the mean shift alone, say so: the fallback is a log-triangular draw in the code (Fan's decision).
+  Cowork applies whatever passes to perturbation.json. Fan has been asked to extend the job.
+- 10 Oct 10:10 (Cowork, Fan: 'do what you think is right'): ONE MORE ROUND IF THE JOB IS STILL ALIVE (Fan is asked to
+  extend it; if it expires at 10:27 before you can start, write 'NOT RUN' here and stop). Round 8z4 = final table
+  (seed 2026, table as applied in settings/demo_Global_v2/perturbation.json) with forcing F11 = pr lognormal 1.0,
+  tas gaussian 1 K (instead of 2 K), L 300 km, tau 1 d, 30 members, same period / spin-up / diagnostics as 8z2.
+  Reason: the long-term snow share (0.26 in the snow units, target <= 0.15) and the -3.9 mm snow bias come from the
+  tas noise through the rain/snow and melt thresholds; parameters contribute 0.07 only. Generate F11 under $W/8g
+  with the code (copy of the json, tas coefficients [1.0]). DECISION RULE (8z4 vs 8z2): adopt tas 1 K if ALL hold:
+  (i) long-term snow share in the snow units <= 0.15 and snow bias improved; (ii) median TWS spread and R_state each
+  drop by < 5 %; (iii) seasonal snow share stays within 0.10-0.40; (iv) no new flag. Otherwise keep 2 K. Report the
+  same table as for 8z2 in section 7. Cowork applies the forcing change to perturbation.json itself if it passes.
+  Still first: append the 8z3 (seed 2027) result. Optional, only after 8z4 and only if time remains: L test F6
+  (500 km, 8 members, forcing-only) vs F2.
+- 10 Oct 08:46 (Cowork): JOB 8 DONE read. The proposed final table (8z2: P1 humid 1.073/1.26/1.65, P4 0.707/1/2,
+  P6 272.2/273.15/274.1 K, P10 0.00316/0.01/0.02, all others as the reference; pr lognormal 1.0, tas 2 K, L 300 km,
+  tau 1 d; seed 2026) is APPLIED to settings/demo_Global_v2/perturbation.json (md5 7310531413de75b43b6ad50d7b4b8e94,
+  tested locally: 30 members in range, forcing factor mean 0.997 / std 0.994). Please append the 8z3 (seed 2027)
+  result to section 7 when it is done; no further rounds needed. Open points (tas 2 K, gw long-term noise in the
+  inflation, R_state 0.53, mask path) go to Fan.
+- 10 Oct 07:10 (Cowork, on F10): agreed, 8z2 with F10 goes ahead. DECISION RULE F2 vs F10 for the final table
+  (8z1 vs 8z2, joint ensembles): take F10 only if ALL hold: (i) median R_state at least 15 % higher than with F2;
+  (ii) median ensemble-mean RMS vs GRACE at most 3 % above member 0; (iii) systematic ensemble-mean TWS bias (after
+  removing the 30-member sampling part) <= 5 mm and seasonal amplitude ratio within 0.95-1.05; (iv) no new flag.
+  Otherwise F2. Report the numbers of both side by side in the summary; Cowork applies the chosen table.
+- 10 Oct 05:35 (Cowork, on 8z-P / decomposition - very useful, thanks):
+  1. Since the snow LONG-TERM share that fails T3 comes entirely from the 2 K temperature noise (parameter part passes
+     T3), narrowing P7 cannot fix it. Let 8z1 run (it documents the effect), but for the FINAL table keep P7 degree-day
+     0.5 / 1 / 2 unless 8z1 shows a clear gain (snow long-term share down by > 0.03 or snow bias closer to 0); P6
+     stays symmetric 272.2 / 273.15 / 274.1 K. T3 long-term is reported as a forcing-temperature effect; Cowork asks
+     Fan whether tas 2 K stays (it is fixed by Fan). If 8z2 (F10) runs, build it on the table WITHOUT the P7 change.
+  2. T1: the long-term gw spread is forcing-driven (precipitation noise through recharge) - reported; no parameter
+     lever. Keep as the final statement for the report.
+  3. Final report (JOB 8 DONE): include this decomposition table, the history of every end, and the final table with
+     the chosen forcing (F2 or F10).
+- 10 Oct 04:00 (Cowork, on 8c / 8z / 8z1 - please apply before 8z1 starts):
+  1. 8c: P6 max 274.1 K accepted, symmetric 272.2 / 273.15 / 274.1 K for the reruns: agreed.
+  2. Negative-storage flag: excluding LAKES is right (WaterGAP lets lake storage fall to -S_max). WETLANDS: keep them
+     excluded from the flag for now, but REPORT for member 0 the land fraction and the number of units with negative
+     local / global wetland storage (min monthly) - wetlands are in the DA state with a lower bound 0
+     (src_DA/bounds.py), so if WaterGAP wetlands can be negative, that bound must be revisited before the pilot.
+  3. 8z1 - CHANGE: keep the snow levers (P6 symmetric + P7 degree-day 0.7 / 1 / 1.4) but DROP the smax / gamma shrink.
+     Reason: R_state is 0.44 (spread far below the mismatch) and Fan's first aim is a high weight on GRACE; shrinking
+     soil-side ranges lowers the total spread further and buys the gw share only by removing soil spread. T1 is
+     treated as a model-structure result (in WaterGAP the interannual TWS spread sits in soil / wetlands / lakes);
+     Cowork takes the gw long-term question to Fan as a DA-side choice (e.g. temporally correlated groundwater noise in
+     the inflation). 8z1 = 8z with only P6 + P7 changed.
+  4. New forcing test F10 = pr lognormal 1.0 (tas 2 K, L 300 km, tau 1 d), 8 members, generated with idle cores during
+     8z-P / 8z1 and run as soon as cores are free (member 0 + 8). Rule (a) as before (no flag, systematic bias < 5 mm
+     after removing the sampling part, R_F <= 1.5 in >= 90 % of units). If it passes, 8z2 = 8z1 with F10 forcing
+     (30 members generated then) - this is the one lever left for T5 within realistic limits; report R_state, K_eff and
+     the shares for 8z2 vs 8z1.
+  5. From 8z-P, report which source carries the LONG-TERM spread of each storage (parameters vs forcing), especially gw.
+- 10 Oct 02:25 (Cowork, on 8b / 8z):
+  1. 8b decisions agreed (P1 min 1.073, P4 min 0.707, P10 min 0.00316 accepted; P6 max -> 8c at 274.1 K).
+  2. Keep 8z running as launched (it is the baseline of the reruns). But P6 is now very lopsided: 269.4 / 273.15 /
+     274.1 K has its mean at 272.2 K, i.e. the ensemble melts ~0.9 K too early on average -> less snow in the
+     ensemble mean than in the standard model (a snow bias the DA would have to remove). RULE for P6 from the first
+     rerun on: make it SYMMETRIC around 273.15 K with the half-width d = the accepted distance of the max end
+     (274.1 K passes in 8c -> 272.2 / 273.15 / 274.1; if 8c fails -> 273.6 K, d = 0.45). Report the snow bias of the
+     8z ensemble mean (snow units, mean storage minus member 0) so the effect of the lopsided range is documented.
+     This also acts in the direction of T3 (less snow spread).
+  3. Same check for the other ranges (report only, no change): ensemble-mean minus member-0 TWS level and seasonal
+     amplitude per unit in 8z (median, p10 / p90), to see whether the asymmetric multipliers (gamma, recharge
+     factor, Smax 0.707-2, PT humid 1.073-1.65) shift the ensemble mean.
+- 10 Oct 01:20 (Cowork, on 8f):
+  1. F2 (pr lognormal 0.75) for 8z: AGREED (largest realistic spread, systematic bias 3.5 mm, R_F 0.41; daily 75 %
+     precipitation error at 0.5 deg is plausible; Fan wants a high weight on GRACE). Your bias / sampling-noise split is right.
+  2. ADD for 8z / 8z-P / 8z1...: lakes, reservoirs and canopy are NOT in the DA state; each member's excluded storages
+     are subtracted from its GRACE value, so their spread acts as extra observation noise. Report, per unit, the spread
+     of the STATE part (gw + soil + snow + river + wetlands) s_state, of the EXCLUDED part s_excl, and the effective
+     weight on GRACE K_eff = s_state^2 / (s_state^2 + sigma_GRACE^2 + s_excl^2) next to K. Judge T5 (R) on s_state.
+     The forcing puts a lot of long-term spread into lakes (dominant in 180 units): flag units where s_excl > s_state.
+  3. Snow (T3 high in the snow units already from the forcing: 0.44 seasonal, 0.31 long-term): judge it on 8z with the
+     snow levers. If the levers cannot bring the snow share below ~0.45 seasonal / 0.3 long-term, do NOT change tas
+     (Fan fixed 2 K); report it and Cowork asks Fan. Also report the snow share for the "seasonal-snow" units only
+     (exclude units whose member-0 snow never melts out in Aug-Sep) - the covariance share may be legitimately high
+     where snow IS the seasonal storage.
+  4. T1 (gw long-term) must come from the parameters - expected; 8z-P will show it.
+- 10 Oct 00:45 (Cowork): re-evaluated 8a table and the 4 retests - agreed. Snow finding (inside the units +0.7 %/yr,
+  144 perennial cells, median snow-unit trend +0.27 mm/yr): good, no action. One check because of the builder bug you
+  caught: verify that the 8a members 1-4 (P1 / P2 ends) changed ONLY their own cells (member 1/2: cells == 1.26 changed,
+  cells == 1.74 untouched; member 3/4 the reverse) by reading the 8a parameter files; one line in §7 is enough.
+- 10 Oct 00:15 (Cowork, on the 8a result - please apply BEFORE 8b starts and rebuild 8b from the re-evaluated decisions):
+  1. Relative snow flags and the restricted negative-storage flag: CONFIRMED.
+  2. (a) TWS is NOT counted as a separate storage in the drift test (it is the sum; each storage is judged on its own).
+     -> P1 max, P5 min and P5 max are accepted unless another flag fires.
+  3. (b) DRIFT RULE REDEFINED - the 3-point slope 2004-2006 cannot tell spin-up adjustment from a larger response to the
+     2002-2006 interannual climate (a deeper soil, larger wetlands or faster groundwater responds more to the 2003 / 2005
+     droughts; that is wanted long-term spread, not a defect). For each member, storage and cell use the difference
+     series d(y) = annual mean_k - annual mean_0, y = 2002..2006 (steps s1..s4 = d(2003)-d(2002) .. d(2006)-d(2005)):
+     - INTERANNUAL response (not flagged): the steps change sign.
+     - SPIN-UP ADJUSTMENT (not flagged, but reported with the e-folding time from the step ratio, tau = -1 / ln(s4/s1)^(1/3)
+       years): all steps the same sign AND |s4| < 0.5 |s1| (decaying).
+     - DRIFT (flagged): all steps the same sign AND |s4| >= 0.5 |s1| AND |s4| > 5 mm/yr, over > 5 % of the land area.
+     Apply to all storages (gw still excepted for P9 / P11). The outlet-flow and perennial-snow flags stay as they are.
+     Re-run the 8a decisions with this rule, write the new table, and rebuild 8b from it (expected: fewer retests; P1
+     min stays flagged by the outlet flow, P6 max by perennial snow, P10 min by its non-decaying fill).
+  4. P10 min -> 0.00316 retest: agreed (no long spin-up needed for it).
+  5. FINDING to keep for Fan (not part of the decisions): member 0 grows snow by 10 %/yr with 2859 perennial cells.
+     Report how much of that growth and how many of those cells lie INSIDE the 772 DA units (glacier units were removed
+     from the unit set), and the snow trend of the median snow unit of member 0. Fan wants no snow trend in the DA.
+- 9 Oct 23:05 (Cowork, on your 22:48 / 22:52 entries):
+  1. Negative-storage flag relative to member 0: agreed.
+  2. DRIFT: judge it on 2004-2006 only (trend of the annual means 2004-2006, member k minus member 0). An adjustment that
+     is present in 2002-2003 and gone by 2004-2006 is spin-up, not a parameter problem - report it but do not flag it.
+     A drift that persists in 2004-2006 is flagged as specified (gw still excepted for P9 and P11; P10 is judged with
+     its 9-year spin-up from m19).
+  3. INSENSITIVE rule (rule 2) - CHANGE: medians over all 772 units hide parameters that act only regionally. P2 (arid
+     PT), P8 (critical gw precipitation) and P11 (gw net abstraction) act in arid / irrigated units only, so a median of
+     ~0 is expected. New rule: a parameter is insensitive only if, at BOTH ends, S_tws < 3 mm in >= 98 % of the units
+     AND the maximum S_tws over all units < 10 mm (same for the S of the storage it acts on). Otherwise keep it and
+     report the units where it acts (count, the 10 largest S with unit IDs / names). Expect P11 to grow with time
+     (+-50 % pumping in the North China Plain / NW India / High Plains is ~+-10 mm/yr): judge it on 2006, not 2002.
+  4. 8g check (pr mean 1.005, std 0.50 / 0.76; tas 2.0 K): good. 303 GB for the forcing - write the free disk in §7
+     with every round.
+- 9 Oct 22:35 (Cowork, answers to your feedback points 1-7 of ~22:00):
+  1. Mask path: do NOT move folders or edit the json now; Job 8 keeps using the existing file. Cowork / Fan fix it
+     before the global pilot (the workstation layout has no extra `mask/` level, so the UCloud folder is the odd one).
+  2. GRACE obs: good - keep it in $W/grace for now; it will be copied to GRACE/output_v2 when the pilot is set up.
+  3. Perennial-snow flag on monthly Aug + Sep means: accepted.
+  4. CPU sharing with 8g: accepted.  5. / 6.: agreed.
+  7. Spread shares: use the COVARIANCE-CONSISTENT split as the primary measure, share_s = cov(x_s, TWS) / var(TWS)
+     per unit and time scale (shares sum to 1 exactly; a storage can be negative when it compensates). This is
+     exactly how the Kalman gain distributes a TWS increment over the storages, so T1-T4 are judged on it. Report the
+     variance shares next to it for information.
+  Also: good catch on the stale expiresAt and on the running-script overwrite; keep both rules.
+- 9 Oct ~22:00 (Fan: "I can continue to extend, so no rush to make a summary; keep doing the job until you find the
+  optimized solution"). NO DEADLINE any more - this replaces the 10:00 time frame and the "two reruns" limit:
+  * Keep iterating 8z reruns (8z1, 8z2, 8z3, ...) with the allowed levers until the STOP CONDITION: all targets T1-T5
+    pass with no flag in any member, OR no allowed lever is left (then the best rerun is the result). Each rerun
+    changes as few things as possible and records what changed and why.
+  * After the stop condition: 8z-P for the final table (if its parameters changed since the last 8z-P), the remaining
+    8f batches (F5 / F6 / F8) if L could still matter, then the seed-2027 robustness rerun of the final 8z.
+  * Before each new round write in §7 the current expiresAt; if it is < 2 h away, write a resume note and tell Fan in
+    §7 (he extends the job). Never start a round you cannot resume.
+  * Write "JOB 8 DONE" only when all of this is finished.
+- 9 Oct (Fan, correction): the UCloud job was extended by 12 hours (not 10), so it ends around 10:30 CEST, after the
+  10:00 deadline. Check expiresAt with `ucloud introspect job` and write it in §7. At 10:00 write the summary at the top
+  of §7 (proposed table from the rounds completed) and a resume note (round, members, year, restart folders).
+- 9 Oct 23:00 (Fan: "snow should gain something but not much, no snow trend; wetlands should gain water over the flooding
+  areas; adjust the parameters / forcing in those directions"). FULL TARGET SET for 8z (pass / fail, median over the
+  units of each group; seasonal / long-term as defined in the 22:50 point):
+  T1 groundwater >= 50 % of the LONG-TERM spread (all units);
+  T2 soil + river + wetlands + snow >= 70 % of the SEASONAL spread (all units);
+  T3 SNOW units (member 0 snow seasonal amplitude >= 20 mm): snow 10-40 % of the SEASONAL spread, <= 15 % of the
+     LONG-TERM spread; and no member with the snow flags (perennial cells, snow mass trend);
+  T4 FLOOD units (member 0 local + global wetland seasonal amplitude >= 10 mm): wetlands >= 20 % of the SEASONAL spread;
+  T5 R (spread-skill) 1.0-2.0 and the expected weight on GRACE K as in the 22:40 point.
+  LEVERS you may use (only shrinking, except W below; each change tested in an 8z rerun 8z1, 8z2 - up to TWO reruns
+  now, in place of the single R-rerun; if two fail, report the best one):
+  - T3 fails high (snow too much) or snow flags -> snow_melt_temp to 271.15 / 273.15 / 275.15 K (+-2 K) and
+    degreeday_multiplier to 0.7 / 1 / 1.4; still high -> +-1 K and 0.8 / 1 / 1.25.  T3 low: leave it (forcing tas adds).
+  - T1 fails -> shrink the soil-side multipliers that put LONG-TERM spread into soil (from the OAT table: smax,
+    gamma; e.g. to 0.75 / 1 / 1.5) - never the groundwater parameters.
+  - T4 fails -> candidates W (the only widening allowed, needs a test first): run an extra OAT round 8c-w (members 0 +
+    4) with activewetland_depth max 10 m, and swb_outflow_coeff 0.003 / 0.03 (it also acts on LAKES: accept only if the
+    lake + reservoir mean level change is <= 5 mm in the median flood unit and no flag); put the passing ones into the
+    next 8z rerun and say so (Fan decides the final table).
+  - Forcing: if T1-T4 pass but R < 1, use the larger-spread realistic forcing from 8f (pr 0.75 or a larger L).
+  ORDER now: 8a -> 8g -> 8f F0-F2 -> 8b (+ 8c-w if the 8a OAT table already shows wetlands < 20 % in flood units) ->
+  8z -> 8z-P -> 8z1 -> 8z2 -> 8f F5, F6, F8 -> 8z seed 2027.
+- 9 Oct 22:50 (Fan): expected behaviour of the DA: LONG-TERM dynamics (interannual, trend) go to GROUNDWATER;
+  SEASONALITY goes to SOIL or RIVER storage depending on the region. The filter splits an increment by the ensemble
+  covariances, so the ensemble must carry spread on these time scales in these storages. Add a TIME-SCALE diagnostic:
+  per member, unit and storage split the monthly anomaly 2002-2006 into (i) SEASONAL = mean annual cycle (12-month
+  climatology) and (ii) LONG-TERM = 12-month running mean of the deseasonalised series (incl. trend). Report:
+  a. OAT rounds (8a / 8b): S per storage per time scale for every parameter end (which parameter moves which storage
+     on which time scale).
+  b. Ensembles (8f configs, 8z-P, 8z): ensemble spread per storage per time scale, as shares of the total; per unit
+     the dominant storage of each time scale, and the medians over units.
+  Target (used as a TIE-BREAKER between realistic choices and reported as a pass / fail): in 8z the groundwater share
+  of the LONG-TERM spread >= 50 % in the median unit, and soil + river (+ wetlands + snow) >= 70 % of the SEASONAL
+  spread. If 8z fails it, report which parameter (from the OAT S-table) would fix it within the tested ranges and
+  apply that choice in the 8z rerun (it may replace the R-based rerun if only one rerun fits before 10:00).
+- 9 Oct 22:45 (Fan): temperature std 2 K and tau = 1 day are FIXED - no tests of them. Forcing configs left: F0 (ref),
+  F1 / F2 (pr 0.25 / 0.75), F5 / F6 / F8 (L 100 / 1000 / 500 km). Order: 8a -> 8g -> 8f F0-F2 -> 8b -> 8z -> 8z-P ->
+  8f F5, F6, F8 -> 8z seed 2027. In the rules, "L / tau" now means L only.
+- 9 Oct 22:40 (Fan: "the DA should trust GRACE more, as in the Amazon / Danube runs: correlation close to 0.99 and a
+  large RMS reduction"). SPREAD TARGET CHANGED - these points override the decision rules for the forcing (8f rule b)
+  and for 8z:
+  a. 8f: among the REALISTIC configs (no flag, bias median <= 5 mm) choose the one with the LARGEST median forcing-only
+     spread, provided R_F <= 1.5 in >= 90 % of the units (forcing alone may now reach the full OL-GRACE mismatch).
+     L / tau: prefer the setting that gives the larger spread if it passes the same test.
+  b. 8z target: median R between 1.0 and 2.0 (ensemble spread at least as large as the OL-GRACE mismatch, so the
+     filter gives GRACE a high weight). Shrink only if median R > 2.5 (same common factor as before, to R ~ 2). If
+     median R < 1.0: do NOT widen beyond the tested ranges; report per unit how far below 1 it is (the DA inflation
+     has to supply it).
+  c. Parameter ends: rule 1 (unrealistic) stays as it is - wide but unphysical members are still removed.
+  d. Report in addition, per unit, the "expected Kalman weight on GRACE" K = spread^2 / (spread^2 + sigma_GRACE^2)
+     (median, 10th / 90th percentile) for 8f-F0, the chosen 8f config, 8z-P and 8z.
+- 9 Oct 22:25 (Fan: "do whatever you think is best to find the best perturbation strategy; I need it before the global
+  DA"). Cowork's plan, these points OVERRIDE the text above:
+  1. ORDER and PRIORITY (if time runs short, drop from the end): 8a -> 8g (generate forcing) -> 8f with F0-F4 ->
+     8b (re-test ends) -> 8z (joint ensemble) -> 8z-P (below) -> 8f with F5-F9 -> 8z seed 2027.
+  2. SLOW GROUNDWATER: a member whose gw_dis_coeff k < 0.003 1/d gets a longer spin-up so that 3/k days have passed:
+     spinup_years = min(8, ceil(3 / (365 k)) - 2) cycles of 2000 before 2000-2001 (k = 0.001 -> 7 cycles = 9 years,
+     95 % settled). In 8a this is member 19 (P10 min); in 8z every member drawn below 0.003. All other members keep
+     spinup_years = 1. With this, the groundwater of P10 IS flagged for drift like every other storage (P9 / P11 stay
+     excepted).
+  3. FORCING TESTS: F8 (L 500 km) and F9 (tau 3 days) added; 8 members per config (F0: 30 generated, 8 used in 8f).
+  4. New round 8z-P = the 8z parameter ensemble with the UNPERTURBED forcing (30 members + Ens_0, same parameter
+     files). With 8f's F-config (forcing only) and 8z (both) it splits the spread into parameter / forcing / joint
+     parts per unit and storage - report this decomposition (needed for the paper).
+- 9 Oct 22:15 (Fan): perturbed forcing is generated ONCE (new step 8g, before 8f) and reused by 8f and 8z.
+- 9 Oct 22:05 (Cowork; Fan: "you decide the time period"): FINAL PERIOD for all rounds = spin-up 3 years
+  (spinup_years=1 on 2000-2001), run 2002-2006 (text above updated). Replaces the 2 + 3 years of 21:40. If 8a is
+  running with any other period, stop it and restart 8a with this one. Units: 772 is right ("727" was a typo, Fan).
+- 9 Oct 21:55 (Fan): the FORCING is part of the test: new round 8f (above, after 8a, before 8b); 8z uses the forcing
+  chosen in 8f instead of the fixed one.
+- 9 Oct 21:40 (Fan): PERIOD changed for all rounds: spin-up 2 years (2000-2001 from cold start), run 2002-2004; the
+  Job 8 text above is updated accordingly. If you already started with the old 10 + 11 years, stop and restart round 8a.
+
+
 **Stop rules / failures:**
 - A step fails: read the traceback, write it + your diagnosis into §7. If the cause is the host / a transient I/O
   problem, retry the step once. Otherwise skip to the next job that does not depend on it (exp2a and exp2b do not
@@ -251,8 +776,118 @@ Expected effort: < 30 min.
 - When all jobs are done (exp1, exp2a, exp2b, exp4): write a short overall summary at the top of §7 ("ALL DONE <date>"), then stop. Do not
   clean any output, do not start the global pilot.
 
+**Job 9 — GLOBAL PILOT DATA ASSIMILATION with the production perturbation (Fan, 10 Oct 17:15: "after all is done,
+start the global pilot DA experiment with the recommended perturbations"). Start only after the clean-up orders
+(15:35 / 16:40 / 16:55) are confirmed in §7. Work autonomously; write progress into §7 after every step.**
+Case `demo_Global_v2` (settings/demo_Global_v2: DA_setting.json + perturbation.json = production table; the
+Config_ReWaterGAP.json and the driver update come from Cowork, see "GATE" below). 30 members + Ens_0 (31 ranks),
+GlobalBasins_v1.0 (772 units), state = groundwater, soil, snow, river, local + global wetlands; EnKF_localized,
+block localization, adaptive additive inflation (split gw / soil / snow), non-negative partition, diagonal R,
+snow cap + envelope as in the json. UCloud job: book >= 10 h (estimate below).
+0. Mask path (UCloud data side, no json edit): `mv /work/PyGLDA_v2_external_data/Basin/mask/mask/GlobalBasins_v1.0
+   /work/PyGLDA_v2_external_data/Basin/mask/GlobalBasins_v1.0` (keep the `mask/mask/GlobalBasins` copy or delete it,
+   your call); verify the md5 of GlobalBasins_v1.0_res_0.5.h5 and _res_1.h5 against Basin/mask/GlobalBasins_v1.0/
+   _settings.txt afterwards. Also make sure GRACE/global_mask/WaterGAPLandMask.hdf5 exists (md5 9a21d88b...).
+GATE: **driver ready (Cowork 17:35): src_demo/demo_global.py md5 00886009f8208c27e1db4d23ba59dd7d, settings/demo_Global_v2/Config_ReWaterGAP.json md5 56a3dcbf090877bd6ca354a9f49c91e9** (spin_up_years = 8 -> 10 model years, see the driver comment). Fan is deleting the other settings/demo_* folders (only demo_Global_v2 remains); the old wording of this gate was: wait until this block says "driver ready (md5 ...)" - Cowork will add it once Fan approves the edits of
+   src_demo/demo_global.py (case demo_Global_v2, period 2002-01-01..2006-12-31, spin-up 2000-2001 x 5 cycles,
+   steps model_perturbation / spin_up / OL_run enabled) and the copy of Config_ReWaterGAP.json into
+   settings/demo_Global_v2. Check the synced md5 before running.
+1. serial, demo1 (from src_demo, pyglda_v2 env): `GDA.config_external_data()`, `GDA.read_config_and_save()`,
+   `GDA.check_units()` (IDs equal, 0 cells in two units, md5 True), `GDA.get_GRACE_obs()` -> GRACE/output_v2/
+   GlobalBasins_v1.0_{signal,cov,gridded_signal}.hdf5 (2002-01 .. 2006-12 at least; the full GRACE period is fine).
+2. MPI, demo2, plain `mpiexec -n 31 python -u demo_global.py Config_ReWaterGAP.json` in tmux `job9`:
+   `GDA.model_perturbation()` (parameters + correlated forcing from the production json, Ensemble_input_v2; the
+   forcing must cover the spin-up years 2000-2001 AND 2002-2006), `GDA.spin_up()` (2000-01-01..2001-12-31,
+   spin_up_years = 5 -> 10 model years per member with ITS OWN parameters and forcing; restarts to
+   Ensemble_Initialization_v2), `GDA.OL_run()` (2002-2006, OL_output_v2), `GDA.collect_and_statistics(Stage.OL)`
+   (yearly files, Res_OL.h5, OL mean for GRACE -> OLmean_v2, harmonic maps), `GDA.DA_run()`,
+   `GDA.collect_and_statistics(Stage.DA)`.
+   Spin-up rationale (Cowork): slowest state = groundwater with gw_dis_coeff down to 0.005 1/d (e-folding 200 d,
+   settling ~600 d); 10 years = 18 e-foldings for the slowest member, and enough for the global wetlands / lakes;
+   cost ~70 min (730 d x 5 x 1.1 s/d). Do NOT reuse any restart of the old demo_Danube global OL (deleted anyway).
+3. serial: `GDA.da_evaluation(tag='pilot1')`, `GDA.visualization(tag='pilot1')` in the pygmt env; results in
+   Res/demo_Global_v2/evaluation_global/pilot1/ (rsync to the workstation).
+Time estimate (31 ranks, 1.1-3.3 s/day on the shared host): perturbation ~30 min, spin-up ~70 min, OL 1826 d
+   ~35-100 min, OL collection ~15 min, DA 1826 d ~45-170 min + 60 analyses, DA collection ~15 min: 4-8 h.
+Storage: ~4.8 MB per member-day -> OL daily ~270 GB + DA daily ~270 GB + yearly files; check free quota before
+   step 2 (stop and report below 1 TB free).
+Watch and report in §7: memory per rank, s/day for OL and DA, analysis time per window, first-window log
+   (parallel_logs/DA/rank_2.log), then summary.txt: per-unit RMS / correlation DA vs GRACE vs OL (median, p10 / p90,
+   by continent), chi2, gain, forecast spread vs sigma_GRACE, inflation factors (how much the inflation adds on
+   top of the 0.49 open-loop ratio), increment per storage per time scale (seasonal vs 12-month mean: does the
+   long-term increment go to groundwater, the seasonal to soil / river, how much to snow and to wetlands in the
+   flood units), clipping warnings by region, Hohe Tauern-type snow cells, units with chi2 > 3 or RMS > sigma.
+Never run `clean_temp_output(Stage.OL)`; `clean_temp_output(Stage.DA, dry_run=True)` only after the report.
+
 ### 7. Job log (Code writes here)
-**ALL DONE 9 Oct 2026 16:30 (UCloud Claude Code, job 12417340); Job 5 (snow innovation diagnostic, read-only) added by Fan and done 17:40 - verdict YES, snow in C1-C3 takes 67-92 % of the cell increments via a variance-driven, self-reinforcing weight (see Job 5 below). Job 6 (parameter vs OL snow spread, read-only) done 17:30 - verdict YES for C1 / C2: adiabatic_lapse_rate (rho 0.89 / 0.75 with the late-summer swe, threshold >= 0.0076 K/m), not applicable for C3 (no OL pack in any member).** Job 0 checks passed; exp1, exp2a, exp2b and exp4 (added by
+**JOB 8 CLOSED 10 Oct 2026 15:05 (production table = 8z5 log-symmetric + F11, applied by Cowork; 8z4 tas test, 8z5, river check and the L test 8fL are documented below). JOB 8 DONE 10 Oct 2026 08:50 (UCloud Claude Code, job 12417913; rounds 8a, 8b, 8c, 8f F0-F2 + F10, 8g, 8z, 8z-P, 8z1,
+8z2, 8z3 seed-2027 robustness rerun complete 10:05: spread / R_state / K_eff / shares reproduced within 5 %, the
+ensemble-mean level shift and an outlet-flow flag of 2 members are draw-dependent (asymmetric ranges) - see 8z3 below; all data under
+/work/PyGLDA_v2_external_data/temp_job8/<round>/{input,monthly,report} (daily files deleted), scripts and reports in
+temp/exp_logs/job8/ on both machines; details round by round further down in this section).**
+**PRODUCTION TABLE (Cowork 13:50, applied to settings/demo_Global_v2/perturbation.json; = the 8z5 log-symmetric
+table + forcing F11; triangular, middle = standard WaterGAP, seed 2026):**
+```
+ id  parameter (json key)              kind   min       standard  max      kept  reason / history
+ P1  pt_coeff_humid_arid humid (1.26)  value  1.073     1.26      1.48     yes   min 0.885 failed (outlet flow > 50 % in 18 % of units), 1.073 accepted (8b); max 1.65 accepted (8a), set to 1.48 = log-symmetric (8z5)
+ P2  pt_coeff_humid_arid arid (1.74)   value  1.365     1.74      2.115    yes   both accepted (8a); acts only in arid units (max S_tws 320 mm)
+ P3  max_daily_pet                     value  6         15        22       yes   both accepted (8a)
+ P4  smax_multiplier                   new    0.707     1         1.414    yes   min 0.5 failed (outlet flow > 50 % in 10 % of units), 0.707 accepted (8b); max 2 accepted (8a), set to 1.414 = log-symmetric (8z5)
+ P5  gamma                             x      0.5       1         2        yes   both accepted (8a); log-symmetric already
+ P6  snow_melt_temp (K)                value  272.2     273.15    274.1    yes   max 276.9 (perennial snow x1.67) -> 275.0 (x1.31) -> 274.1 (x1.16, accepted 8c); symmetric per Cowork 02:25
+ P7  degreeday_multiplier              new    0.5       1         2        yes   both accepted (8a); 0.7-1.4 tested in 8z1: no gain on the snow long-term share
+ P8  critcal_gw_precipitation          value  2.5       12.5      20       yes   both accepted (8a); acts in arid units only (max S_tws 37 mm)
+ P9  gw_recharge_factor_multiplier     new    0.5       1         2        yes   both accepted (8a); log-symmetric already
+ P10 gw_dis_coeff (1/d)                value  0.005     0.01      0.02     yes   min 0.001 failed even with a 9-year spin-up (gw drift > 10 % of land), 0.00316 accepted (8b), set to 0.005 = log-symmetric (8z5); max accepted
+ P11 netabs_gw_multiplier              new    0.5       1         1.5      yes   both accepted (8a); acts in irrigated units only (max S_tws 290 mm)
+ P12 river_roughness_coeff_mult        x      1/3       1         5/3      yes   both accepted (8a); river check 13:05: big rivers carry 0.5-0.95 of the seasonal spread, weak floodplain units are a storage limit, not a P12 question
+ P13 activewetland_depth (m)           value  1         2         4        yes   both ends accepted (8a) at 0.5 / 5; set to 1 / 4 = log-symmetric (8z5)
+ forcing F11 (correlated mode): pr lognormal std 1.0 (F10 test 06:56, 8z2 vs 8z1 by the 07:10 rule), tas gaussian 1 K (8z4: same spread / R / K, snow bias -1.2 instead of -3.9 mm; Cowork 12:30), L 300 km, tau 1 day (L test 8fL for documentation only)
+```
+**production = 8z5 table + F11; expected: spread ~22 mm, R_state ~0.49, K_eff ~0.56, mean shift ~ -1 mm, snow bias
+~ -1 mm** (8z5 with tas 2 K: spread 22.2, R_state 0.49, K_eff 0.56, TWS level -1.2 mm, snow bias -3.8; tas 1 K
+brings the snow bias to ~ -1 mm without changing the rest, see 8z4). Nothing removed: no parameter is insensitive by
+the 23:05 rule. The asymmetric-range history (8z2 / 8z4: soil +8-9 mm, TWS +4-5 mm mean shift; seed 2027: +15 mm) is
+why the production table is log-symmetric.
+**Reference ensemble of the summary numbers below (8z2: asymmetric table with F10, 30 members, 2002-2006, 772 units; the production table 8z5 + F11 differs as stated above):** TWS spread median 24.0 mm (p10 9.0,
+p90 44.3; sa 38, na 30, af 24, as 22, eu 21, ar 20, si 18, au 12); DA-state spread 21.1, excluded (lakes + reservoirs
++ canopy) 1.9 mm; **R_state median 0.53** (89 % of the units below 1; the DA inflation must supply the rest - no
+widening beyond the tested ranges was allowed); R on the total spread 0.62; **K median 0.72, K_eff 0.61** (p10 0.16,
+p90 0.85); ensemble-mean RMS vs GRACE 41.2 mm vs member 0 41.0, correlation 0.83; ensemble mean minus member 0: TWS
++4.3 mm (soil +8.7, gw -5.2, wetlands +2.4, snow in the snow units -3.9), seasonal amplitude ratio 1.02; no member
+flagged. Spread shares (covariance-consistent, median over units): SEASONAL soil 0.46, river 0.08, gw 0.05,
+wetlands 0.01 (soil dominant in 432 units, river 122, snow 86, wet 66); LONG-TERM soil 0.21, gw 0.15, river 0.07,
+lake 0.07, wet 0.05 (dominant: soil 243, wet 163, lake 151, snow 83, gw 69). Targets: T2 (0.91) and T4 (wetlands
+0.26 of the seasonal spread in the flood units) pass; **T1 fails (gw 0.15 of the long-term spread, >= 0.5 in 6 % of
+the units)**, **T3 fails on the long-term snow share (0.26 > 0.15; seasonal 0.32 passes)**, **T5 fails low (0.53)**.
+**Where the spread comes from (8z-P parameters only vs 8f-F2 forcing only vs 8z joint, variance shares of the joint
+variance, medians over units):** TWS total: parameters 0.21, forcing 0.67, interaction +0.08; SEASONAL: parameters
+0.63 (soil 0.83, gw 1.08 with -0.24 interaction, river 0.71, wetlands 0.67), forcing 0.34; LONG-TERM: parameters
+0.08, forcing 0.75 (+0.13 interaction) - gw long-term 0.33 parameters / 0.69 forcing, soil 0.17 / 0.50, river 0.15
+/ 0.78, lakes 0.07 / 0.82, snow 0.02 / 0.72 (snow units 0.07 / 1.07). So: the parameters make the SEASONAL spread
+(soil, river, wetlands - T2 / T4), the precipitation noise makes the LONG-TERM spread (incl. groundwater), the
+temperature noise makes the snow long-term share (T3) - neither T1 nor T3 can be fixed by parameter ranges within
+the tested limits (Cowork 05:35: T1 = model-structure result; T3 = tas 2 K question for Fan).
+**Round-by-round:** 8a (27 OAT members, 21:52-23:31): member 0 RMS vs GRACE 41.0 mm, corr 0.83, amp 0.87; strongest
+parameters P1, P3 min, P4, P13, P10; snow-mass growth of the standard run (10 %/yr) lies outside the DA units
+(inside +0.7 %/yr, 144 perennial cells, median snow-unit trend +0.27 mm/yr); drift rule redefined by Cowork (00:15)
+-> 4 ends to retest. 8b (00:53-02:02): P1 min 1.073, P4 min 0.707, P10 min 0.00316 accepted, P6 max 275.0 failed.
+8c (02:03-03:29): P6 max 274.1 accepted. 8f F0 / F1 / F2 (23:31-00:53): forcing-only spread 11.6 / 6.3 / 16.4 mm,
+R_F 0.30 / 0.16 / 0.41, no flags; F2 chosen (22:40 rule). 8z (02:04-03:40, F2, lopsided P6): spread 20.4, R_state
+0.44, snow bias -7.3. 8z-P (03:41-05:17): parameters alone 9.1 mm. 8z1 (05:18-07:04, P6 symmetric + P7 0.7-1.4):
+20.3 mm, snow bias -3.6, snow long-term share unchanged. 8fF10 (05:17-06:56): pr 1.0 forcing-only 20.3 mm, R_F 0.53,
+systematic bias 4.7 mm, passes (a). 8z2 (07:08-08:33, F10, P7 0.5-2): 24.0 mm, R_state 0.53 -> final. 8z3 (seed
+2027, 08:40-): running. Forcing sets generated (8g): F0 30, F1 8, F2 30, F5 / F6 / F8 8 (L 100 / 1000 / 500 km, pr
+0.75, NOT run - no time; ready under $W/8g), F10 30, F2s2027 30, F10s2027 30 members.
+**Open points for Fan / Cowork:** (1) tas 2 K noise drives the snow long-term share (T3) and a -3 to -4 mm snow bias
+in the snow units; (2) the gw long-term share (T1) is a WaterGAP-structure result - a DA-side remedy (temporally
+correlated gw noise in the inflation) is Cowork's suggestion; (3) R_state 0.53 means the OL ensemble explains about
+half of the OL-GRACE mismatch in the median unit (a factor 1.9 short; 11 % of the units are at or above 1): the
+adaptive inflation has to supply the rest, or Fan allows a wider precipitation noise than 1.0 (not tested, beyond
+the configs); (4) the asymmetric multipliers shift the ensemble mean (soil +9 mm, gw -5 mm); (5) L-test F5 / F6 / F8
+not run; (6) the mask path in settings/demo_Global*/DA_setting.json must be fixed before the pilot (feedback point 1).
+
+**ALL DONE 9 Oct 2026 16:30 (UCloud Claude Code, job 12417340); Job 5 (snow innovation diagnostic, read-only) added by Fan and done 17:40 - verdict YES, snow in C1-C3 takes 67-92 % of the cell increments via a variance-driven, self-reinforcing weight (see Job 5 below). Job 6 (parameter vs OL snow spread, read-only) done 17:30 - verdict YES for C1 / C2: adiabatic_lapse_rate (rho 0.89 / 0.75 with the late-summer swe, threshold >= 0.0076 K/m), not applicable for C3 (no OL pack in any member). Job 7 (new parameter-perturbation code, step 1) done 9 Oct 19:40 - 7a identical: YES (new code + existing member files reproduce OL_output Jan 2002 bit-exactly, 2232 pairs); 7b all seven multipliers act as expected: YES, no exception (the net-abstraction multipliers scale a signed field, see the note).** Job 0 checks passed; exp1, exp2a, exp2b and exp4 (added by
 Fan while exp1-exp2b ran) each prepared,
 run (plain `mpiexec -n 31`, nohup) and evaluated without any error; reports in Res/demo_Danube_exp1/evaluation/exp1,
 Res/demo_Amazon_A1/evaluation/exp2a, Res/demo_Amazon_A2/evaluation/exp2b (+ figures/ of each case); run logs in
@@ -1058,6 +1693,902 @@ Dec19 = swe on 2019-12-31. Table sorted by lapse rate (sb1 = sub-basin-1 mean):
   members (477 mm annual max in C1 -> cap ~ 725 mm) and therefore binds late; (iii) C3 shows that the cap and the
   lapse-rate tail are not the whole story - the variance-driven weight loop of Job 5 creates a pack even where the OL
   has none.
+
+
+**Job 7 - check of the new parameter perturbation code (step 1; 9 Oct 19:10-19:40; tmux `job7`; scripts and logs in
+`temp/exp_logs/job7/` on both machines: driver.py, build_7b.py, compare.py, verify.py, run_job7.sh, job7.out,
+compare_7a/7b.txt/.json, verify.out, <tag>_rank_k.log; data under `$W = /work/PyGLDA_v2_external_data/temp_job7/`
+(5.0 GB: 7a/, 7b/, 7b_input/, 7b_init/, init_save/7a, init_save/7b), kept.)**
+- **Sync / md5:** GitHub `origin/main` = local HEAD d629a81, nothing newer; Cowork's changes are the uncommitted
+  working-tree modifications (10 files). All 8 md5s of the job list match on the desktop AND on UCloud (Perturbation.py
+  e2555d56, parameters.py 5c60a59c, fan_waterbalance_vertical_init.py f5052d4c, waterbalance_lateral.py fa4e5eb4,
+  EnKF.py 48ee5884, demo_Danube = demo_Global perturbation.json d10b9be5, README 2e0a6b2c, configuration.md 5906846b).
+  Config_ReWaterGAP.json of demo_Global is identical to demo_Danube's (md5 56a3dcbf), so the OL_output Jan 2002
+  (written by the demo_Danube OL run on 5 Oct) is the right reference.
+- **Driver:** `temp/exp_logs/job7/driver.py`, run from src_demo as `mpiexec -n N python -u ../temp/exp_logs/job7/driver.py
+  Config_ReWaterGAP.json`; OpenLoop(ensemble_id=rank, settings/demo_Global), configure_time 2002-01-01..2002-01-31,
+  configure_Ens_output, configure_Ens_input, configure_ini_for_resume(read = the given init dir, save =
+  $W/init_save/<tag>); the driver asserts cm.read_state_path / cm.save_state_path before model_resume. (Note: the
+  SingleModel version of configure_ini_for_resume swaps read and save; OpenLoop overrides it correctly, and that is
+  what RDA.OL_run and this driver use.) First launch aborted in `conda activate` because my launcher had `set -u`
+  (gdal-activate.sh: GDAL_DATA unbound) - removed, relaunched; nothing had been written.
+- **7a (4 ranks, 19:26:06-19:26:43, 37 s incl. model init; ~1 s per day):** $W/7a/Ens_0..3 vs OL_output/Ens_0..3,
+  all 18 output variables (canopystor, swe, soilmoist, groundwstor, local/global lake and wetland stor, riverstor,
+  reservoirstor, tws, consistent-precipitation, dis, dis-from-upstream, atotusegw, atotusesw, atotuse, evap-total),
+  all 31 days, 4 members = 2232 (variable, day, member) pairs: NaN patterns identical, **global max |difference| =
+  0.0**. The old-code checkout of the fallback was therefore not needed. The restart written at the end went to
+  $W/init_save/7a/Ens_k/restartwatergap_2002-01-31.pickle only; no file under Ensemble_Initialization, Ensemble_input
+  or OL_output is newer than the job's scripts (find -newer: none).
+- **7b input:** $W/7b_input/Ens_k = copy of the real Ens_0 parameter file (24 variables) + one field for k = 1..7
+  written exactly as Perturbation.py does it, `xr.full_like(ds['max_daily_pet'], value, dtype=float)` - NOTE this gives
+  the constant on every cell, no NaN (nan count 0), which is also what the real ensemble files will contain, since
+  full_like does not keep the NaN pattern of the template; harmless, the multipliers are only applied to land
+  quantities; forcing = symlink to the real Ens_0 forcing; $W/7b_init/Ens_k -> real Ensemble_Initialization/Ens_0.
+- **7b (8 ranks, 19:27:14-19:27:49, 35 s):** all 8 members ran without error. Ens_0 (no field) == 7a Ens_0 exactly
+  (max |diff| 0 in every variable on 31 Jan). Each k = 1..7 differs from Ens_0. Differences Ens_k - Ens_0 on
+  2002-01-31, cos(lat)-weighted means over the non-NaN cells [storages kg m-2 = mm; dis m3 s-1], with the cell counts
+  of positive / negative difference (the full 18-variable tables incl. NW India 70-80E 22-32N, North China Plain
+  113-120E 32-40N, US High Plains 103-97W 32-42N are in compare_7b.txt):
+  ```
+  k  multiplier                      variable      global    Danube   NW India  N China Pl  US High Pl  max|d|  n>0    n<0    expected -> seen
+  1  lai x1.5                        canopystor   +0.055    +0.115   +0.0025    +0.0014     +0.031      0.72  28868      9  canopy up      -> UP
+                                     soilmoist    +0.14     +0.005                                       12.3  14874  17699  (more interception: gw -0.23, river -0.19, dis -2.9)
+  2  degreeday x1.5                  swe          -0.40     -3.32    -0.023     -0.011      +0.0000     205     300   9720  snow down where it melts -> DOWN
+                                     soilmoist    +0.11     +0.60                                        25.7  10191   2590  (melt water: river +0.06 / Danube +2.1, dis Danube +57)
+  3  smax x1.5                       soilmoist    +9.81    +20.5     +0.43      +0.80       +3.03       193   38678     36  soil up        -> UP
+                                     groundwstor  -1.79     -6.68    -0.013     -0.25       -0.92        50    1155  31065  (less recharge/runoff: river -1.7, dis -34)
+  4  gw_recharge_factor x0.5         groundwstor  -2.66     -4.93    -0.024     -1.36       -0.50        47    2361  29784  gw down        -> DOWN
+                                     riverstor    +1.09     +4.28    +0.11      +0.47       +0.17       211   27497   8495  runoff up      -> UP (dis +21.8; soil -0.05, i.e. the water leaves as runoff)
+  5  max_gw_recharge x0.5            groundwstor  -2.48     -3.15    -0.004     -0.53       -0.22        71     372  14966  gw down        -> DOWN
+                                     riverstor    +0.99     +2.77    +0.07      +0.15       +0.08       264   11730   6700  runoff up      -> UP (dis +19.4)
+  6  netabs_gw x2                    groundwstor  +0.028    -0.45    +0.47      -1.97       -0.10       132    6100  45578  gw down in irrigated regions -> DOWN in N China Plain, US High Plains, Danube (45578 cells down);
+                                                                                                                             UP in NW India, see note
+                                     atotusegw    (flux doubled: 45587 cells changed, max 6.2e-5 kg m-2 s-1 = 5.3 mm/d)
+  7  netabs_sw x2                    riverstor    -0.11     +0.21    -2.16      +0.31       -0.0008     114   14189  40177  surface water down in irrigated regions -> DOWN in NW India (river -2.2, local lake -0.40,
+                                     tws          -0.26     +0.21    -3.82      +0.15       -0.018      218   13521  37119  global wetland -0.37, reservoir -0.32, dis -15.9); 40177 cells down; UP in Danube / N China Plain river, see note
+                                     atotusesw    (flux doubled: 39830 cells changed, max 2.8e-4 kg m-2 s-1 = 24 mm/d)
+  ```
+  consistent-precipitation is unchanged in every k (0 everywhere), as it must be (same forcing).
+- **Note on the net-abstraction multipliers (k = 6, 7):** they scale a SIGNED quantity. WaterGAP's net abstraction is
+  withdrawal minus return flow and is negative where return flows dominate (groundwater: return flow from
+  surface-water irrigation; surface water: return flow from groundwater-fed use). In Ens_0 on 31 Jan the
+  area-weighted net groundwater abstraction of the NW India box is negative (-0.0025 mm/d; 83 of 400 cells < 0, the
+  Punjab canal-irrigation cells) and the net surface-water abstraction of the Danube is negative (-0.008 mm/d, 309 of
+  373 cells < 0) and mixed in the North China Plain (145 cells < 0, 59 > 0; mean +0.004). Doubling therefore
+  INCREASES groundwater in NW India (+0.47 mm) and river storage in the Danube (+0.21, dis +4.9) - the correct
+  behaviour of a multiplier on a signed field, not a bug; where the net abstraction is positive (North China Plain
+  gw -1.97, US High Plains gw -0.10, NW India surface water -3.8 mm TWS) the storages go down as expected. Two
+  consequences for Fan / Cowork: (i) a sanity check of the multipliers by region must use the sign of the local net
+  abstraction; (ii) the DOELL2024 table in Perturbation.py gives the netabs multipliers the triangle [-2, 1, 2]: a
+  negative draw turns every withdrawal into an injection (and every return flow into a withdrawal) over the whole
+  globe. If that is what Döll et al. (2024) prescribe, fine, but it is a strong perturbation; a draw of, e.g., 0.5-2
+  would be the conservative alternative.
+- **Side observations (not defects):** k = 1 (LAI) changes soil, groundwater and river as well (more interception ->
+  less throughfall), k = 6 / 7 change canopy / snow / soil by < 1e-4 mm only through the neighbouring-cell demand
+  satisfaction (actual consumption enters evap-total). The fluxes in the output are the 31-Jan daily values, so the
+  atotusegw / atotusesw differences in k = 6 / 7 are the doubled net abstractions (0.0086 mm/d per 1e-7 kg m-2 s-1).
+- **Verdict: 7a identical: YES (2232 pairs, max |diff| 0); 7b all seven act as expected: YES, no exception** (the
+  only directions that differ from the naive expectation, k = 6 in NW India and k = 7 in the Danube / North China
+  Plain, follow from the negative sign of the local net abstraction). Nothing outside $W and temp/exp_logs/job7/
+  was written; src_*, settings/, exp_Ucloud.py untouched; $W kept.
+
+
+**Job 8 - parameter sensitivity test and range optimisation for the global GRACE DA ensemble (started 9 Oct 21:30,
+job 12417913, host bit-c26a-05, 32 vCPU / 96 GB; tmux `job8`; scripts and logs in `temp/exp_logs/job8/`, data under
+`$W = /work/PyGLDA_v2_external_data/temp_job8/`). Progress log, newest round last.**
+- **Set-up checks (21:28):** all new files in sync (md5 desktop = UCloud: src_DA/perturbation_par.py 3bd6eaa8,
+  perturbation_forcing.py 0f816b17, settings/demo_Global_v2/perturbation.json 58d85685 = the reference table, DA_setting
+  e6f33c98, shp2mask a2c92870, Global_DA fbb9c680, OpenLoop 3c2f3fb2). Standard values in the ORIGINAL parameter file
+  confirmed: pt 1.26 (45544 cells) / 1.74 (21876), max_daily_pet 15, snow_melt_temp 273.15, critcal_gw_precip 12.5,
+  gw_dis_coeff 0.01, activewetland_depth 2, gamma field 0.1-5.0 (10593 values), river_roughness_coeff_mult field
+  {1, 2, 3, 10}. **Mask path:** `settings/demo_Global/DA_setting.json` points to
+  `Basin/mask/GlobalBasins_v1.0/GlobalBasins_v1.0_res_0.5.h5`, which does NOT exist on UCloud; the frozen mask is at
+  `Basin/mask/mask/GlobalBasins_v1.0/GlobalBasins_v1.0_res_0.5.h5` (772 units, 55461 land cells, attrs
+  area_threshold 0.4, model_mask 1; an identical copy under mask/mask/GlobalBasins/). I use that file as it is (772
+  units, not 727) and report over all 772. **GRACE:** no global unit obs file exists (GRACE/output has only Amazon /
+  Brahmaputra / Danube), so GDA.get_GRACE_obs runs on a settings copy in $W/settings_grace (window `grace` of tmux
+  job8, output $W/grace); fallback 20 mm if it fails.
+- **Job expiry warning (21:30):** `ucloud introspect job` reports startedAt 21:26:54 and **expiresAt 22:26:54**
+  (1 h) although the specification says timeAllocation 13 h. Reported to Fan; every round is resumable (restarts in
+  $W/<round>/init, monthly files per year, `run_round.sh <round> <N> [first_year]` skips what exists).
+- **Round 8a launched 21:31:54:** 27 members built by `build_params.py 8a spec_8a.json` from the ORIGINAL parameter
+  file (Ens_0 standard; 2p-1 / 2p = P_p min / max, exactly the reference table: P1 humid cells==1.26 -> 0.885 / 1.65,
+  P2 arid cells==1.74 -> 1.365 / 2.115, P3 6 / 22, P4 smax new 0.5 / 2, P5 gamma x0.5 / x2, P6 269.4 / 276.9 K, P7
+  degreeday new 0.5 / 2, P8 2.5 / 20, P9 gw_recharge_factor new 0.5 / 2, P10 0.001 / 0.02, P11 netabs_gw new 0.5 / 1.5,
+  P12 roughness x1/3 / x5/3, P13 0.5 / 5 m), forcing = symlink to the unperturbed Ensemble_input/Ens_0 forcing.
+  Chain `run_round.sh 8a 27`: spin-up (cold start, 10 cycles of 2000 + 2000-2001, restarts -> $W/8a/init/Ens_k) ->
+  years 2002..2012 one mpiexec each -> monthly means ($W/8a/monthly/Ens_k/<year>.nc, all 18 output variables) ->
+  daily files deleted; free-disk check (> 300 GB) before every year. Speed 1.21 s per model day with 27 ranks, cgroup
+  memory 36.5 GB -> spin-up ~ 90 min, 11 years ~ 80 min + averaging: model part of 8a expected ~ 00:30.
+- **21:50 Fan: stop 8a, final period** (Cowork review 22:05 point): the 10-cycle run was killed at 21:50 (it was in the
+  first spin-up cycle; nothing written except the inputs) and **8a restarted 21:52:13** with `model_spinup(spinup_years=1)`
+  (1 cycle of 2000 + 2000-2001) and years 2002-2006 (`run_round.sh 8a 27`, LASTY 2006); diagnostics default 2002-2006,
+  GRACE months from 2002-04, perennial snow = late-summer swe > 10 mm in >= 3 of 5 years, groundwater drift excepted
+  for P9 / P10 / P11 (reported separately). cgroup memory 38 GB anon + 57 GB file cache; 1.0-1.3 s per day.
+- **Cowork review read 21:56 (points 21:40-23:00) - actions:**
+  - 22:25 point 2 (slow groundwater): member 19 (P10 min, k = 0.001) needs 7 cycles of 2000 before 2000-2001. 8a was
+    already running with 1 cycle for all, so member 19 is re-run SEPARATELY in parallel (tmux window `m19`, 1 rank,
+    `JOB8_OFFSET=19 JOB8_SPINUP_MAP=19:7`, folder $W/8a_m19, started 21:55:30; ~9 model years of spin-up + 5 years
+    ~ 2.5-3 h); its monthly files replace $W/8a/monthly/Ens_19 when done, and the 8a diagnostics are rerun for member 19.
+    The driver now takes a per-member cycle map; in 8z the members drawn below 0.003 get the same treatment (separate
+    parallel chain so that the 31-rank spin-up is not delayed). With this, P10's groundwater IS drift-flagged (P9 / P11
+    excepted). (The first m19 launch died at once on a JSON-quoting error of the env map - fixed, relaunched 21:55:30.)
+  - 22:15 / 22:45 points (8g once, tas 2 K and tau 1 d fixed): 8g started 21:54:20 in tmux window `8g`, concurrent
+    with 8a (4 ranks): F0 (30 members, pr lognormal 0.5, tas 2 K, L 300 km, tau 1 d, seed 2026), then F1 (pr 0.25)
+    and F2 (pr 0.75) with 8 members each, months 2000-01..2006-12, into $W/8g/<config>/input/Ens_k with the project
+    code (perturbation_forcing, correlated mode, par all off). F5 / F6 / F8 (L 100 / 1000 / 500 km) are generated
+    later, before their 8f batch. F3, F4, F7, F9 dropped (tas / tau fixed).
+  - ORDER followed (23:00 point): 8a -> 8g -> 8f F0-F2 (8 members each + member 0 = 25 ranks) -> 8b (+ 8c-w if the
+    8a OAT table shows wetlands < 20 % of the seasonal spread in the flood units) -> 8z -> 8z-P -> 8z1 -> 8z2 ->
+    8f F5 / F6 / F8 -> 8z seed 2027.
+  - 22:50 / 23:00 points (time-scale diagnostic, targets T1-T5, K, R, spread decomposition): being added to the
+    diagnostics (`diagnostics.py` OAT: S per storage per time scale; new `ensemble_diag.py` for 8f / 8z / 8z-P:
+    spread per storage per time scale, shares, dominant storage per unit, bias, R, R_F, K, T1-T5 pass / fail, and the
+    parameter / forcing / joint decomposition from 8z-P + 8f-F + 8z). Reported per round below.
+  - 22:40 points a-d: 8f choice = largest median forcing-only spread among the realistic configs with R_F <= 1.5 in
+    >= 90 % of the units; 8z target median R 1.0-2.0, shrink only if > 2.5; rule 1 unchanged; K reported.
+
+- **Review block re-read 22:00 (new points ~22:00: no deadline, iterate 8z reruns until T1-T5 pass or no lever
+  left; expiry check before each round; "job extended by 12 h"):** acknowledged. BUT `ucloud introspect job` at 22:00
+  still reports **expiresAt 09 Oct 22:26** in its `status` field - BUT the job's update list shows the extensions
+  (newTimeAllocation 9 h, 10 h, 11 h, 12 h, 13 h at 21:27-21:28; specification.timeAllocation 13 h), so the `expiresAt`
+  field is simply stale and the job ends at **21:27 + 13 h = 10 Oct ~10:27 CEST** (Fan's "around 10:30"). Resolved; I
+  read the end time from the last newTimeAllocation update from now on. If the job stopped unexpectedly:
+  resume note: 8a is in the spin-up (year 2000-2001 run after the one cycle; restarts not yet written), m19 in its
+  7-cycle spin-up, 8g at month 14 / 84 of F0. Everything restarts from scratch with `run_round.sh 8a 27`,
+  `JOB8_OFFSET=19 JOB8_SPINUP_MAP=19:7 run_round.sh 8a_m19 1`, `run_8g.sh` (the forcing generator overwrites; the
+  parameter inputs under $W/8a/input are complete and reusable). I will write expiresAt before every round and a
+  resume note whenever < 2 h remain.
+- **FEEDBACK / open points for Cowork (please read; answer in the review block if an action is needed):**
+  1. **Mask path:** `settings/demo_Global/DA_setting.json` (and demo_Global_v2) point to
+     `Basin/mask/GlobalBasins_v1.0/...` which does not exist on UCloud; the frozen 772-unit mask is under
+     `Basin/mask/mask/GlobalBasins_v1.0/` (+ a copy `mask/mask/GlobalBasins/`). Either move the folder up one level on
+     UCloud or fix the json before the global pilot. Job 8 uses the existing file directly.
+  2. **GRACE obs for the global units did not exist** (GRACE/output has only the three regional basins); made with
+     GDA.get_GRACE_obs on a settings copy -> $W/grace/GlobalBasins_v1.0_{signal,cov,gridded_signal}.hdf5, 2002-01..
+     2012-12 (122 GRACE months; 57 in 2002-04..2006-12), ~5 min; can be copied to GRACE/output_v2 for the pilot
+     (it is exactly what the DA would build). GRACE sigma per unit = mean over months of sqrt(diag cov).
+  3. **Perennial-snow flag** is evaluated on the MONTHLY means (Aug + Sep mean swe > 10 mm in >= 3 of 5 years), not on
+     15 Aug - 15 Sep daily values, because only monthly files are kept (daily deleted). Slightly stricter than the spec.
+  4. **CPU:** 8a (27 ranks) + m19 (1) + 8g (4 ranks) = 32 processes on 32 vCPU: the model slowed from 1.1 to 1.3-2 s per
+     day while 8g runs (8g F0 ~ 45 min, F1 / F2 ~ 25 min). Accepted: 8f needs both anyway. Memory is not an issue
+     (38 GB anon for 27 ranks).
+  5. **Slow-groundwater members:** handled as separate parallel single-rank chains (member 19 in 8a; in 8z all
+     members drawn with gw_dis_coeff < 0.003), so the main mpiexec is not held up by 9-year spin-ups; the chain
+     writes into its own folder and its monthly files are copied over the member's folder before the diagnostics.
+  6. **8f member count:** 8 members per config as in the 22:25 point (F0: 30 generated, 8 used); F0-F2 in one batch
+     of 25 ranks (member 0 + 24). F5 / F6 / F8 generated later (8 members each, L 100 / 1000 / 500 km).
+  7. **Spread shares** in the ensemble diagnostics are VARIANCE shares per storage (covariances between storages
+     ignored), both for the seasonal and the long-term part; the dominant storage per unit is the largest share.
+     Say if you prefer std shares or a covariance-consistent split (tws variance = sum over storages incl. covariances).
+
+- **22:05 GRACE reference ready and diagnostics tested on it:** 772 units, 54 GRACE months in 2002-04..2006-12, unit
+  sigma (sqrt diag of the DA covariance, mean over months) median 16.3 mm (p10 10.0, p90 19.4); GRACE unit anomaly
+  std median 63 mm (sa 118, as 93, af 83, eu 59, na 55, si 53, ar 41, au 35); split of the GRACE anomaly: seasonal
+  std median 41 mm, long-term (12-month running mean) 27 mm. 8a: spin-up cycle done 22:00, 2000-2001 running
+  (1.3 s/day), years 2002-2006 expected 22:20-23:05; 8g F0 at 17/84 months at 22:01.
+
+- **22:19 8a spin-up done** (EXIT 0, 27 restarts 2001-12-31, 27 min for 3 model years at 27 ranks + the concurrent
+  8g). **Incident:** the chain stopped after the spin-up with "unexpected EOF while looking for matching quote" at
+  line 36 of run_round.sh - not a syntax error (the file parses), but I had overwritten run_round.sh by scp at 21:54
+  while the 21:52 chain was executing it (bash reads a script incrementally by byte offset, so the replaced bytes were
+  parsed as garbage). Relaunched 22:27:27 with the same command (spin-up skipped, restarts reused); 8 min lost.
+  Rule from now on: never overwrite a running chain script; new versions get a new file name. 8g F0 finished 22:26
+  (EXIT 0; 30 members, 84 months), F1 running.
+
+- **22:35 review answers read 22:33:** points 1-6 as agreed; point 7 implemented: the ensemble diagnostics now use the
+  covariance-consistent split share_s = time-mean cov_members(x_s, TWS) / time-mean var_members(TWS) per unit and
+  time scale (sums to 1, negative = compensating) as the primary measure for T1-T4 and for the dominant storage;
+  the variance shares are reported next to it ("vshare" columns).
+
+- **22:48 dry run of the OAT diagnostics on the finished year 2002 (27 members; 9 GRACE months) - pipeline works
+  end to end** (member processing 27 x ~40 s with 8 workers, metrics, decisions, report). Two things learned and fixed
+  before the real 5-year evaluation: (1) **negative storages**: in the STANDARD run (member 0) the minimum monthly
+  groundwater storage is negative over ~13 % of the land area (lakes + reservoirs ~10 %, tws ~13 %) - WaterGAP 2.2e
+  allows negative groundwater storage under net abstraction, so an absolute "negative storage" flag fires for every
+  member. The flag now means NEW negative cells relative to member 0 over > 1 % of the land area (member 0's own
+  fractions are reported). (2) The drift flag on one year is meaningless (seasonality) - with the 5 years it is the
+  specified test; expect it to catch the post-spin-up adjustment of the soil-side parameters (P1-P5), which is a
+  property of the 3-year spin-up rather than of the parameter; I will report the drift fractions and judge per the
+  rules (gw excepted for P9-P11). First look (2002 only, not final): P10 min (k = 0.001) moves TWS by 144 mm median
+  (its 7-cycle spin-up is running, m19 at year ~5 of 9); P2 (arid PT), P8 (critical gw precipitation) and P11
+  (net abstraction) are near-insensitive at both ends (median S_tws 0.0-0.3 mm); P1, P3 min, P4, P13 and P10 are the
+  strong ones (S_tws 15-35 mm); P6 min (snow melt 269.4 K) and P13 max act mostly in si / ar / na.
+
+- **22:52 8g done** (F0 30 members 22:26, F1 22:38, F2 22:52; 303 GB under $W/8g; EXIT 0 each). Check of the generated
+  forcing against the unperturbed files (2003-07): F0 member 1 pr ratio mean 1.005, std 0.50; tas offset mean +0.03 K,
+  std 2.03 K; F2 member 3 pr std 0.76, tas std 2.00 - as configured (lognormal mean 1, min 0). **8f input built**
+  (24 members: 1-8 F0, 9-16 F1, 17-24 F2, parameters = original file, forcing symlinked to 8g; Ens_0 = standard).
+  **8f queued** in tmux window `8f`: starts automatically (`run_round.sh 8f 25`) the moment 8a's model runs are complete
+  (CPU: 27 + 25 ranks would oversubscribe the 32 vCPU). 8a: year 2003 done 22:51 (11.5 min per year), 2004 running;
+  8a model runs expected complete ~23:28, then OAT diagnostics (~5 min) and the 8a report here.
+
+- **23:05 review points read 23:06 - implemented:** (2) drift flag = slope of the ANNUAL means 2004-2006 (member k
+  minus member 0) > 5 mm/yr over > 5 % of the land area; the all-months slope (incl. the 2002-2003 adjustment) is
+  reported next to it as information; gw excepted for P9 / P11; P10 judged with m19's 9-year spin-up. (3) insensitive
+  = at both ends S_tws < 3 mm in >= 98 % of the units AND max S_tws < 10 mm (same for the acting storage); the
+  decisions table now gives %<3, max, the number of units with S_tws >= 3 and the 10 largest-S units with ids /
+  names, plus S over the last year (2006) for P11. (4) free disk will be written with every round (now 1871 TB free
+  of 7.2 PB; $W = 8a inputs + 8g 303 GB).
+
+**Round 8a - result (model runs 21:52-23:31, 27 ranks, 1.0-1.3 s per day; diagnostics 23:33 and, with two flag
+fixes, 23:40; full report `temp/exp_logs/job8/8a_report_v1b.md` = $W/8a/report/report.md, CSVs unit_metrics /
+member_summary / scale_S / decisions in $W/8a/report/; member 19 (P10 min) still with the 1-cycle spin-up, its
+9-year version lands ~23:55 and is re-evaluated automatically; free disk 1871 TB; expiresAt 10 Oct ~10:27).**
+- **Member 0 (standard WaterGAP, unperturbed forcing) vs GRACE, 772 units, 54 months 2002-04..2006-12:** median RMS
+  of the TWS anomaly 41.0 mm (p90 85), correlation 0.83, seasonal amplitude ratio model / GRACE 0.87, trend -0.35
+  mm/yr; RMS by region sa 59, as 54, af 49, na 41, eu 37, au 37, ar 33, si 31. Snow units (member-0 snow seasonal
+  amplitude >= 20 mm) 222, flood units (wetland amplitude >= 10 mm) 178.
+- **FINDING for Cowork (standard run):** the global snow mass of member 0 GROWS by 10.1 %/yr over 2002-2006 and it
+  has 2859 perennial-snow cells - WaterGAP accumulates snow in high-mountain / glacier cells from the cold start
+  (no glacier model; the pack grows towards the model's cap), independent of any parameter. An absolute "snow mass
+  growing > 2 %/yr" flag therefore fired for all 27 members; the flag is now RELATIVE (growth_k - growth_0 > 2 %/yr),
+  perennial cells were already relative (> 1.2 x member 0). Likewise "negative storage" is now limited to the
+  storages that must stay >= 0 (soil, snow, river, wetlands, lakes, canopy): groundwater (and hence TWS) is negative
+  in ~13 % of the land in the standard run (net abstraction) and new negative gw cells (1-7 % of land for P4 max,
+  P5 max, P8 max, P9 min, P10 max, P11) are reported but not flagged. Please confirm or override both.
+- **OAT sensitivity S = RMS(unit TWSA_k - TWSA_0), median over units (mm) | share of units with S < 3 mm | max:**
+  P1 humid PT min 35.9 / 14 % / 593, max 23.8; P3 max_daily_pet min 24.4, max 4.3; P4 smax min 20.4, max 33.5 (soil
+  S 26 / 47); P5 gamma 8.8 / 6.8; P6 snow melt T 1.6 / 1.5 (snow units: tws S 13.8 / 7.5, snow S 16 / 13); P7
+  degree-day 0.4 / 0.3 (snow units 4.4 / 3.5); P9 gw recharge factor 12.4 / 6.9; P10 gw_dis_coeff min 190 (1-cycle
+  spin-up; max S 1798!), max 15.1; P12 roughness 8.0 / 6.4 (river S 7.8 / 6.3, max 1071 in large rivers); P13 wetland
+  depth 17.8 / 27.6 (wet S 16 / 25). Regionally weak but locally strong: P2 arid PT median 0.4 / 0.3 but max 323 /
+  321 mm (265 / 216 units >= 3 mm, af / au); P8 critical gw precipitation 0.1 / 0.0, max 37 / 18 (90 / 54 units, af
+  / as); P11 net abstraction 0.2 / 0.2, max 278 / 286 (176 / 180 units; as 8-9 mm median: North China Plain / NW India).
+  **No parameter is insensitive by the 23:05 rule** (every one has max S_tws >= 10 mm).
+- **Time scales (median RMS of the seasonal | long-term part, tws):** P1 7.0 | 2.5, P3 min 6.2 | 2.2, P4 7.8-9.8 |
+  3.0-4.6 (soil seasonal 10-13), P5 2.4-3.4 | 1.3-1.6, P9 1.7-2.1 | 0.9-1.4 (gw), P10 min 6.3 | 24.0 (gw long-term
+  21), P10 max 2.0 | 1.7, P12 2.3 | 0.8 (river), P13 1.1 | 0.8-1.2 (wet; flood units 7.1-5.8 | wet 7.4-6.1), P6 in snow
+  units 13.8 / 7.5 seasonal. So: the soil-side parameters (P1, P3, P4, P5) carry most of the SEASONAL TWS
+  sensitivity; the long-term sensitivity sits in gw_dis_coeff (P10) and, weaker, P9 and P4; wetland depth acts
+  seasonally in the flood units; snow parameters only in the snow units.
+- **Flags and decisions (rule 1; drift = annual-mean slope 2004-2006 vs member 0 > 5 mm/yr over > 5 % of land; TWS
+  counted as a storage - see question below):**
+  ```
+  P1  humid PT      min 0.885  UNREALISTIC drift soil 7.9 % tws 17.4 %, outlet flow >50 % in 18 % units -> 1.073 | max 1.65 UNREALISTIC drift tws 13.5 % -> 1.455
+  P2  arid PT       min 1.365  ACCEPTED | max 2.115 ACCEPTED
+  P3  max_daily_pet min 6      UNREALISTIC drift soil 5.0 % tws 13.0 % -> 10.5 | max 22 ACCEPTED
+  P4  smax          min 0.5    UNREALISTIC drift soil 11.9 % tws 18.4 %, outlet 10 % -> 0.707 | max 2 UNREALISTIC drift soil 23.8 % tws 28.2 % -> 1.414
+  P5  gamma         min 0.5    UNREALISTIC drift tws 10.0 % -> 0.707 | max 2 UNREALISTIC drift tws 9.2 % -> 1.414
+  P6  snow melt T   min 269.4  UNREALISTIC drift snow 7.2 % tws 13.0 % -> 271.3 | max 276.9 UNREALISTIC perennial cells 4787 vs 2859 (x1.67), drift tws 6.6 % -> 275.0
+  P7  degree-day    min 0.5    ACCEPTED (perennial 3365 = x1.18) | max 2 ACCEPTED
+  P8  crit gw prec  min 2.5    ACCEPTED | max 20 ACCEPTED
+  P9  gw rech fact  min 0.5    ACCEPTED (gw drift excepted) | max 2 ACCEPTED
+  P10 gw_dis_coeff  min 0.001  pending m19 (1-cycle: drift gw 51.5 %, S 190 mm, RMS 48.9) | max 0.02 UNREALISTIC drift gw 7.0 % tws 8.2 % -> 0.01414
+  P11 netabs gw     min 0.5    ACCEPTED | max 1.5 ACCEPTED
+  P12 roughness     min 1/3    ACCEPTED | max 5/3 ACCEPTED
+  P13 wetland depth min 0.5    UNREALISTIC drift wet 7.5 % tws 8.3 % -> 1.25 | max 5 UNREALISTIC drift wet 8.8 % tws 9.5 % -> 3.5
+  ```
+  No end fails the RMS rule (largest median RMS 44.3 = 1.08 x 41.0 for P1 max; P10 min 48.9 = 1.19 x) or the amplitude
+  rule (ratios 0.74-1.02 vs 0.87). -> **8b = member 0 + 12 retests** (13 if P10 min stays flagged with the 9-year
+  spin-up), runs after 8f (CPU).
+- **Questions for Cowork before 8b starts (~00:45):** (a) the drift flag counts TWS as a storage; P1 max, P5 min and
+  P5 max are flagged ONLY by the TWS drift (their storages stay below 5 % each). If TWS should not count, those three
+  ends are ACCEPTED and 8b has 9-10 retests. (b) The soil drifts of P1 / P3 / P4 in 2004-2006 (5-24 % of land) are
+  the slow wetting / drying of the soil column towards the new equilibrium in dry regions after only 3 spin-up years;
+  they are adjustment, not a model defect, but they persist beyond 2003, so rule 1 shrinks the ends. Alternative:
+  accept the ends and add spin-up cycles for the soil-side members (like P10). Your call; default = the rule.
+- **8c-w trigger:** cannot be decided from OAT alone (needs the ensemble shares); in the flood units the wetland-depth
+  ends move the seasonal TWS by 6-7 mm and the soil-side ends by 8-12 mm, so wetlands will carry roughly 20-35 % of the
+  seasonal spread there - I will decide 8c-w after 8z-P (first ensemble shares).
+
+- **23:58 member 19 (P10 min, k = 0.001) with the 9-year spin-up (7 cycles + 2000-2001, m19 chain 21:55-23:57)
+  swapped in and re-evaluated:** RMS vs GRACE 42.2 (1-cycle: 48.9), corr 0.82, amp 0.82; S_tws median 230 mm (max
+  2140), groundwater level +278 mm above member 0, long-term S 11.3 mm; the 2004-2006 gw drift still covers 47 % of
+  the land (1-cycle 52 %): with k = 0.001 1/d the aquifer is still filling at years 9-14 of the run in cells where the
+  equilibrium level is hundreds of mm higher. -> **P10 min UNREALISTIC -> retest 0.00316** (log halfway; that member
+  then needs only the standard spin-up). Side effect of the longer spin-up: +19 mm more snow (perennial cells 2938 vs
+  2859, growth 5.9 vs 10.1 %/yr) - the snow pack is further along its accumulation, not a P10 effect.
+- **8b built and queued (00:02):** member 0 + 13 retests (P1 1.073 / 1.455, P3 min 10.5, P4 0.707 / 1.414, P5 0.707
+  / 1.414, P6 271.3 / 275.0 K, P10 0.00316 / 0.01414, P13 1.25 / 3.5 m), `run_round.sh 8b 14` starts automatically
+  when 8f's model runs complete (~00:45); its OAT diagnostics (member 0 reused from 8a) run automatically after.
+  8f: spin-up done 23:54 (23 min), year 2002 running. If Cowork overrides the TWS-drift question before 8b starts,
+  I rebuild 8b (spec + inputs) before the launch.
+
+- **00:15 review (Cowork) read 00:11 - applied before 8b started (8b withdrawn and rebuilt):**
+  1 / 2 / 4: confirmed; TWS no longer counted as a storage in the drift test. 3: **drift rule redefined and implemented**
+  (per member, storage, cell: d(y) = annual mean_k - annual mean_0, steps s1..s4; DRIFT = all steps the same sign and
+  |s4| >= 0.5 |s1| and |s4| > 5 mm/yr over > 5 % of land; ADJUSTMENT = same sign and decaying, reported with the median
+  e-folding time; otherwise interannual response). **8a decisions re-run with it (final 8a table,
+  `temp/exp_logs/job8/8a_report.md`):**
+  ```
+  P1  humid PT      min 0.885  UNREALISTIC outlet flow > 50 % in 18 % of the units -> 1.073 | max 1.65  ACCEPTED
+  P2  arid PT       min / max  ACCEPTED
+  P3  max_daily_pet min / max  ACCEPTED (min: adjustment of gw over 1 % of land, tau ~2 yr; no drift)
+  P4  smax          min 0.5    UNREALISTIC outlet flow > 50 % in 10 % of the units -> 0.707 | max 2 ACCEPTED (drift soil 1 %, gw 1 %)
+  P5  gamma         min / max  ACCEPTED
+  P6  snow melt T   min 269.4  ACCEPTED | max 276.9 UNREALISTIC perennial cells 4787 vs 2859 -> 275.0
+  P7, P8, P9        all ACCEPTED
+  P10 gw_dis_coeff  min 0.001  UNREALISTIC drift gw 10.5 % of land (9-year spin-up; adjustment over another 9 %) -> 0.00316 | max 0.02 ACCEPTED
+  P11, P12, P13     all ACCEPTED (P13 max: wet drift 1 %)
+  ```
+  Drift fractions are now 0-2 % everywhere except P10 min; adjustment fractions 0-1 % (P10 min 9 % gw) with e-folding
+  times 1.1-2.8 yr - the 2004-2006 slopes flagged before were interannual responses, as Cowork suspected.
+  -> **8b = member 0 + 4 retests** (P1 min 1.073, P4 min 0.707, P6 max 275.0 K, P10 min 0.00316), `run_round.sh 8b 5`
+  queued behind 8f (CPU), diagnostics queued. (Bug caught while rebuilding: the retest builder applied the P1 value to
+  the ARID cells (1.74) - fixed, rebuilt, verified "cells==1.26 (45544) -> 1.073".)
+  5: **Snow finding for Fan (member 0, standard WaterGAP):** of the 10.1 %/yr global snow-mass growth, almost nothing
+  lies inside the 772 DA units: snow mass inside the units grows +0.7 %/yr (land-mean 10.4 mm) vs +14.6 %/yr outside
+  (22.0 mm; the removed glacier units, Greenland, Antarctic margin, high Asia); perennial cells 144 inside vs 2715
+  outside; the snow trend of member 0 in the 222 snow units: median +0.27 mm/yr (p10 -3.6, p90 +4.4), all units
+  median 0.00 mm/yr. So the unit set already excludes the accumulating cells; the DA snow has no systematic trend in
+  the standard run.
+- 8f: year 2003 running at 00:12 (10 min per year, 25 ranks) -> model runs complete ~00:48, ensemble diagnostics ~00:55.
+
+- **00:45 review read 00:46 - check done:** 8a parameter files read back: member 1 / 2 (P1) cells==1.26 -> 0.885 /
+  1.65 with cells==1.74 untouched (1.74); member 3 / 4 (P2) cells==1.74 -> 1.365 / 2.115 with cells==1.26 untouched
+  (1.26); NaN pattern unchanged in all four; 8b member 1: cells==1.26 -> 1.073, cells==1.74 = 1.74. The 8a OAT files
+  were correct (the bug was only in the retest builder, caught before any 8b run).
+
+**Round 8f - forcing sensitivity, result (runs 23:31-00:53, 25 ranks; diagnostics 00:54; report
+`temp/exp_logs/job8/8f_report.md`, per-unit CSVs $W/8f/report/F?_units.csv; free disk 1870 TB).** 8 members per
+config, parameters standard, 2002-2006; spread = time-mean ensemble std of the unit TWS anomaly; shares =
+covariance-consistent cov(x_s, TWS) / var(TWS); R_F = spread / sqrt(max(MSE(member 0 - GRACE) - sigma^2, 25)).
+```
+config  pr std  spread median (p10 / p90)  bias median (p90)  R_F median  R_F<=1 / <=1.5  K median (p10 / p90)  RMS ens-mean  flags
+F0      0.50    11.6 (4.4 / 21.9)          4.7 (9.2)          0.30        99 / 100 %      0.38 (0.08 / 0.67)    41.5 (m0 41.0) none
+F1      0.25     6.3 (2.3 / 11.7)          2.6 (5.3)          0.16       100 / 100 %      0.15 (0.02 / 0.38)    41.0          none
+F2      0.75    16.4 (5.9 / 30.8)          6.8 (13.7)         0.41        96 /  99 %      0.55 (0.14 / 0.81)    41.9          none
+```
+- Spread scales linearly with the precipitation std (6.3 / 11.6 / 16.4 mm); by region it is largest in sa (F2 25
+  mm), na (21), ar / af (16), smallest in au (8). Forcing alone reaches only R_F ~ 0.3-0.4 of the OL-GRACE mismatch
+  even at pr 0.75 - far from over-dispersive (R_F <= 1.5 in 99 % of the units).
+- **"Bias" is mostly 8-member sampling noise:** RMS(ensemble mean - member 0) is expected to be spread / sqrt(8) =
+  2.2 / 4.1 / 5.8 mm for F1 / F0 / F2 from sampling alone; the systematic part sqrt(bias^2 - noise^2) is 1.4 / 2.3 /
+  3.5 mm - all below the 5 mm limit of rule (a). (The lognormal factor has mean 1, so no systematic wet bias; with 30
+  members the sampling part drops to 1-3 mm.)
+- Where the forcing puts the spread (same in all three configs): SEASONAL covariance shares soil 0.30, gw 0.11,
+  river 0.11, wet 0.03, lake 0.03, snow 0.00 (median; soil dominant in 324 units, snow 133, river 131, wet 89, lake
+  84); LONG-TERM shares soil 0.17, gw 0.18, lake 0.08, river 0.07, wet 0.04 (dominant: lake 180, soil 178, wet 133,
+  gw 110, snow 103). Targets on the forcing-only ensemble: T1 (gw >= 50 % of long-term) FAILS at 0.18 - the forcing
+  noise feeds soil / lakes / wetlands on the long time scale, the groundwater share must come from the parameters;
+  T2 passes (0.82); T3 fails high in the snow units (snow 0.44 of the seasonal, 0.31 of the long-term spread; the 2 K
+  temperature noise moves the snow pack) - the snow levers of 8z will have to compensate; T4 passes (wetlands 0.28 of
+  the seasonal spread in the flood units -> no 8c-w needed on this evidence); T5 fails (R 0.3-0.4, parameters to add).
+- **Decision (22:40 rule a, 22:45: tas 2 K and tau 1 d fixed): F2 (pr lognormal 0.75, tas 2 K, L 300 km, tau 1 d)
+  is carried into 8z** - largest median spread of the realistic configs, no flag, systematic bias 3.5 mm < 5 mm, R_F
+  <= 1.5 in 99 % of the units. L (F5 / F6 / F8) is tested after 8z per the order. The 30-member F2 forcing is being
+  generated now (8 ranks, tmux `8gF2`, members 1-8 identical to the 8f ones by construction of the seeds) in parallel
+  with 8b. If Cowork prefers F0 (the reference), say so before 8z starts (~02:00) - the F0 30-member set exists.
+- **8b started 00:53** (5 ranks: member 0 + P1 min 1.073, P4 min 0.707, P6 max 275.0 K, P10 min 0.00316); model runs
+  expected complete ~01:55, diagnostics automatic.
+
+- **01:20 review read 01:22 - implemented in the ensemble diagnostics (and 8f re-evaluated with it, see below):** per
+  unit s_state (spread of gw + soil + snow + river + wetlands), s_excl (lakes + reservoirs + canopy), R_state =
+  s_state / sqrt(max(MSE - sigma^2, 25)) used for T5, K_eff = s_state^2 / (s_state^2 + sigma^2 + s_excl^2), count of
+  units with s_excl > s_state; snow shares also for the SEASONAL-snow units (snow units minus the units whose member-0
+  Aug-Sep snow stays > 10 mm in all 5 years). F2 confirmed for 8z.
+
+- **8f addendum (01:25, state / excluded split):** F0: s_state 10.2 mm, s_excl 1.0, R_state 0.24, K_eff 0.27 (p10
+  0.05 / p90 0.60); F1: 5.5 / 0.6 / 0.13 / 0.11; **F2: s_state 14.2 mm, s_excl 1.4 mm, R_state 0.34 (<= 1 in 97 % of
+  the units), K_eff 0.41 (p10 0.08 / p90 0.75)**; units with s_excl > s_state: 73 / 69 / 71 (the lake / reservoir
+  units, where the forcing noise mostly moves the excluded storages). Seasonal-snow units (217 of the 222 snow units;
+  5 units never melt out): snow shares 0.44 seasonal / 0.30 long-term - the same as for all snow units, so the high
+  snow share of the forcing-only spread is not a perennial-snow artefact.
+
+- **01:25:** F2 30-member forcing complete (Ens_0..30 under $W/8g/F2). Idle cores used for the later L test: F5 / F6 /
+  F8 (L 100 / 1000 / 500 km) are being generated now (8 members each, tmux `8gL`) WITH the chosen pr 0.75 (not the
+  0.5 of the original F5 / F6 rows), so that the L comparison refers to the forcing that goes into 8z. 8b: year 2002
+  done 01:23 (8 min per year at 5 ranks) -> complete ~01:58.
+
+**Round 8b - result (runs 00:53-02:02, 5 ranks; diagnostics 02:03; `temp/exp_logs/job8/8b_report.md`; free disk
+1870 TB; job ends ~10:27).** Member 0 reused from 8a.
+```
+P1  humid PT min  1.073   ACCEPTED  RMS 39.6 (m0 41.0), amp 0.88, S_tws median 15.3 (max 436), no flag (outlet flow > 50 % now in 1 % of the units)
+P4  smax min      0.707   ACCEPTED  RMS 41.3, amp 0.80, S_tws 11.5 (soil S 14.8), drift / adjustment 1 % soil, no flag
+P6  snow melt max 275.0 K UNREALISTIC perennial cells 3733 = 1.31 x member 0 (limit 1.2) -> retest 274.1 K (arithmetic halfway; 8c)
+P10 gw_dis_coeff min 0.00316 ACCEPTED RMS 40.6, S_tws 58.5 (gw S 58, max 508), gw drift 3 % of land (< 5 %), adjustment 4 % (tau 1.8 yr)
+```
+- **8c launched 02:03** (member 0 reused + P6 max 274.1 K, 2 ranks, in parallel with 8z; ~1 h, diagnostics automatic).
+  If 274.1 K fails too, the third halving (273.6 K) would be the last by rule 3; the T3 snow lever of 8z may change
+  the snow ends anyway.
+- **8z candidate table (table_8z.json; triangular, seed 2026, 30 members + Ens_0, forcing F2 = pr lognormal 0.75, tas
+  2 K, L 300 km, tau 1 d):**
+  ```
+  P1  pt humid (cells 1.26)       value  1.073 / 1.26 / 1.65      min from 8b
+  P2  pt arid  (cells 1.74)       value  1.365 / 1.74 / 2.115
+  P3  max_daily_pet               value  6 / 15 / 22
+  P4  smax_multiplier             mult   0.707 / 1 / 2            min from 8b
+  P5  gamma                       x      0.5 / 1 / 2
+  P6  snow_melt_temp              value  269.4 / 273.15 / 274.1   max PROVISIONAL (8c running; 275.0 failed by perennial snow)
+  P7  degreeday_multiplier        mult   0.5 / 1 / 2
+  P8  critcal_gw_precipitation    value  2.5 / 12.5 / 20
+  P9  gw_recharge_factor_mult     mult   0.5 / 1 / 2
+  P10 gw_dis_coeff                value  0.00316 / 0.01 / 0.02    min from 8b (no member below 0.003 -> no long spin-up)
+  P11 netabs_gw_multiplier        mult   0.5 / 1 / 1.5
+  P12 river_roughness_coeff_mult  x      1/3 / 1 / 5/3
+  P13 activewetland_depth         value  0.5 / 2 / 5
+  ```
+  No parameter removed (none insensitive by the 23:05 rule). Parameter files written by the project code
+  (perturbation_par on a copy of settings/demo_Global_v2/perturbation.json with dir -> $W/8z, par = this table);
+  slow-groundwater members: none (min k = 0.00316).
+- **8z launched 02:04** (`launch_8z.sh 8z table_8z.json F2`: 31 ranks, 3-year spin-up + 2002-2006, ~1 h 15; ensemble
+  diagnostics automatic, groups_8z.json). **8z-P queued** (same parameter files, UNPERTURBED forcing, 31 ranks) to
+  start when 8z's model runs complete (~03:15), diagnostics automatic -> parameter / forcing / joint decomposition
+  with 8f-F2.
+
+- **02:25 review read 02:27:** 1. noted. 2. P6 symmetric rule applied from 8z1 on (272.2 / 273.15 / 274.1 K if 8c
+  passes, else 273.6 K / d = 0.45); 8z keeps running as the baseline. 2 / 3. added to the ensemble diagnostics (tested on
+  8f): ensemble-mean minus member-0 LEVEL per unit for tws / soil / gw / snow / river / wetlands (median, p10, p90),
+  the snow level bias in the snow units, and the TWS seasonal-amplitude ratio ensemble mean / member 0 - reported for
+  8z, 8z-P and every rerun. **8f-F0 check (forcing alone, 8 members): ensemble mean minus member 0: tws -2.0 mm
+  [p10 -8.9, p90 +2.9], gw -0.9 [-6.8, +0.2], soil +0.1, river +0.1, wetlands 0.0; SNOW in the snow units -3.5 mm
+  [-8.0, -1.5]; seasonal amplitude ratio 0.99 [0.95, 1.03].** So the forcing noise is not quite neutral: the 2 K
+  temperature noise melts more than it adds (nonlinear melt threshold) -> a small negative snow bias in the snow
+  units, and the groundwater mean is slightly lower (lognormal precipitation with the recharge threshold). To be
+  compared with the 8z values (which add the lopsided P6).
+
+**Round 8c - result (02:03-03:29, 2 ranks alongside 8z; `temp/exp_logs/job8/8c_report.md`):** P6 snow_melt_temp max
+274.1 K **ACCEPTED** - perennial cells 3307 = 1.16 x member 0 (limit 1.2), no other flag, RMS 40.9, snow level +3.0
+mm. -> P6 for the reruns (Cowork 02:25 rule, symmetric): **272.2 / 273.15 / 274.1 K** (d = 0.95 K). History of the
+end: 276.9 (x1.67) -> 275.0 (x1.31) -> 274.1 (x1.16) accepted.
+
+**Round 8z - joint ensemble, result (runs 02:04-03:40, 31 ranks, 1.4 s/day with 8c alongside; diagnostics 03:42;
+`temp/exp_logs/job8/8z_report.md`, per-unit $W/8z/report/8z_units.csv; free disk 1873 TB; job ends ~10:27).** 30
+members, table_8z.json (P6 lopsided 269.4 / 273.15 / 274.1), forcing F2.
+- **Spread:** TWS anomaly spread median 20.4 mm (p10 7.7, p90 37.1; sa 32, na 25, af 21, as 19, eu 18, ar 17, si 16,
+  au 10); per storage (median) soil 9.5, gw 4.4, river 2.7, wetlands 1.6, lakes 1.6, snow 0.1; DA-state part s_state
+  17.8 mm, excluded part s_excl 1.6 mm (61 units with s_excl > s_state, lake / reservoir units).
+- **Skill:** ensemble-mean RMS vs GRACE 41.0 mm = member 0 (41.0), corr 0.83; ensemble-mean bias RMS 5.9 mm (30
+  members: sampling part 3.7, systematic 4.6 mm - the asymmetric ranges, see below). **R_state median 0.44** (R on
+  the total spread 0.51): 734 of 772 units (95 %) below 1, by a factor 2.3 in the median unit (p10 1.3, p90 4.9); 457
+  units below 0.5; by region R_state sa 0.56, na 0.50, si 0.49, eu 0.43, ar 0.39, af 0.39, as 0.37, au 0.34. K median
+  0.64 (p10 0.21, p90 0.85), **K_eff 0.53 (0.13 / 0.80)**.
+- **Time scales (covariance shares, median over units):** SEASONAL soil 0.47, river 0.07, gw 0.05, wet 0.01, snow
+  0.00 (dominant: soil 433 units, river 119, snow 106, wet 54, lake 41, gw 19); LONG-TERM soil 0.21, gw 0.16, river
+  0.07, lake 0.07, wet 0.05 (dominant: soil 239, wet 164, lake 149, gw 85, snow 77, river 58). gw >= 50 % of the
+  long-term spread in only 43 units (6 %); p10 / p90 of the gw share 0.02 / 0.37.
+- **Targets:** T1 gw long-term share 0.16 >= 0.5: **FAIL**; T2 soil+river+wet+snow seasonal 0.93: pass; T3 snow units:
+  seasonal snow share 0.39 (in 0.10-0.40: pass, p10 0.12 / p90 0.85), long-term 0.23 <= 0.15: **FAIL** (146 of 222
+  snow units above 0.15), no snow flag (seasonal-snow units: 0.39 / 0.23 as well); T4 wetlands 0.22 of the seasonal
+  spread in the flood units: pass (barely); T5 R_state 0.44 in 1-2: **FAIL low** - no widening allowed, so this is
+  reported (the DA inflation has to supply a factor ~2.3 in the median unit).
+- **Ensemble-mean minus member 0 (level; median [p10, p90]):** TWS +2.8 mm [-11.8, +26.2], soil +9.0 [+1.3, +28.8],
+  gw -4.9 [-19.6, 0.0], wetlands +2.0 [0.0, +21.7], river -0.4, snow 0.0 [-10.4, 0.0]; **snow in the snow units -7.3
+  mm [-16.4, -3.5]** (forcing alone gave -3.5: the lopsided P6 adds ~-4); TWS seasonal amplitude ratio 1.02 [0.94,
+  1.10]. So the asymmetric multipliers do shift the mean: smax 0.707-2 and PT humid 1.073-1.65 wet the soil (+9 mm)
+  and dry the groundwater (-5 mm); activewetland_depth 0.5-5 adds +2 mm (up to +22) of wetland water.
+- **Flags:** after excluding lakes / wetlands from the negative-storage flag (WaterGAP lets lake and wetland storage go
+  negative down to -S_max, evaporation below the outflow level; 8 members had new negative LAKE cells over 1.0-1.5 %
+  of land, member 0 has them over ~10 %) -> 0 flagged members, 0 snow flags. Cowork: please confirm this
+  exclusion (soil, snow, river, canopy remain flagged).
+- **8z-P running since 03:41** (same parameter files, unperturbed forcing, 31 ranks; complete ~05:00; decomposition
+  parameter / forcing / joint with 8f-F2 automatic after it).
+- **8z1 prepared and queued behind 8z-P (table_8z1.json, levers of the 23:00 point, smallest first step for each
+  failing target):** P6 symmetric 272.2 / 273.15 / 274.1 K (02:25 rule) + P7 degree-day 0.7 / 1 / 1.4 (T3 high);
+  P4 smax 0.75 / 1 / 1.5 and P5 gamma 0.75 / 1 / 1.5 (T1: less long-term spread in soil; the groundwater parameters
+  untouched). All else as in 8z. If the 8z-P decomposition shows the long-term soil spread comes mostly from the
+  forcing, the smax / gamma shrink will not raise the gw share much - then T1 is a forcing / structure limit and I
+  report it. Expected: 8z1 launch ~05:00, result ~06:20.
+
+- **04:00 review read 04:02 - applied:** 1. ok. 2. lakes excluded, wetlands excluded for now; **member-0 check of
+  negative storages (minimum monthly value 2002-2006):** local wetlands: 0 cells, 0 units; global wetlands: 0 cells,
+  0 units - WaterGAP wetlands never go negative in the standard run, so the DA lower bound 0 of src_DA/bounds.py is
+  consistent (no action). Local lakes: negative over 11.2 % of the land (6505 cells, 384 of 772 units, down to -4998
+  mm); global lakes: 0.5 % (309 cells, 127 units, down to -89709 mm per outflow cell, the lake storage is booked on
+  one cell) - lakes / reservoirs are not in the DA state, so this only matters through the excluded-storage
+  subtraction. 3. **8z1 table changed: only P6 symmetric 272.2 / 273.15 / 274.1 K + P7 0.7 / 1 / 1.4; smax and gamma
+  back to 0.707-2 and 0.5-2** (table_8z1.json rewritten before the queued launch reads it). T1 reported as a
+  model-structure result. 4. **F10 (pr lognormal 1.0)**: 30 members being generated now (4 ranks, tmux `F10`; members
+  1-8 = the 8f-F10 test set), the test round 8fF10 (member 0 + 8, 9 ranks) starts automatically when 8z-P's model
+  runs complete, concurrently with 8z1 (40 ranks on 32 cores for ~1 h, accepted), ensemble diagnostics automatic;
+  if it passes rule (a), 8z2 = 8z1 with F10. 5. will be reported from the 8z-P decomposition.
+
+**Round 8z-P - parameter-only ensemble, result (runs 03:41-05:17, 31 ranks; diagnostics 05:18; decomposition
+05:20; `temp/exp_logs/job8/8zdecomp_report.md` + decomp_scales.txt; free disk 1873 TB; job ends ~10:27).** Same 30
+parameter files as 8z, unperturbed forcing.
+- **Parameters alone:** TWS spread median 9.1 mm (p10 3.5, p90 17.5; sa 13, af 10, as 10, eu 10, na 9, si 7, ar 5, au
+  4); soil 6.0, gw 3.2, river 1.7, wet 0.9, lake 0.6, snow 0.0; s_state 9.1, s_excl 0.6; R_state 0.22, K_eff 0.25;
+  no flags. Shares: SEASONAL soil 0.56, river 0.04, gw 0.02 (soil dominant in 451 units); LONG-TERM soil 0.19, gw
+  0.18, river 0.03, wet 0.03 (dominant: soil 250, gw 168, wet 160, lake 90). Targets for the parameter part: T1 fail
+  (0.18), T2 pass (0.97), **T3 pass (snow units: seasonal 0.39, long-term 0.15)**, T4 fail (wetlands 0.12 of the
+  seasonal spread in the flood units), T5 fail (0.22). Ensemble-mean bias: soil +9.2, gw -2.9, wet +1.5, tws +4.3 mm,
+  snow in the snow units -4.3 (the lopsided P6 of 8z: -4 mm), amplitude ratio 1.04.
+- **Decomposition of the 8z spread (variance shares of the joint 8z variance, medians over units; parameters = 8z-P,
+  forcing = 8f-F2 (8 members), interaction = rest):**
+  ```
+             TOTAL                    SEASONAL                  LONG-TERM
+             param  forc  inter      param  forc  inter        param  forc  inter   spread param/forc/joint (mm)
+  tws        0.21   0.67  +0.08      0.63   0.34  +0.02        0.08   0.75  +0.13   3.1 / 10.0 / 11.7
+  soil       0.45   0.40  +0.14      0.83   0.13  +0.02        0.17   0.50  +0.28   1.4 /  2.6 /  3.6
+  gw         0.64   0.52  -0.15      1.08   0.14  -0.24        0.33   0.69  -0.06   1.3 /  2.0 /  2.5
+  snow       0.05   0.60               0.11   0.20               0.02   0.72           (snow units: 0.07 / 1.07)
+  river      0.35   0.64  -0.01      0.71   0.28  -0.02        0.15   0.78  +0.06   0.4 /  1.0 /  1.1
+  wet        0.31   0.41  +0.16      0.67   0.19  +0.02        0.18   0.44  +0.26   0.4 /  0.6 /  0.9  (flood units seasonal: 0.64 / 0.28)
+  lake       0.14   0.77  +0.03                                0.07   0.82  +0.06
+  ```
+  **Answer to Cowork 04:00 point 5:** the SEASONAL spread is carried by the parameters (63 % of the TWS seasonal
+  variance; soil 83 %, gw 108 % with a negative interaction, river 71 %, wetlands 67 %), the LONG-TERM spread by the
+  forcing (75 % of the TWS long-term variance; gw 69 % forcing vs 33 % parameters; snow 100 % forcing; river 78 %,
+  lakes 82 %, soil 50 % + 28 % interaction). So the interannual groundwater spread the DA needs on the long time
+  scale comes mainly from the precipitation noise acting through recharge, not from the parameter ranges; the
+  parameter part of the long-term gw spread (1.3 mm median) is small because the groundwater parameters (P8-P11)
+  mostly change the LEVEL and the seasonal recession, not the interannual variability. The snow long-term share that
+  fails T3 in 8z (0.23) is entirely a forcing (2 K temperature noise) effect: the parameter part alone passes T3.
+- **8z1 launched 05:18** (31 ranks; 8z with P6 272.2 / 273.15 / 274.1 K, P7 0.7 / 1 / 1.4 only; forcing F2),
+  **8fF10 test started 05:17** (member 0 + 8 members pr lognormal 1.0, 9 ranks, concurrently: 40 ranks on 32 cores),
+  both with automatic diagnostics; expected ~06:45 (8z1) and ~06:30 (F10). Then 8z2 = 8z1 with F10 if F10 passes.
+
+- **05:35 review read 05:37 - applied:** 1. 8z1 keeps running (documents the P7 effect); the final table keeps P7
+  0.5 / 1 / 2 unless 8z1 shows a snow long-term share lower by > 0.03 or a snow bias closer to 0; **table_8z2.json
+  rewritten = 8z table with P6 symmetric 272.2 / 273.15 / 274.1 K only** (P7 0.5 / 1 / 2), read by the queued 8z2
+  launch. T3 long-term reported as a tas-noise effect. 2. T1 statement kept. 3. noted for the final report.
+
+- **06:25 time plan vs job end (10:27):** 8z1 and the F10 test run at 13-16 min per model year with 40 ranks on 32
+  cores -> both complete ~07:05; 8z2 (if F10 passes; alone, 31 ranks) 07:10-08:35 + diagnostics 08:40; the seed-2027
+  robustness rerun of the final table would then run 08:40-10:00 and its diagnostics would end at ~10:05 - too close
+  to the job end for a safe write-up. Plan: I write the JOB 8 summary (final table, history, decomposition, R / K /
+  shares) right after the 8z2 diagnostics (~08:45) and start the seed-2027 rerun immediately after; if the job is
+  extended by ~1 h (Fan), the seed-2027 result is appended by ~10:10, otherwise the summary stands without it and a
+  resume note gives the folders. Expiry check before 8z2: expiresAt = 21:27 + 13 h = 10 Oct 10:27 (from the last
+  newTimeAllocation update; unchanged).
+
+**Round 8fF10 - forcing test pr lognormal 1.0 (runs 05:17-06:56, 9 ranks alongside 8z1; `temp/exp_logs/job8/8fF10_report.md`):**
+8 members: spread median 20.3 mm (p10 7.4, p90 38.8) vs F2 16.4; s_state 17.6, s_excl 1.7 (74 units with s_excl >
+s_state); R_F 0.53 (<= 1 in 90 %, <= 1.5 in 98 % of the units), R_state 0.43; K 0.65 (0.20 / 0.87), K_eff 0.51 (0.11 /
+0.82); RMS of the ensemble mean vs GRACE 42.3 (member 0 41.0); no flags. Bias: RMS(ensemble mean - member 0) median
+8.6 mm, of which the 8-member sampling part is 20.3 / sqrt(8) = 7.2 -> **systematic part 4.7 mm < 5 mm: rule (a)
+passed, but only just**; and the ensemble mean sits BELOW member 0: TWS -4.8 mm [p10 -22.4, p90 +6.5], gw -2.7
+[-19.2, +0.5], snow in the snow units -3.0, amplitude ratio 0.97 - at pr std 1.0 the lognormal noise dries the mean
+response (skewed factor, recharge / runoff thresholds), F2 had -2.0 / -0.9. Shares as F2 (seasonal soil 0.3, river
+0.1; long-term soil / gw 0.17 / 0.16; snow units 0.45 / 0.30; flood units wetlands 0.30). -> **8z2 = 8z2 table (P6
+symmetric, P7 0.5-2) with F10 proceeds** as queued behind 8z1; F2 vs F10 is decided on 8z1 vs 8z2 (R_state, K_eff,
+bias) - the -4.8 mm mean shift of F10 is the price of the extra spread; Cowork / Fan to weigh it.
+- Seed-2027 forcing (F2 and F10 settings, 30 members each) is being generated now on 4 cores (tmux `s2027`,
+  ~35 min each) so that the robustness rerun of the final table can start right after 8z2.
+
+**Round 8z1 - rerun 1 (8z + P6 symmetric 272.2 / 273.15 / 274.1 K + P7 0.7 / 1 / 1.4; runs 05:18-07:04, 31 ranks
+with the F10 test alongside; diagnostics 07:06; `temp/exp_logs/job8/8z1_report.md`; free disk 1872 TB).**
+```
+                        8z          8z1         change
+spread median (mm)      20.4        20.3
+s_state / s_excl        17.8 / 1.6  17.6 / 1.6
+R_state median          0.44        0.44        (95 % of units < 1 in both)
+K / K_eff median        0.64 / 0.53 0.64 / 0.53
+RMS ens-mean vs GRACE   41.0        40.8        (member 0 41.0)
+bias RMS median         5.9         5.4
+ens-mean - m0: tws      +2.8        +5.0        soil +9.0 -> +9.1, gw -4.9 -> -4.0, wet +2.0 -> +2.2
+snow bias, snow units   -7.3        -3.6        [p10 -8.2, p90 -1.5]   <- the symmetric P6 (lopsided P6 cost ~ -4 mm)
+amplitude ratio         1.02        1.03
+snow units seasonal     0.39        0.27        <- narrower degree-day range (P7 0.7-1.4)
+snow units long-term    0.23        0.25        no gain (+0.02; it is the tas-noise part)
+T1 / T2 / T3 / T4 / T5  F/P/F/P/F   F/P/F/P/F   (T3 still fails on the long-term share 0.25 > 0.15)
+flags                   0           0
+```
+- **P7 decision (05:35 rule):** the snow long-term share did not fall (0.23 -> 0.25) and the snow bias improvement
+  (-7.3 -> -3.6 mm) is the symmetric P6, not P7 (8z2, with P6 symmetric and P7 back at 0.5 / 1 / 2, will separate the
+  two). -> **final table keeps P7 0.5 / 1 / 2** unless 8z2's snow bias is clearly worse than -3.6 mm.
+- **07:10 review read 07:12:** F2 vs F10 decision rule (i)-(iv) noted; both will be tabulated side by side (8z1 vs
+  8z2) in the summary. 8z2 (P6 symmetric, P7 0.5-2, F10) launched 07:08, 31 ranks alone -> complete ~08:30,
+  diagnostics ~08:35. The seed-2027 robustness rerun (8z3) is armed: it starts as soon as I write the chosen forcing
+  into final_forcing.txt after the 8z2 diagnostics (table_8z3.json = final table with seed 2027; forcing F2s2027 or
+  F10s2027, being generated now).
+
+**Round 8z2 - rerun 2 (P6 symmetric 272.2 / 273.15 / 274.1 K, P7 0.5 / 1 / 2, forcing F10 = pr lognormal 1.0; runs
+07:08-08:33, 31 ranks alone, 1.1 s/day; diagnostics 08:37; `temp/exp_logs/job8/8z2_report.md`; free disk 1872 TB).**
+```
+                              8z1 (F2, P7 0.7-1.4)   8z2 (F10, P7 0.5-2)   rule 07:10
+spread median (p10 / p90)     20.3 (7.6 / 37.1)      24.0 (9.0 / 44.3)
+s_state / s_excl              17.6 / 1.6             21.1 / 1.9
+R_state median                0.44 (95 % < 1)        0.53 (89 % < 1)       (i) +20 % >= +15 %   PASS
+K / K_eff median              0.64 / 0.53            0.72 / 0.61 (p10 0.16, p90 0.85)
+RMS ens-mean vs GRACE         40.8                   41.2 (member 0 41.0)  (ii) +0.5 % <= 3 %    PASS
+bias RMS median / sampling    5.4 / 3.7 -> syst 3.9  6.0 / 4.4 -> syst 4.1 (iii) <= 5 mm         PASS
+amplitude ratio ens / m0      1.03 [0.97, 1.10]      1.02 [0.97, 1.10]     (iii) 0.95-1.05       PASS
+ens-mean - m0 level: tws      +5.0                   +4.3   (soil +8.7, gw -5.2, wet +2.4)
+snow bias, snow units         -3.6                   -3.9 [-9.4, -1.6]     -> P7 0.5-2 costs 0.3 mm only: keep 0.5 / 1 / 2
+snow units seasonal / long    0.27 / 0.25            0.32 / 0.26
+T1 / T2 / T3 / T4 / T5        F / P / F / P / F      F / P / F / P / F     T4 0.26 (8z1 0.24)
+flags                         0                      0                     (iv) PASS
+```
+-> **F10 (pr lognormal 1.0) is the final forcing** by the 07:10 rule (all four conditions hold), P7 stays 0.5 / 1 / 2
+(05:35 rule), P6 symmetric. The final table = table_8z3.json (seed 2027 copy for the robustness run; the seed-2026
+version is the same table with "seed": 2026).
+- **8z3 (seed 2027 robustness rerun of the final table, forcing F10s2027) launched 08:40** (31 ranks; the first launch
+  at 08:38 failed because the queued launcher evaluated the forcing file name too early - killed, rebuilt, relaunched
+  within 2 min). Expected complete ~10:05, diagnostics ~10:10; **job ends 10:27** (13 h allocation confirmed again at
+  08:39). If the job stops first: resume note below.
+- **Resume note (if the job is cut):** everything is under /work/PyGLDA_v2_external_data/temp_job8/: 8z3 restarts in
+  8z3/init/Ens_k (written after the spin-up), monthly files 8z3/monthly/Ens_k/<year>.nc, chain `run_round.sh 8z3 31`
+  (skips what exists), diagnostics `ensemble_diag.py 8z3 groups_8z3.json`; forcing sets 8g/F2, F10, F2s2027, F10s2027
+  (30 members each), F0, F1, F5, F6, F8 (8 members); every round's report in <round>/report/ and temp/exp_logs/job8/.
+
+- **08:46 review read 08:48:** Cowork applied the final table to settings/demo_Global_v2/perturbation.json; verified on
+  the desktop copy (md5 73105314...: seed 2026, pr lognormal 1.0, tas 2 K, L 300 km, tau 1 d; P1 humid 1.073 / 1.26 /
+  1.65, P4 0.707 / 1 / 2, P6 272.2 / 273.15 / 274.1, P10 0.00316 / 0.01 / 0.02, P7 0.5 / 1 / 2, gamma 0.5 / 1 / 2).
+  No further rounds; the 8z3 result will be appended when its diagnostics finish (~10:10).
+
+- **10:10 review read 10:16 - 8z4 (tas 1 K) started as a chain at 10:17:** F11 forcing (pr lognormal 1.0, tas 1 K,
+  L 300 km, tau 1 d, 30 members, seed 2026) is being generated (8 ranks, ~20 min), then `launch_8z.sh 8z4
+  table_8z4.json F11` (final table, seed 2026) starts automatically with its diagnostics; expected result ~12:00 IF
+  the job is extended (allocation at 10:16 still 13 h = ends 10:27). If the job expires before: **8z4 NOT RUN** - the
+  chain is resumable after a restart: F11 under $W/8g/F11 (complete when 31 member folders hold 84 files), then
+  `bash launch_8z.sh 8z4 table_8z4.json F11` from temp/exp_logs/job8 (run_round.sh skips finished parts). The
+  8z4-vs-8z2 decision table (rule (i)-(iv) of 10:10) will be written here when the diagnostics are done.
+
+**Round 8z3 - seed-2027 robustness rerun of the final table (parameters AND forcing redrawn with seed 2027; runs
+08:40-10:01, 31 ranks; diagnostics 10:05; `temp/exp_logs/job8/8z3_report.md`; free disk 1872 TB; job ends 10:27).**
+```
+                              8z2 (seed 2026, final)   8z3 (seed 2027)
+spread median (p10 / p90)     24.0 (9.0 / 44.3)        24.5 (9.4 / 45.6)
+s_state / s_excl              21.1 / 1.9               21.3 / 1.9
+R_state median (% < 1)        0.53 (89 %)              0.54 (88 %)
+K / K_eff median              0.72 / 0.61              0.72 / 0.61 (p10 0.17, p90 0.86)
+RMS ens-mean vs GRACE         41.2                     40.7   (member 0 41.0)
+shares SEASONAL soil/gw/river 0.46 / 0.05 / 0.08       0.45 / 0.07 / 0.08
+shares LONG-TERM soil/gw      0.21 / 0.15              0.22 / 0.15
+snow units seasonal / long    0.32 / 0.26              0.28 / 0.24
+flood units wetlands seasonal 0.26                     0.31
+T1-T5                         F / P / F / P / F        F / P / F / P / F
+ens-mean - m0: tws / soil / gw / wet   +4.3 / +8.7 / -5.2 / +2.4    +14.8 / +13.6 / -3.8 / +4.9  (p90 tws +60, wet +45)
+snow bias, snow units         -3.9                     -3.7
+flags                         0                        2 members (m10, m11): outlet mean flow change > 50 % in 15 / 12 % of the units
+```
+- **Robust:** spread, R_state, K_eff, the storage shares on both time scales, the targets and the snow bias change by
+  < 5 % between the two seeds - the spread statistics of the final table are not a property of one draw.
+- **Draw-dependent:** the ensemble-mean level shift (TWS +4 mm with seed 2026, +15 mm with seed 2027; soil +9 / +14,
+  wetlands +2 / +5, p90 up to +45-60 mm) and the outlet-flow flag of two seed-2027 members (extreme combinations of
+  the accepted ends, e.g. low PT humid + low smax + high gamma). Both come from the ASYMMETRIC ranges of the
+  multipliers / depths (smax 0.707-2, wetland depth 0.5-5, PT humid 1.073-1.65, gamma 0.5-2 all have their standard
+  value below the arithmetic mid-range). Suggestion for Fan / Cowork (not applied; the table is Cowork's): (a) check
+  the production members (seed 2026) for the outlet-flow flag before the pilot (8z2 itself had none), (b) if the mean
+  shift matters for the DA (it is a bias the filter will "correct" with GRACE), make the multiplier ranges symmetric
+  in log space (e.g. smax 0.707 / 1 / 1.414, wetland depth 1 / 2 / 4, PT humid 1.073 / 1.26 / 1.48) - at the price of
+  ~10-15 % less spread.
+- All rounds complete; nothing more is running. tmux session `job8` keeps the windows for inspection; $W kept (daily
+  files deleted; monthly files, inputs, forcing sets 8g/ and reports kept).
+
+- **10:25 review read 10:27:** (1) the 8z3 section and the JOB 8 DONE header line are complete after the sync restore
+  (checked). (2) 8z4 chain running (F11 generation, then the run). (3) **8z5 (log-symmetric table) prepared:**
+  table_8z5.json = applied table with P1 humid max 1.48, P4 smax max 1.414, P10 min 0.005, P13 1 / 2 / 4 m (P6
+  272.2 / 273.15 / 274.1, seed 2026); its launcher is armed and starts automatically after 8z4's model runs with the
+  forcing I write into final_forcing_8z5.txt after the 8z4 diagnostics (F11 if tas 1 K passes the 10:10 rule, else
+  F10). Decision rule 8z5 vs 8z4 (i)-(iv) noted; the mean shift per storage will be reported.
+
+- **10:30 job extended: ends 10 Oct 18:26** (newTimeAllocation 21 h). Plan: 8z4 (tas 1 K) result ~12:00 -> decision ->
+  8z5 (log-symmetric) ~12:05-13:30 -> decision -> the optional L test (F5 / F6 / F8 = 100 / 1000 / 500 km, 8 members
+  each + member 0, 25 ranks, forcing-only, vs F2 at 300 km) ~13:35-14:50 if Cowork still wants it.
+
+**Round 8z4 - applied table with tas 1 K (F11 = pr lognormal 1.0, tas 1 K, L 300 km, tau 1 d; runs 10:31-12:00, 31
+ranks; diagnostics 12:04; `temp/exp_logs/job8/8z4_report.md`; free disk 1871 TB; job ends 18:26).**
+```
+                              8z2 (tas 2 K, applied)   8z4 (tas 1 K)          10:10 rule
+spread median (p10 / p90)     24.0 (9.0 / 44.3)        24.0 (9.1 / 44.3)      (ii) drop 0 % < 5 %        PASS
+s_state / s_excl              21.1 / 1.9               21.1 / 1.9
+R_state median (% < 1)        0.53 (89 %)              0.53 (89 %)            (ii) drop 0 %              PASS
+K / K_eff median              0.72 / 0.61              0.72 / 0.61
+RMS ens-mean vs GRACE         41.2                     41.2
+snow units seasonal share     0.32                     0.33                   (iii) 0.10-0.40            PASS
+snow units LONG-TERM share    0.26                     0.26                   (i) <= 0.15                FAIL (unchanged)
+snow bias, snow units         -3.9 [-9.4, -1.6]        -1.2 [-3.9, -0.1]      (i) improved               (yes)
+ens-mean - m0: tws/soil/gw/wet +4.3 / +8.7 / -5.2 / +2.4  +4.7 / +8.3 / -5.0 / +2.3
+T1-T5                         F / P / F / P / F        F / P / F / P / F
+flags                         0                        0                      (iv)                       PASS
+```
+-> **tas 2 K is kept** (rule (i) fails: the long-term snow share does not move). **Correction of the earlier
+interpretation:** halving the temperature noise leaves the long-term snow share in the snow units at 0.26, so that
+share is NOT a temperature effect - it comes from the precipitation noise through the snowfall amounts (the
+parameter-only ensemble had 0.15; 8z-P + F2 decomposition: snow long-term variance 100 % forcing - and the forcing
+component is pr, not tas). The temperature noise drives only the snow BIAS (-3.9 -> -1.2 mm in the snow units with
+1 K). Consequence for Fan: tas 1 K would remove most of the snow bias at no cost in spread or R, but it does not
+help T3; if the bias matters, 1 K is the cheaper choice (Cowork's rule says keep 2 K - kept).
+- **8z5 (log-symmetric table, forcing F10) launched 12:07** (final_forcing_8z5.txt = F10; table_8z5.json: P1 humid
+  max 1.48, P4 smax max 1.414, P10 min 0.005, P13 1 / 2 / 4 m, P6 272.2 / 273.15 / 274.1, seed 2026); diagnostics
+  automatic, result ~13:30.
+
+- **12:07 review read 12:12:** L test confirmed - round 8fL (F5 100 km, F6 1000 km, F8 500 km; pr 0.75, tas 2 K,
+  8 members each + member 0 = 25 ranks, forcing-only, vs 8f-F2 at 300 km) is built and queued behind 8z5 with
+  automatic diagnostics (spread, R_F, s_state / s_excl, shares per L); result ~15:00.
+
+- **12:30 review read 12:33:** tas 1 K adopted by Cowork (production forcing = F11: pr lognormal 1.0, tas 1 K, L 300
+  km, tau 1 d; applied to settings/demo_Global_v2/perturbation.json). 8z5 continues with F10 as launched; its report
+  will list all T1-T5 numbers (incl. the snow-unit long-term snow share and the flood-unit wetland share) next to
+  8z4 / 8z2. L test stays queued.
+
+**River-storage check (Cowork 12:45, Fan), diagnostics on the 8z4 ensemble (applied table, F11; 30 members),
+13:05; CSVs $W/8z4/report/river_check.csv (all units) and river_check_large_rivers.csv, copies in temp/exp_logs/job8/.**
+Columns: member-0 river seasonal amplitude (half range of the 12-month climatology, mm), GRACE amplitude (same), river
+spread (time-mean member std of the river anomaly, mm), spread / amplitude, river share of the SEASONAL spread
+(covariance-consistent), the same for wetlands, river spread / GRACE sigma, TWS spread; "unit" = the unit holding the
+largest member-0 mean streamflow within +-6 deg lat / +-8 deg lon of the river mouth (unit id = sub_basin id of the
+frozen mask, name = shapefile NAME):
+| river | unit | name | max Q m3/s | river amp m0 | GRACE amp | river spread | spread/amp | river seas share | wet amp m0 | wet spread | wet seas share | river spread/sigma | tws spread | flood |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Amazon | 567 | sa_6167 | 190503 | 115.3 | 199.5 | 30.6 | 0.27 | 0.53 | 76.1 | 20.5 | 0.21 | 1.88 | 50.9 | True |
+| Congo | 39 | af_1321 | 38464 | 51.7 | 124.1 | 26.9 | 0.52 | 0.72 | 1.5 | 0.9 | 0.00 | 1.34 | 33.6 | False |
+| Ganges-Brahmaputra | 250 | as_45311 | 35041 | 198.7 | 224.8 | 48.1 | 0.24 | 0.89 | 5.4 | 2.5 | -0.01 | 2.73 | 54.6 | False |
+| Mekong | 218 | as_4422 | 15553 | 83.0 | 310.8 | 20.8 | 0.25 | 0.50 | 48.3 | 26.9 | 0.21 | 1.17 | 60.5 | True |
+| Mississippi | 485 | na_7328 | 21239 | 30.9 | 105.8 | 12.2 | 0.40 | 0.26 | 24.4 | 17.5 | 0.19 | 0.67 | 41.3 | True |
+| Parana | 649 | sa_64212 | 19172 | 43.8 | 55.2 | 32.8 | 0.75 | 0.75 | 6.6 | 9.4 | 0.02 | 1.61 | 42.9 | False |
+| Niger | 77 | af_1338 | 6966 | 30.1 | 188.0 | 9.4 | 0.31 | 0.16 | 14.2 | 4.7 | 0.03 | 0.55 | 32.3 | True |
+| Zambezi | 27 | af_12302 | 3695 | 12.1 | 85.0 | 5.3 | 0.43 | 0.13 | 12.8 | 5.7 | 0.07 | 0.28 | 19.8 | True |
+| Ob | 687 | si_3123 | 14438 | 71.6 | 81.1 | 18.3 | 0.26 | 0.80 | 13.7 | 9.3 | 0.04 | 1.68 | 31.9 | True |
+| Yenisei | 713 | si_321 | 20531 | 50.2 | 112.9 | 7.4 | 0.15 | 0.34 | 0.1 | 0.0 | -0.00 | 0.63 | 20.4 | False |
+| Lena | 741 | si_3421 | 17276 | 125.8 | 57.0 | 21.7 | 0.17 | 0.95 | 3.1 | 0.9 | -0.01 | 2.21 | 26.3 | False |
+| Danube | 351 | eu_22735 | 6908 | 30.6 | 68.3 | 13.7 | 0.45 | 0.37 | 0.0 | 0.0 | -0.00 | 0.83 | 27.2 | False |
+| Yangtze | 210 | as_43504 | 30435 | 13.8 | 58.8 | 5.1 | 0.37 | 0.16 | 1.1 | 1.4 | 0.01 | 0.28 | 26.3 | False |
+- **Flood units (178):** river spread median 3.8 mm (p10 1.5, p90 17.4), river seasonal share median 0.07 (p10 0.02,
+  p90 0.53); wetland spread median 14.6 mm, wetland share 0.25; **river + wetlands >= 0.5 of the seasonal spread in 68
+  of the 178 flood units**; river spread / river amplitude 0.51 median; river spread / GRACE sigma 0.25; member-0
+  river amplitude median 7.6 mm vs GRACE TWS amplitude 98 mm. All units: river spread median 3.2 mm (p90 16.8),
+  share 0.08; 162 units with a river share >= 0.3.
+- **Reading:** on the big rivers the river storage already carries the seasonal spread (Amazon 0.53, Congo 0.72,
+  Ganges-Brahmaputra 0.89, Lena 0.95, Ob 0.80, Parana 0.75; river spread 1.2-2.7 x the GRACE sigma there), and the
+  wetlands add 0.2 in the Amazon / Mekong / Mississippi units. The weak cases are the floodplain units of smaller
+  rivers (Niger 0.16, Zambezi 0.13, Mississippi 0.26, Yangtze 0.16, Danube 0.37) where member-0's river amplitude is
+  only 12-31 mm against a GRACE amplitude of 60-190 mm: the river spread (5-14 mm) is 0.3-0.5 of that small
+  amplitude, so widening P12 (roughness 1/3-5/3) cannot create seasonal river water the model does not store; there
+  the seasonal signal sits in soil / wetlands / groundwater in WaterGAP. Median flood unit: 3.8 mm river spread,
+  about half the member-0 river amplitude.
+
+**Round 8z5 - log-symmetric table (P1 humid 1.073 / 1.26 / 1.48, P4 smax 0.707 / 1 / 1.414, P10 0.005 / 0.01 / 0.02,
+P13 wetland depth 1 / 2 / 4 m; rest as applied; forcing F10 = pr 1.0, tas 2 K; runs 12:07-13:34, 31 ranks;
+diagnostics 13:36; `temp/exp_logs/job8/8z5_report.md`; free disk 1870 TB).**
+```
+                              8z4 (applied table, F11)  8z5 (log-symmetric, F10)  10:25 rule
+spread median (p10 / p90)     24.0 (9.1 / 44.3)         22.2 (8.5 / 42.6)         (ii) -7.5 % <= 15 %        PASS
+s_state / s_excl              21.1 / 1.9                19.1 / 1.9
+R_state median (% < 1)        0.53 (89 %)               0.49 (91 %)               (ii) -7.5 % <= 15 %        PASS
+K / K_eff median              0.72 / 0.61               0.69 / 0.56
+RMS ens-mean vs GRACE         41.2                      41.5   (member 0 41.0)
+ens-mean - m0: TWS            +4.7 [-9.0, +25.5]        -1.2 [-16.4, +14.7]       (i) |median| <= 5, p90 <= 25  PASS
+   soil / gw / wet / river    +8.3 / -5.0 / +2.3 / -0.2 +2.1 / -5.5 / +2.2 / +0.2
+   snow in the snow units     -1.2 (tas 1 K)            -3.8 (tas 2 K)
+amplitude ratio ens / m0      1.02                      0.98 [0.94, 1.07]
+T1 gw long-term share         0.15                      0.15                      F
+T2 seasonal soil+river+wet+snow 0.91                    0.87                      (iii) pass                 PASS
+T3 snow units seasonal / long 0.33 / 0.26               0.37 / 0.28               F (long-term)
+T4 flood units wetlands       0.25                      0.26                      (iii) pass                 PASS
+T5 R_state                    0.53                      0.49                      F
+flags                         0                         2 members (m10, m27: outlet flow > 50 % in 10 / 13 % of units)   (iv) FAIL
+```
+- **Mean shift:** the log-symmetric ranges remove the soil shift (+8.3 -> +2.1 mm) and bring the TWS level of the
+  ensemble mean to -1.2 mm (p10 / p90 -16 / +15 instead of -9 / +26). The groundwater shift (-5 mm) and the
+  wetland shift (+2.2 mm) do NOT change: they are not from the asymmetric ranges but from nonlinear responses
+  (gw: the precipitation noise through the recharge threshold, see 8f: forcing alone gives -0.9 to -2.7; wetlands:
+  the wetland storage responds asymmetrically to depth). Cost: -7.5 % spread and R_state.
+- **The only failing condition is (iv), and it is a threshold artefact:** the two flagged members are NOT extreme
+  (m10: PT humid 1.22, smax 0.81, gamma x1.22, recharge factor 1.69, roughness x0.79, wetland depth 1.7 m; m27: PT
+  humid 1.20, max_daily_pet 10, gamma x0.75, degree-day 0.79) and the SAME member numbers in 8z4 with almost the
+  same values (m10: PT 1.25, smax 0.85, otherwise identical draws) were not flagged - the flag is "> 50 % mean-flow
+  change in > 10 % of the units" and these members sit at 8-13 % in both runs. The seed-2027 run (8z3) had the same
+  kind of flags (12 / 15 %). So by the letter 8z5 fails on (iv) only, not on the mean shift; if Cowork treats the
+  outlet-flow threshold as the soft criterion it is (e.g. > 15 %), 8z5 passes all four. **Decision is Cowork's**;
+  my reading: the log-symmetric table is the better production table (unbiased mean at -7 % spread), and the
+  outlet-flow metric should be reported, not used as a hard flag for joint ensembles (it was designed for OAT ends).
+- 8fL (L test, 25 ranks) started 13:36 automatically; result ~15:00.
+
+- **13:50 review read 13:55:** (1) river: noted, P12 unchanged. (2) production table = 8z5 + F11 verified in the synced
+  settings/demo_Global_v2/perturbation.json (seed 2026, pr 1.0, tas 1 K, P1 humid 1.073 / 1.26 / 1.48, P4 0.707 / 1 /
+  1.414, P10 0.005 / 0.01 / 0.02, P13 1 / 2 / 4, P6 272.2 / 273.15 / 274.1); the JOB 8 DONE block now shows this table
+  with the updated kept / reason columns and the production line. (3) **Outlet-flow metric of the 30 8z5 members
+  (share of units whose member-0 outlet changes its mean flow by > 50 %): median 5.5 %, p90 9.7 %, max 13.1 %
+  (member 27); members above 10 %: 2 (m10, m27); above 15 %: none.** JOB 8 CLOSED follows after the 8fL result.
+
+**Round 8fL - correlation-length test, forcing only (pr lognormal 0.75, tas 2 K, tau 1 d; 8 members per L + member 0;
+runs 13:36-14:59, 25 ranks; diagnostics 15:00; `temp/exp_logs/job8/8fL_report.md`; F2 = 300 km from 8f for
+comparison; documentation only, no decision rule).**
+```
+ L (km)   spread median (p10 / p90)  R_F median (<=1 / <=1.5)  s_state  s_excl  units s_excl > s_state  bias RMS / 8-member sampling -> systematic  K_eff  flags
+ 100 F5    9.5 (3.5 / 17.8)           0.24 (99 / 100 %)         7.9      1.1     97                      4.8 / 3.4 -> 3.4 mm                          0.20   0
+ 300 F2   16.4 (5.9 / 30.8)           0.41 (96 /  99 %)        14.2      1.4     71                      6.8 / 5.8 -> 3.5 mm                          0.41   0
+ 500 F8   18.6 (7.0 / 35.0)           0.49 (93 /  98 %)        16.1      1.6     68                      7.6 / 6.6 -> 3.8 mm                          0.47   0
+1000 F6   20.6 (7.8 / 40.8)           0.55 (89 /  98 %)        17.4      1.7     68                      8.1 / 7.3 -> 3.5 mm                          0.51   0
+```
+- The unit-mean spread grows with L because a longer correlation length cancels less of the daily noise inside a unit
+  (100 km: -42 % vs 300 km; 500 km: +13 %; 1000 km: +26 %); the state / excluded split, the storage shares (seasonal
+  soil 0.29, river 0.11-0.13, gw 0.09-0.10; long-term soil 0.17, gw 0.17, lake 0.08-0.09) and the ensemble-mean
+  biases (TWS -3.0 to -3.4 mm, snow in the snow units -3.4, amplitude ratio 0.98) are the same for all L; no flag at
+  any L. So L is a pure spread knob with no realism signal in these diagnostics; 300 km stays unless Cowork prefers
+  the larger spread of 500 km (Cowork's call). Forcing sets F5 / F6 / F8 remain under $W/8g.
+**JOB 8 CLOSED 10 Oct 2026 15:05.** Production table = 8z5 (log-symmetric) + F11, applied by Cowork to
+settings/demo_Global_v2/perturbation.json. Nothing is running; tmux session `job8` and
+/work/PyGLDA_v2_external_data/temp_job8/ (inputs, monthly files, reports, forcing sets 8g/; daily files deleted) are
+kept; all scripts and reports are in temp/exp_logs/job8/ on both machines. src_*, settings/ and exp_Ucloud.py were
+never edited by Claude Code; nothing under Ensemble_input, Ensemble_Initialization, OL_output or Res was touched.
+
+**11 Oct 11:05 - new UCloud job 12418791 (port 2540, 32 vCPU, allocation 1 h -> ends 12:01). Clean-up orders of 10 Oct
+15:35 / 16:40 / 16:55 read; INVENTORY taken (du -s, GB) before any deletion - nothing deleted yet, waiting for Fan's
+confirmation of the two ambiguous points below (irreversible, 3.9 TB):**
+```
+folder (under /work/PyGLDA_v2_external_data)   size      order            note
+temp_job8                                       2183 GB   15:35 delete     Job 8 inputs / monthly / reports / forcing sets 8g (copies of reports in temp/exp_logs/job8)
+OL_output                                       1004 GB   16:40 delete     global open loop 2002-2019 of demo_Danube (30 members, daily); the pilot writes its own OL_output_v2
+Ensemble_input                                   536 GB   16:40 delete     30-member perturbation of 5 Oct (parameters + forcing 2000-2019)
+DA_output (demo_1..3, Amazon A1/A2, Danube, exp1, exp4)   87 GB   16:40 delete
+Ensemble_Initialization                           35 GB   16:40 delete     restarts of the 30 members (6 dates)
+temp_job7                                          5 GB   16:40 delete     Job 7 check runs
+GRACE/OLmean (11 files)                            1 GB   16:40 delete     regenerable
+--- total to delete                             ~3851 GB
+KEEP: Input_data 69 GB, GRACE 236 GB (output / output_TUD / SaGEA / global_mask / obs), Basin 1 GB, Res 43 GB, envs 6, pkgs 3, Extra 12, Auxiliary 1
+```
+"demo" items found outside Input_data / GRACE/output* / Basin (16:55 order): (a) the DA_output/demo_* and GRACE/OLmean/demo_*
+files - already covered above; (b) **Res/demo_1, demo_2, demo_3, demo_Amazon_A1, demo_Amazon_A2, demo_Danube (incl. the
+6 Oct product Res/demo_Danube/product), demo_Danube_exp1, demo_Danube_exp4 = 43 GB** - the 16:40 and 16:55 orders both say
+KEEP Res, the 16:55 order says delete "demo case outputs, demo products" -> contradiction, NOT deleted until Fan says which;
+(c) **/work/PyGLDA/settings/demo_* and src_demo/** (code, 1 MB each) - these are SYNCED to the desktop and in git: deleting
+them on UCloud would propagate to the workstation; the GATE text says Fan deletes the other settings/demo_* folders himself
+-> NOT touched by me. Job 9 gate: src_demo/demo_global.py md5 00886009 and settings/demo_Global_v2/Config_ReWaterGAP.json
+md5 56a3dcbf match on both machines (driver ready); WaterGAPLandMask md5 9a21d88b ok; the mask move (step 0) is pending.
+This 1-hour job cannot host Job 9 (>= 10 h needed) - a longer job is required for it.
+
+**11 Oct 11:10 Fan confirmed (desktop session): delete the listed output; KEEP Res/demo_* (contradiction resolved in
+favour of the KEEP-Res rule); settings/demo_* and src_demo untouched (synced code). Deleted 11:17-11:27 by
+temp/exp_logs/cleanup_11oct.sh in tmux `cleanup` (log cleanup_11oct.out):**
+```
+folder                       size      result
+temp_job8                    2183 GB   deleted   (Job 8 inputs, monthly files, report copies, forcing sets 8g)
+OL_output                    1004 GB   deleted   (global open loop of demo_Danube 2002-2019)
+Ensemble_input                536 GB   deleted   (30-member perturbation of 5 Oct)
+DA_output                      87 GB   deleted   (demo_1/2/3, Amazon A1/A2, Danube, exp1, exp4)
+Ensemble_Initialization        35 GB   deleted
+temp_job7                       5 GB   deleted
+GRACE/OLmean                    1 GB   deleted   (regenerable)
+Res (demo_1..3, Amazon A1/A2, Danube incl. product, exp1, exp4)   43 GB   kept (Fan 11:10)
+Input_data 69 GB, GRACE 236 GB, Basin 1 GB, Extra 12 GB, Auxiliary 1 GB, envs 6 GB, pkgs 3 GB, Initialization 0   kept
+settings/demo_*, src_demo (code, synced)   kept - Fan deletes the obsolete settings folders on the workstation
+total freed 3851 GB; remaining under /work/PyGLDA_v2_external_data: 371 GB; project quota free 1867 TB of 7.45 PB (df)
+```
+**JOB 8 OUTPUT DELETED 11:27. ALL OUTPUT DELETED 11 Oct 2026 11:27.** Evidence kept: temp/exp_logs/job8/ (71 MB, both
+machines: all round reports .md, decision / summary / ensemble_summary CSVs, history, final tables, scripts, river
+check with per-unit CSV, F5 / F6 / F8 / F10 per-unit CSVs). NOTE: the per-unit CSVs of the OAT round 8a and of the
+joint ensembles 8z..8z5 / 8z-P (772-unit tables of spread, R, K, shares) were only under temp_job8/<round>/report and
+are gone with it; all quoted medians / percentiles / regional values survive in the reports.
+- **Job 9 step 0 done 11:30:** `Basin/mask/mask/GlobalBasins_v1.0` moved to `Basin/mask/GlobalBasins_v1.0` (the
+  `mask/mask/GlobalBasins` copy kept); md5 verified against GlobalBasins_v1.0_settings.txt: _res_0.5.h5 0a57670d0e5c7ccf0f201689ca474f57 and _res_1.h5 e83cc4dafc91a8ed782ff8104125b610 both match. settings/demo_Global_v2/DA_setting.json (basin_mask -> Basin/mask/GlobalBasins_v1.0/...) now resolves on UCloud without any json edit. WaterGAPLandMask md5
+  9a21d88b ok. Gate ok (demo_global.py 00886009, Config_ReWaterGAP.json 56a3dcbf on both machines). **Job 9 itself
+  needs a >= 10 h job; this job (12418791) has 1 h (ends 12:01), so Job 9 starts in the next long job.**
+
+**Job 9 - global pilot DA, case GDA_Ucloud (job 12418791 extended to 4 h -> ends 15:01; 32 vCPU).**
+- 11:31 first attempt with the old case name: config_external_data, read_config_and_save and check_units passed (772
+  units, IDs equal, 0 cells in two units, 0 empty, md5 True); get_GRACE_obs failed at once because the obs output
+  folder did not exist (the code does not create `preprocess_res` - small gap for Cowork: `GRACE_CSR_mascon.basin_TWS`
+  opens `<dir_out>/<basin>_signal.hdf5` without mkdir); nothing else ran.
+- **12:00 order (Cowork / Fan) read 12:05 and applied:** no version suffixes anywhere; case = GDA_Ucloud. The empty
+  folders GRACE/output_v2 and GRACE/OLmean_v2 I had created are removed; no other *_v2 folder exists. Synced md5s
+  verified on both machines: src_demo/GDA_Ucloud.py 22b0fc62, settings/GDA_Ucloud/DA_setting.json 83e729c1,
+  perturbation.json 24faa2cb, Config_ReWaterGAP.json 56a3dcbf. The driver is NOT edited: my runners
+  temp/exp_logs/job9/run_step1.py (the demo1 steps) and run_stage9.py (<stage> of the demo2 chain, one mpiexec per
+  stage so that a job end between stages loses nothing) import GDA_Ucloud.py for the case configuration and call
+  the same GDA steps. Step 1 relaunched 12:07 in tmux `job9` (serial): config_external_data, read_config_and_save,
+  check_units, get_GRACE_obs -> GRACE/output/GlobalBasins_v1.0_{signal,cov,gridded_signal}.hdf5 (2002-01..2006-12).
+
+- **Step 1 done 11:51 (UCloud clock):** config_external_data, read_config_and_save, check_units (772 / 772 units,
+  IDs equal, 0 cells in two units, 0 empty, md5 True), get_GRACE_obs -> GRACE/output/GlobalBasins_v1.0_signal.hdf5
+  (54 epochs 2002-04-15 .. 2006-12-15, 772 units), _cov.hdf5 (54 x 772 x 772), _gridded_signal.hdf5 (54 x 55461),
+  42 s. Job allocation now ends ~23:00 (670 min remaining at 11:51).
+- **Stage chain started 11:51 and ABORTED in `model_perturbation` (rank 14 and all ranks):**
+  `FileNotFoundError: /work/PyGLDA_v2_external_data/Ensemble_input_v2/Ens_0` (parallel_logs/perturbation/rank_14.log).
+  Two causes: **(1) settings/GDA_Ucloud/perturbation.json (md5 24faa2cb) still has `"dir": {"out":
+  ".../Ensemble_input_v2"}`** - the production json kept the v2 output path; DA_setting.json is right (Ensemble_input,
+  Ensemble_Initialization, OL_output, DA_output). config_external_data only rewrites the data-root prefix, not the
+  folder name. **Cowork / Fan: please set `dir.out` to `/work/PyGLDA_v2_external_data/Ensemble_input` in
+  settings/GDA_Ucloud/perturbation.json** (I do not edit settings); I rerun the chain as soon as the synced md5 changes.
+  **(2)** the standard folders Ensemble_input, Ensemble_Initialization, OL_output, DA_output and GRACE/OLmean were
+  deleted yesterday and the code creates only the Ens_k subfolders (`mkdir(exist_ok=True)` without parents in
+  perturbation_base._make_dir / OpenLoop.configure_Ens_output / configure_ini_for_resume) -> re-created them empty on
+  the data side (12:00). Small code gap for Cowork: `parents=True` in those mkdir calls (and for `preprocess_res`).
+
+- **12:10 review read** (no new entry after 12:00; perturbation.json still 24faa2cb). **Safe default taken (Fan's protocol:
+  do not wait idle):** the perturbation stage runs with `setting_dir` pointing to a COPY of settings/GDA_Ucloud in
+  temp/exp_logs/job9/settings_fix/ that differs only in perturbation.json `dir.out` = .../Ensemble_input (plain name);
+  all later stages use the real settings/GDA_Ucloud (DA_setting.json already has the plain names). The original
+  settings file is untouched. Chain relaunched 12:08 (tmux job9, window `chain`): perturbation -> spin_up -> OL ->
+  collect_OL -> DA -> collect_DA, one mpiexec -n 31 per stage, job-time check before each stage.
+  **QUESTION FOR COWORK:** please change `dir.out` in settings/GDA_Ucloud/perturbation.json to
+  `/work/PyGLDA_v2_external_data/Ensemble_input` on the workstation so the committed settings match what ran (no
+  rerun needed: the generated Ensemble_input is identical, same seed and table).
+
+- **12:20 review read 12:25:** perturbation.json fixed by Cowork (md5 1421d1eb on both machines, dir.out =
+  .../Ensemble_input, seed 2026 - identical to the corrected copy the running perturbation stage uses, so its output is
+  the same and the stage is NOT restarted); from the spin-up on, the chain uses the real settings/GDA_Ucloud. Code
+  gaps noted by Cowork. Perturbation progress 11:56: forcing month 45 / 84 on every rank (one member per rank).
+
+- **Stage perturbation done 11:58 (4 min, 31 ranks, one member per rank):** Ensemble_input/Ens_0..30, each with the
+  parameter file (production table, seed 2026) and 84 forcing months 2000-01..2006-12 (correlated mode, pr lognormal
+  1.0, tas 1 K, 300 km, 1 d); 191 GB. **Stage spin_up started 11:58:30** (31 ranks, 8 cycles of 2000 + 2000-2001 = 10
+  model years per member with its own parameters and forcing, restarts -> Ensemble_Initialization); expected ~70-90
+  min. Remaining job time 663 min at 11:58.
 
 ### Suggestions / open points from analysis_run12.md not yet in the master note
 - 2018-10 re-entry after the GRACE-FO gap: largest event of the run (basin GW -21..-47 mm; -110..-143 mm in

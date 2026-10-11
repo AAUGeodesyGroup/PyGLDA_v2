@@ -101,6 +101,10 @@ class VerticalWaterBalance:
             self.forcings_static.static_data.canopy_snow_soil_parameters
         self.lai_param = \
             lai_init.LeafAreaIndex(self.land_cover, parameters_lai)
+        # PyGLDA ensemble multiplier (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
+        lai_mult = self.parameters.lai_multiplier.values.astype(np.float64)
+        self.lai_param.max_leaf_area_index = self.lai_param.max_leaf_area_index * lai_mult
+        self.lai_param.min_leaf_area_index = self.lai_param.min_leaf_area_index * lai_mult
 
         # =====================================================================
         #                   Canopy
@@ -124,6 +128,10 @@ class VerticalWaterBalance:
         for i in range(len(parameters_snow)):
             self.degreeday[self.land_cover[:, :] == parameters_snow.loc[i, 'Number']] = \
                parameters_snow.loc[i, 'degree-day']
+
+        # PyGLDA ensemble multiplier (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
+        self.degreeday = self.degreeday * \
+            self.parameters.degreeday_multiplier.values.astype(np.float64)
 
         self.elevation = self.forcings_static.static_data.gtopo30_elevation
 
@@ -159,6 +167,14 @@ class VerticalWaterBalance:
         self.max_soil_water_content = \
             np.where(total_avail_water_content > 0,
                      total_avail_water_content * rooting_depth, np.nan)
+
+        # PyGLDA ensemble multipliers (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
+        self.max_soil_water_content = self.max_soil_water_content * \
+            self.parameters.smax_multiplier.values.astype(np.float64)
+        self.groundwater_recharge_factor = self.groundwater_recharge_factor * \
+            self.parameters.gw_recharge_factor_multiplier.values.astype(np.float64)
+        self.max_groundwater_recharge = self.max_groundwater_recharge * \
+            self.parameters.max_gw_recharge_multiplier.values.astype(np.float64)
 
         # =====================================================================
         #   Storage to be transfered to runoff when land area fraction is zero

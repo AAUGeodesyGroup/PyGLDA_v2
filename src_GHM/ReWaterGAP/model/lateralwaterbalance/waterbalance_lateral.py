@@ -622,6 +622,12 @@ class LateralWaterBalance:
                         self.potential_net_abstraction_sw = self.actual_net_abstraction.atotusesw.\
                             sel(time=date)[0].values.astype(np.float64)
 
+                    # PyGLDA ensemble multipliers (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
+                    self.potential_net_abstraction_gw = self.potential_net_abstraction_gw * \
+                        self.parameters.netabs_gw_multiplier.values.astype(np.float64)
+                    self.potential_net_abstraction_sw = self.potential_net_abstraction_sw * \
+                        self.parameters.netabs_sw_multiplier.values.astype(np.float64)
+
                     # coverted to units = km3/day
                     self.potential_net_abstraction_gw = \
                         self.potential_net_abstraction_gw / (num_of_days * m3_to_km3)

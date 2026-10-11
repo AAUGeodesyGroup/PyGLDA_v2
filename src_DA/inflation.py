@@ -31,6 +31,7 @@ DA_setting.json, "method" block, key "inflation":
 "months" (default all) limits the additive schemes to the calendar months of the window; "exact_spread" rescales
 the centred random numbers so their sample std equals sigma (removes the sampling noise of small ensembles).
 """
+import warnings
 import numpy as np
 
 
@@ -274,7 +275,16 @@ class AdditiveInflation(Inflation):
         distance to the snow cap of the window when the envelope cap is on (EnKF_localized._snow_cap_now)"""
         f = self.f
         w = np.maximum(x - f.bounds.lb[rows], 0.0)
+        '''upper bound: the ensemble mean of the members' own static bounds (soil: smax x land fraction x the member's
+        smax_multiplier, StateBounds.set_window), so it matches the ensemble-mean storage x; the plain static bound
+        (smax per land area, factor 1) where no member has a value or no window has been set'''
         ub = f.bounds.ub[rows]
+        ub_m = getattr(f.bounds, 'ub_member', None)
+        if ub_m is not None and ub_m.shape[0] == f.bounds.ub.shape[0]:
+            with np.errstate(invalid='ignore'), warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)                 # all-NaN cell: static bound
+                ub_mean = np.nanmean(ub_m[rows], axis=1)
+            ub = np.where(np.isnan(ub_mean), ub, ub_mean)
         fin = np.isfinite(ub)
         if fin.any():
             w = np.where(fin, np.minimum(w, np.maximum(ub - x, 0.0)), w)

@@ -156,7 +156,7 @@ GRACE constrains only the sum of the storages, so where the correction ends up i
 
 The two OL-based tables are computed once at the start from `Res/<case>/Res_OL.h5` (or `"split_source": "<path>"`) for the storages of the DA state; `"min_share": 0.05` puts a floor under every share. `"split_storages": ["groundwstor", "soilmoist", "swe"]` restricts the noise to these storages and re-normalises the shares over them: river storage stays in the DA state (the update still corrects it) but gets no random noise, which would otherwise flow out within days as noise in each member's discharge (default: all storages of the state). They are written to `filter_summary.json` (`inflation.split_table[storage][month][sub-basin]`), and the shares used in every window are columns `share_<storage>` of `adaptive_inflation_log.csv`.
 
-Noise in a bounded storage is weighted per cell by the room to the nearer bound, min(S − lb, ub − S): snow by its amount, or with the snow envelope cap on (`envelope_factor` of `snow_bounds`) by min(S, cap − S), so a pack at or above its cap (perennial high-Alpine cells) gets no noise and keeps no growing spread; soil by the distance to 0 or to smax, so a nearly full winter soil gets almost none; what a bounded storage cannot take goes to groundwater. Use soil in the split only with `"soil_upper_bound": true` (default). Example (run 11a / 11b):
+Noise in a bounded storage is weighted per cell by the room to the nearer bound, min(S − lb, ub − S): snow by its amount, or with the snow envelope cap on (`envelope_factor` of `snow_bounds`) by min(S, cap − S), so a pack at or above its cap (perennial high-Alpine cells) gets no noise and keeps no growing spread; soil by the distance to 0 or to its capacity (the ensemble mean of the members' smax × land fraction × `smax_multiplier`, since 9 Oct 2026; before: smax alone), so a nearly full winter soil gets almost none; what a bounded storage cannot take goes to groundwater. Use soil in the split only with `"soil_upper_bound": true` (default). Example (run 11a / 11b):
 
 ```json
 "inflation": {"kind": "adaptive_additive", "split": "ol_spread",
@@ -284,16 +284,51 @@ If more than one old scheme is active (e.g. `rtps_alpha` > 0 and `inflation` ≠
 
 ## 2. `perturbation.json` — ensemble generation
 
-Read by `RDA.model_perturbation()` (`src_DA/Perturbation.py`); global, independent of the basin.
+Read by `RDA.model_perturbation()` (`src_DA/perturbation_par.py` for the parameters, `src_DA/perturbation_forcing.py` for the forcing; one json for both); global, independent of the basin.
 
 | key | meaning |
 |---|---|
 | `ensemble` | number of perturbed members (keep equal to `basic.ensemble`) |
+| `seed` | integer: fixed random numbers, the ensemble can be regenerated identically; `null` (default) = numpy's global generator as before |
 | `dir.in`, `dir.out` | unperturbed WaterGAP input (`Input_data`) and where the perturbed forcing / parameter files are written (`Ensemble_input`, = `basic.Ensemble_input_dir`) |
-| `correlation.forcing.isSpatialCorrelated / isTemporalCorrelated` | spatially correlated perturbation fields (true), AR(1) in time (currently false → white noise in time, i.e. monthly forcing perturbed independently) |
+| `correlation.forcing.isSpatialCorrelated / isTemporalCorrelated` | `true / false`: one random factor (or offset) per member and day, the same in every cell, independent from day to day (ensembles until Oct 2026). `true / true`: correlated forcing errors (`perturbation_forcing._forcing_spatiotemporal_correlated`, 9 Oct 2026): one random field per member, variable and day with the Gaussian spatial correlation exp(−(r/L)²) and an AR(1) in time, continuous over the months of the run; needs `length_km` (L, km; correlation e⁻¹ at L) and `time_scale_days` (τ; day-to-day correlation exp(−1/τ)). Each member and variable has its own random generator (seed, member, variable), so the result does not depend on the number of MPI ranks. Supported: `pr` multiplicative `lognormal` (factor exp(s z − s²/2), s² = ln(1+std²): mean 1, never negative) or `gaussian`, `tas` additive `gaussian`. demo_Global_v2: L = 300 km, τ = 1 day, `pr` lognormal 0.5 and AR(1) 24 h as Kumar et al. (2016, JHM 17, 1951), `tas` Gaussian 2 K as GLWS2.0 (Gerdener et al. 2023), radiation not perturbed. |
 | `correlation.par.isSpatialCorrelated` | spatially correlated parameter perturbation |
-| `forcing.<var>` | per forcing variable (`pr` precipitation, `tas` temperature, `rsds`, `rlds` radiation): `is_perturbed`, `perturb_method` (`multiplicative` / `additive`), `error_distribution` (`gaussian` / `triangle`), `coefficients` (std for gaussian: 0.3 = 30 % for `pr`, 2 K for `tas`) |
-| `par.<parameter>` | per WaterGAP parameter: `is_perturbed`, `error_distribution` (`triangle`), `coefficients` = [min, mode, max] of the triangle, drawn once per member (constant in time). Perturbed in the current design: `pt_coeff_humid_arid`, `adiabatic_lapse_rate`, `max_daily_pet`, `critcal_gw_precipitation`, `swb_outflow_coeff`, `activelake_depth` [1, 5, 20] m, `activewetland_depth` [0.5, 2, 5] m, `max_canopy_storage_coefficient`. |
+| `forcing.<var>` | per forcing variable (`pr` precipitation, `tas` temperature, `rsds`, `rlds` radiation): `is_perturbed`, `perturb_method` (`multiplicative` / `additive`), `error_distribution` (`gaussian` / `triangle`; `lognormal` for multiplicative `pr` in the correlated mode), `coefficients` (std for gaussian / lognormal: 0.5 = 50 % for `pr`, 2 K for `tas`) |
+| `par.<parameter>` | per parameter: `is_perturbed`, `type`, `error_distribution` (`triangle` / `uniform` / `gaussian`), `coefficients`; drawn once per member (constant in time and space). `triangle`: [min, mode, max]; `uniform`: [min, standard, max], drawn between min and max; `gaussian`: [mean, std]. The middle coefficient must equal the standard value (checked: the parameter file's value for `value`, 1 for `multiplier`). Perturbed in the current design: `pt_coeff_humid_arid`, `adiabatic_lapse_rate`, `max_daily_pet`, `critcal_gw_precipitation`, `swb_outflow_coeff`, `activelake_depth` [1, 5, 20] m, `activewetland_depth` [0.5, 2, 5] m, `max_canopy_storage_coefficient`. |
+| `par.<parameter>.type` | `value` (default): one global value in the parameter file, replaced by the member's value. `multiplier`: a factor; for a field of the parameter file that varies by cell (`gamma`, `river_roughness_coeff_mult`) the field is multiplied, for a quantity outside the parameter file (`lai_multiplier`, `degreeday_multiplier`, `smax_multiplier`, `gw_recharge_factor_multiplier`, `max_gw_recharge_multiplier`, `netabs_gw_multiplier`, `netabs_sw_multiplier`) the factor is written as a new variable of the member's parameter file and WaterGAP applies it where it reads the quantity (README, Modifications to WaterGAP). Missing multipliers = 1 (standard WaterGAP, bit-identical). |
+
+**Parameters of Döll et al. (2024, HESS 28, 2259, Table 1).** All 20 that PyGLDA can perturb are in the json with
+their a-priori ranges (uniform) and `"is_perturbed": false`, except those perturbed in the current design, which
+keep their settings and carry the Döll range as `range_doell2024` for reference (`src_DA.perturbation_par.DOELL2024`).
+Temperatures in K. Not included: the precipitation and net radiation multipliers (covered by the forcing
+perturbation of `pr`, `rsds`, `rlds`) and the evaporation reduction factor multiplier (not implemented).
+
+| Döll et al. | entry | type | range |
+|---|---|---|---|
+| PT coefficient humid / arid | `pt_coeff_humid_arid` | value | 0.885–1.65 / 1.365–2.115 |
+| MCWH | `max_canopy_storage_coefficient` | value | 0.1–1.4 mm |
+| LAI multiplier | `lai_multiplier` | multiplier (min and max LAI per land cover) | 0.2–2.5 |
+| Snow freeze temperature | `snow_freeze_temp` | value | 272.15–276.15 K (−1 to 3 °C) |
+| Snow melt temperature | `snow_melt_temp` | value | 269.40–276.90 K (±3.75 °C) |
+| Degree-day factor multiplier | `degreeday_multiplier` | multiplier (degree-day factor per land cover) | 0.5–2 |
+| Temperature gradient | `adiabatic_lapse_rate` | value | 0.001–0.01 K/m |
+| Smax multiplier | `smax_multiplier` | multiplier (max soil water content; the DA soil bound follows per member) | 0.5–3 |
+| Runoff coefficient | `gamma` | multiplier of the cell field (Döll: 0.3–3, absolute) | 0.3–3 |
+| Maximum PET | `max_daily_pet` | value | 6–22 mm/d |
+| GW recharge factor multiplier | `gw_recharge_factor_multiplier` | multiplier | 0.3–3 |
+| Max GW recharge multiplier | `max_gw_recharge_multiplier` | multiplier | 0.3–3 |
+| Critical precipitation | `critcal_gw_precipitation` | value | 2.5–20 mm/d |
+| GW discharge coefficient | `gw_dis_coeff` | value | 0.001–0.02 /d |
+| River roughness multiplier | `river_roughness_coeff_mult` | multiplier of the cell field (1/3–5/3 = Döll's 1–5 where the field is 3) | 0.333–1.667 |
+| Active lake depth | `activelake_depth` | value | 1–20 m |
+| Active wetland depth | `activewetland_depth` | value | 1–20 m |
+| SW discharge coefficient | `swb_outflow_coeff` | value | 0.001–0.1 /d |
+| Net abstraction from GW / SW | `netabs_gw_multiplier`, `netabs_sw_multiplier` | multiplier | −2 to 2 |
+
+Döll et al. used uniform distributions and perturbed per calibration unit only the parameters selected there
+(in all their units: PT humid, snow melt temperature, Smax, runoff coefficient, lake and wetland depth, SW discharge
+coefficient); GLWS2.0 (Gerdener et al. 2023) used a narrower "small" range that is not published. `smax_multiplier`
+must be one value per member (the DA soil bound, src_DA.EnKF, scales the soil capacity by it).
 
 Consequences seen in the Amazon runs: the `activelake_depth` / `activewetland_depth` perturbation creates large
 **constant offsets** between members (75 of 129 mm TWS spread) in storages that are not in the state; the filter
