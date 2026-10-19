@@ -2,7 +2,8 @@
 Builds the localized EnKF from the "method" block of DA_setting.json (used by src_FlowControl.DA_GRACE).
 
     "method": {
-        "fusion_method": "EnKF_localized",
+        "fusion_method": "EnKF_localized" | "LETKF",     (LETKF: src_DA.LETKF, same components, deterministic
+                                                          analysis; optional "letkf": {"min_taper": 0.0})
         "localization": {"kind": "none" | "block" | "gaussian", "length_km": 300, "cutoff": 2.0},
         "inflation": {"kind": "none" | "multiplicative" | "rtps" | "additive" | "adaptive_additive", ...},
         "increment_partition": {"kind": "enkf" | "non_negative"},
@@ -69,15 +70,30 @@ def inflation_config(method):
     return cfg
 
 
+def fusion_method_name(method):
+    """"EnKF_localized" | "LETKF" | ... from the method block (enum member or string)"""
+    fm = getattr(method, 'fusion_method', 'EnKF_localized')
+    return str(getattr(fm, 'name', fm))
+
+
 def build_filter(configDA, model, obs, sv, sv_excluded):
-    from src_DA.EnKF_localized import EnKF_localized
+    """the filter chosen by "fusion_method": EnKF_localized (stochastic EnKF) or LETKF (deterministic
+    ensemble-transform analysis, src_DA.LETKF), both assembled from the same components"""
     m = configDA.method
-    return EnKF_localized(DA_setting=configDA, model=model, obs=obs, sv=sv, sv_excluded=sv_excluded,
-                          localization=make_localization(getattr(m, 'localization', None)),
-                          inflation=make_inflation(inflation_config(m)),
-                          partition=make_partition(getattr(m, 'increment_partition', None)),
-                          obs_error_inflation=getattr(m, 'obs_error_inflation', None),
-                          obs_error_correlation=getattr(m, 'obs_error_correlation', 'full'),
-                          obs_perturbation_centering=getattr(m, 'obs_perturbation_centering', False),
-                          soil_upper_bound=getattr(m, 'soil_upper_bound', True),
-                          snow_bounds=snow_bounds(m))
+    kw = dict(DA_setting=configDA, model=model, obs=obs, sv=sv, sv_excluded=sv_excluded,
+              localization=make_localization(getattr(m, 'localization', None)),
+              inflation=make_inflation(inflation_config(m)),
+              partition=make_partition(getattr(m, 'increment_partition', None)),
+              obs_error_inflation=getattr(m, 'obs_error_inflation', None),
+              obs_error_correlation=getattr(m, 'obs_error_correlation', 'full'),
+              obs_perturbation_centering=getattr(m, 'obs_perturbation_centering', False),
+              soil_upper_bound=getattr(m, 'soil_upper_bound', True),
+              snow_bounds=snow_bounds(m))
+    name = fusion_method_name(m)
+    if name == 'LETKF':
+        from src_DA.LETKF import LETKF_localized
+        return LETKF_localized(letkf=getattr(m, 'letkf', None), **kw)
+    if name != 'EnKF_localized':
+        raise ValueError('filter_factory: fusion_method %s is not built here (EnKF_localized | LETKF)' % name)
+    from src_DA.EnKF_localized import EnKF_localized
+    return EnKF_localized(**kw)

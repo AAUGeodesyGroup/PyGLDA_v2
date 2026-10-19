@@ -305,9 +305,10 @@ class DA_GRACE:
         # # da = DataAssimilation(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         # # da = DataAssimilation_monthly(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
         '''choice of the filter: configDA.method.fusion_method (EnKF_v0 = plain EnKF; EnKF_localized = EnKF assembled
-        from localization, inflation and increment-partition components, see src_DA.filter_factory)'''
+        from localization, inflation and increment-partition components; LETKF = the deterministic ensemble-transform
+        analysis with the same components, see src_DA.filter_factory)'''
         from src_DA.EnumDA import FusionMethod
-        if configDA.method.fusion_method == FusionMethod.EnKF_localized:
+        if configDA.method.fusion_method in (FusionMethod.EnKF_localized, FusionMethod.LETKF):
             from src_DA.filter_factory import build_filter
             da = build_filter(configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
         else:

@@ -102,6 +102,7 @@ are printed per member and saved to `DA_output/<case>/Ens_k/threshold_log.json`.
 |---|---|
 | `EnKF_v0` (default) | stochastic EnKF with perturbed observations, no localization or inflation (`src_DA/EnKF.py`); for large ensembles |
 | `EnKF_localized` | the EnKF assembled from four independent components (`src_DA/filter_factory.py`), each chosen with its own block below; recommended for small ensembles |
+| `LETKF` | the deterministic ensemble-transform analysis (Hunt et al. 2007; `src_DA/LETKF.py`) assembled from the SAME components and blocks as `EnKF_localized`: it replaces only the raw increment `K(y − HX)` by the local ensemble transform, with the unperturbed GRACE value and R-localization from the `localization` taper (an observation with taper weight ρ enters with its error variance divided by ρ). No observation-perturbation sampling noise; the analysis spread is exactly the Kalman spread. Optional `"letkf": {"min_taper": 0.0}` drops observations with a smaller taper weight from a cell's local set (Gaussian localization only). `filter_summary.json` gets a `letkf` block (number of transforms, local observations per cell, mean weight RMS, obs-space spread ratio) |
 
 The components of `EnKF_localized` (code in `src_DA/`):
 
@@ -113,6 +114,8 @@ The components of `EnKF_localized` (code in `src_DA/`):
 | physical bounds (window-aware) | `bounds.py` | `StateBounds` |
 
 Analysis of one window: `A = inflation.prior(A)` → `K = (L_state∘Pxy)(L_obs∘Pyy + R)⁻¹` → `dX = partition.split(K(y − HX))` → `Xa = inflation.posterior(X + dX)`. Any localization can be combined with any inflation and partition.
+
+With `LETKF` the middle step reads, for every state cell with local observations J and taper weights ρ: `Pa = [(N−1)I + Yb_Jᵀ Rl⁻¹ Yb_J]⁻¹`, `Rl⁻¹ = D^½ R_J⁻¹ D^½`, `w = Pa Yb_Jᵀ Rl⁻¹ (y_J − mean(HX)_J)`, `W = [(N−1)Pa]^½`, `dX = A (w1ᵀ + W − I)`; everything before and after is identical, so EnKF_localized and LETKF runs differ in the analysis equations alone.
 
 #### `localization`
 

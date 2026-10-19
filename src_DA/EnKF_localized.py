@@ -15,7 +15,8 @@ Analysis step (one window, window-mean states):
     Xa = inflation.posterior(X + dX)                    RTPS (or nothing)
 
 The components are chosen in DA_setting.json ("method" block) and built by src_DA.filter_factory.build_filter;
-see doc/configuration.md. The daily loop, MPI, window means / extremes and the post-update thresholds live in the
+see doc/configuration.md. The deterministic variant src_DA.LETKF.LETKF_localized replaces only the raw increment
+K (y - HX) (analysis_increment) by the ensemble-transform analysis and keeps everything else. The daily loop, MPI, window means / extremes and the post-update thresholds live in the
 base class src_DA.EnKF.EnKF. The state vector is that of EnsStates / DM_basin_average: cell-major, vertical_dim
 storages per cell.
 """
@@ -147,6 +148,11 @@ class EnKF_localized(EnKF):
         """
         R = obs_cov * self._R_scale
         N = ens_states.shape[1]
+        '''unperturbed observation of this window (deterministic filters, src_DA.LETKF): GRACE ens_0 minus the
+        member-mean of the excluded storages, which EnKF.run_mpi subtracted from the raw member observations'''
+        raw, ref = getattr(self, '_obs_raw', None), getattr(self, '_obs_unperturbed', None)
+        self._obs_deterministic = None if (raw is None or ref is None or np.shape(raw) != np.shape(obs)) \
+            else np.asarray(ref, dtype=float) - np.mean(raw - obs, 1)
         if self._obs_corr == 'diagonal':
             obs, R = self._decorrelate(obs, obs_cov, R)
         if self._obs_centering:
@@ -166,13 +172,25 @@ class EnKF_localized(EnKF):
 
         HX = self._DM(states=X)
         HA = HX - np.mean(HX, 1)[:, None]
-        Pyy = self._L_obs * (HA @ HA.T) / (N - 1) + R                             # localized obs-space covariance
-        Pxy = self.tapered_cross_cov(A, HA, N)                                    # localized cross-covariance (sparse)
-        '''K (obs - HX) with K = Pxy Pyy^-1, without forming the n_state x n_obs gain'''
-        dX = Pxy @ np.linalg.solve(Pyy, obs - HX)
+        dX = self.analysis_increment(X, A, HX, HA, obs, R, N)
 
         dX = self.partition.split(dX, A, HA, N, X)
         return self.inflation.posterior(X + dX, A, HA)
+
+    def analysis_increment(self, X, A, HX, HA, obs, R, N):
+        """
+        Raw increments of the members (n_state x N) before the partition: the stochastic EnKF update with the
+        perturbed observations. The filter variants (src_DA.LETKF) override only this method; the preparation
+        (observation-error model, bounds, prior inflation) and the post-processing (partition, posterior inflation)
+        in update() are shared.
+        X, A   : forecast states and anomalies after the prior inflation (n_state x N)
+        HX, HA : their observation equivalents and anomalies (n_obs x N)
+        obs    : perturbed member observations (n_obs x N);  R : observation-error covariance (n_obs x n_obs)
+        """
+        Pyy = self._L_obs * (HA @ HA.T) / (N - 1) + R                             # localized obs-space covariance
+        Pxy = self.tapered_cross_cov(A, HA, N)                                    # localized cross-covariance (sparse)
+        '''K (obs - HX) with K = Pxy Pyy^-1, without forming the n_state x n_obs gain'''
+        return Pxy @ np.linalg.solve(Pyy, obs - HX)
 
     def _snow_cap_window(self):
         """{'swe': cap per state cell} for the months of the current window, or None"""

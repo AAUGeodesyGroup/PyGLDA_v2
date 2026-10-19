@@ -148,7 +148,10 @@ class config_DA:
         def __init__(self):
             self.fusion_method = FusionMethod.EnKF_v0.name
             '''EnKF_localized: the filter is assembled from independent components (src_DA.filter_factory),
-            each chosen with its own block; see doc/configuration.md for all options
+            each chosen with its own block; see doc/configuration.md for all options. LETKF: the deterministic
+            ensemble-transform analysis (src_DA.LETKF) with the same components and blocks, plus
+              letkf               {"min_taper": 0.0}  observations with a taper weight below min_taper are dropped
+                                  from a cell's local set (Gaussian localization only)
               localization        {"kind": "none" | "block" | "gaussian", "length_km": 300, "cutoff": 2.0}
               inflation           {"kind": "none" | "multiplicative" | "rtps" | "additive" | "adaptive_additive", ...}
                                   e.g. {"kind": "rtps", "alpha": 0.7, "space": "state"}
@@ -181,6 +184,7 @@ class config_DA:
             self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
             self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
             self.snow_bounds = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0}  # envelope off
+            self.letkf = {'min_taper': 0.0}           # LETKF only
 
 
 

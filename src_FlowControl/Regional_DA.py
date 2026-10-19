@@ -545,7 +545,8 @@ class RDA:
             raise ValueError('harmonic_fit: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
         hm = HarmonicMapAnalysis(res_dir=configDA.basic.res_permanent, case=RDA.case, ens=RDA.ens,
-                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time)
+                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time,
+                                 cell_mask_path=configDA.basic.basin_mask)
         return hm.run(stage, comm=comm, root=root)
 
     @staticmethod
@@ -581,7 +582,8 @@ class RDA:
         bp = BasinAverageAnalysis_post(ens=RDA.ens, case=RDA.case, basin=RDA.basin, date_begin=RDA.sim_begin_time,
                                        date_end=RDA.sim_end_time)
         hm = HarmonicMapAnalysis(res_dir=configDA.basic.res_permanent, case=RDA.case, ens=RDA.ens,
-                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time)
+                                 date_begin=RDA.sim_begin_time, date_end=RDA.sim_end_time,
+                                 cell_mask_path=configDA.basic.basin_mask)
 
         for stage in stages:
             '''basin / sub-basin time series -> Res/<case>/Res_<stage>.h5'''

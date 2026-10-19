@@ -345,6 +345,11 @@ class HarmonicMapAnalysis:
                          rank for the mean and one series on the root for the fit, whatever the number of members
                  True  = fit every member (Ens_0..N) as well (per-member maps + spread; the old path, ~4 GB per
                          rank on the global grid)
+    cell_mask_path : DA basin mask (Basin/mask/<basin>_res_0.5.h5, dataset 'basin' on the global 0.5-degree grid):
+                 only the cells of the mask are fitted, every other cell of the yearly files is NaN in the maps
+                 (Fan, 19 Oct 2026: the analysis domain is the set of assimilated cells - Greenland, the glaciated
+                 and the big-lake units are outside the global unit mask and must not appear in any product or
+                 figure; WaterGAP simulates them but cannot do so meaningfully). None: every cell with data.
     Parallel (run): comm = an MPI communicator -> members are spread over its ranks (rank r takes members
                  r, r+size, ...), the maps are gathered and the ensemble sum reduced on `root`, which writes the
                  file; every rank of comm must call run(). Without comm, n_workers > 1 uses a process pool
@@ -355,7 +360,8 @@ class HarmonicMapAnalysis:
     """
 
     def __init__(self, res_dir, case: str, ens: int, date_begin: str, date_end: str,
-                 variables=(WaterGap_storage_variables.tws.name,), components=None, per_member=False):
+                 variables=(WaterGap_storage_variables.tws.name,), components=None, per_member=False,
+                 cell_mask_path=None):
         from src_auxiliary.ts import decomposition
         self.res_dir = Path(res_dir)
         self.case = case
@@ -364,6 +370,21 @@ class HarmonicMapAnalysis:
         self.variables = list(variables)
         self.components = components or [decomposition.trend, decomposition.annual, decomposition.semi_annual]
         self.per_member = bool(per_member)
+        self.cell_mask = None
+        if cell_mask_path is not None:
+            with h5py.File(cell_mask_path, 'r') as f:
+                self.cell_mask = f['basin'][()].astype(bool)             # (360, 720), global 0.5-degree grid
+
+    def _mask_columns(self, lat, lon):
+        """flat indices (row-major on the (lat, lon) grid of the yearly files) of the cells inside cell_mask;
+        None when no mask is set. The files are either the global grid or a box cut from it (shp2mask.load_mask)."""
+        if self.cell_mask is None:
+            return None
+        res = 0.5
+        i = np.rint((90 - res / 2 - np.asarray(lat)) / res).astype(int)
+        j = np.rint((np.asarray(lon) + 180 - res / 2) / res).astype(int)
+        m = self.cell_mask[np.ix_(i, j)]
+        return np.flatnonzero(m.ravel())
 
     # ------------------------------------------------------------------ loading
     def _member_dir(self, stage: Stage, ens_id: int) -> Path:
@@ -409,10 +430,13 @@ class HarmonicMapAnalysis:
                 if lat is None:
                     lat, lon = ds['lat'].values.copy(), ds['lon'].values.copy()
                 times.append(ds['time'].values.copy())
+                keep = self._mask_columns(lat, lon)
                 for v in self.variables:
                     a = ds[v].transpose('time', 'lat', 'lon').values
                     a = a.reshape(a.shape[0], -1)
                     cols = np.flatnonzero(np.isfinite(a).any(axis=0))
+                    if keep is not None:
+                        cols = np.intersect1d(cols, keep, assume_unique=True)
                     parts[v].append((cols, a[:, cols].copy()))
                     del a
         if lat is None:
@@ -448,6 +472,8 @@ class HarmonicMapAnalysis:
         n_t, n_lat, n_lon = a.shape
         a = a.reshape(n_t, n_lat * n_lon)
         cols = np.flatnonzero(np.isfinite(a).any(axis=0))
+        if hasattr(cube, 'lat') and self.cell_mask is not None:
+            cols = np.intersect1d(cols, self._mask_columns(cube['lat'].values, cube['lon'].values), assume_unique=True)
         return self._fit_columns(a[:, cols], cols, tfrac, (n_lat, n_lon))
 
     FIT_BLOCK = 8000            # columns per least-squares call: bounds the float64 temporaries of the fit

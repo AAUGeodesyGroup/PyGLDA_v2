@@ -185,6 +185,7 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
         st = {g: float(np.sum(w * np.array([sum(rows[j].get('state_trend_%s' % v, 0.0) for v in vs) for j in ix])))
               for g, vs in SHARE_GROUPS.items()}
         tot = float(np.sum(w * np.array([rows[j].get('state_trend_tws', np.nan) for j in ix])))
+        st['other'] = tot - sum(st.values())                   # lakes, reservoirs, canopy: not in the DA state
         for g, t in st.items():
             grows[-1]['state_trend_%s' % g] = t
             grows[-1]['share_%s' % g] = t / tot if abs(tot) > 1e-9 else np.nan
@@ -228,7 +229,7 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
     summ['groups'] = {g['group']: {k: g[k] for k in ('n_units', 'rms_reduction', 'corr_DA', 'median_unit_chi2')}
                       for g in grows}
     summ['correction_destination'] = {g: dict(state_trend=grows[0]['state_trend_%s' % g], share=grows[0]['share_%s' % g])
-                                      for g in SHARE_GROUPS}
+                                      for g in list(SHARE_GROUPS) + ['other']}
     summ['correction_destination']['tws'] = dict(state_trend=grows[0]['state_trend_tws'])
     summ['correlation_tws_median'] = {v: dict(OL=float(np.nanmedian([r.get('corr_tws_%s_OL' % v, np.nan) for r in rows])),
                                               DA=float(np.nanmedian([r.get('corr_tws_%s_DA' % v, np.nan) for r in rows])))
@@ -331,7 +332,8 @@ def _report_text(s, grows):
          '%(frac_unit_windows_chi2_above_high)s, below the low limit %(frac_unit_windows_chi2_below_low)s; median gain '
          '%(gain_median)s, forecast spread %(spread_fc_median)s mm, GRACE sigma %(sigma_GRACE_median)s mm'
          % s['filter'], '',
-         'Long-term correction (trend of DA-OL, area-weighted, %s mm/yr for TWS) lands in: ' %
+         'Long-term correction (trend of DA-OL, area-weighted, %s mm/yr for TWS; other = lakes, reservoirs, canopy, '
+         'not in the DA state) lands in: ' %
          s['correction_destination']['tws']['state_trend'] +
          ', '.join('%s %s mm/yr (%s)' % (g, x['state_trend'], ('%.0f %%' % (100 * x['share'])) if x['share'] is not None
                                         else '-') for g, x in s['correction_destination'].items() if g != 'tws'),

@@ -234,15 +234,17 @@ def storage_increments(ol_u, da_u, win, tdec, storages=None):
 
 def increment_shares(INC_u, groups=None):
     """share of the TWS correction trend (state_trend) that lands in each storage group; groups: name -> storages
-    (default groundwater / soil / snow / surface); the shares sum to 1 when the groups cover the TWS"""
+    (default groundwater / soil / snow / surface). The remainder of the TWS trend that none of the groups holds
+    (storages not loaded or not in the groups, e.g. lakes, reservoirs and canopy of the global report, which the
+    DA does not update but the model moves) is returned as 'other', so the shares always sum to 1."""
     groups = groups or {'groundwstor': ['groundwstor'], 'soilmoist': ['soilmoist'], 'swe': ['swe'],
                         'surface': SURFACE}
     tot = INC_u['tws']['state_trend'] if 'tws' in INC_u else sum(INC_u[v]['state_trend'] for v in INC_u)
     out = {}
     for g, vs in groups.items():
-        t = sum(INC_u[v]['state_trend'] for v in vs if v in INC_u)
-        out[g] = dict(state_trend=float(t), share=float(t / tot) if abs(tot) > 1e-9 else float('nan'))
-    return out
+        out[g] = float(sum(INC_u[v]['state_trend'] for v in vs if v in INC_u))
+    out['other'] = float(tot - sum(out.values()))
+    return {g: dict(state_trend=t, share=float(t / tot) if abs(tot) > 1e-9 else float('nan')) for g, t in out.items()}
 
 
 # ------------------------------------------------------------------------------------------------ main entry
