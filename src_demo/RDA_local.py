@@ -39,7 +39,6 @@ def demo1():
 
     '''after the data assimilation'''
     RDA.visualization()
-    # RDA.increment_diagnosis()
     # RDA.da_evaluation(tag='run11a2')      # set a new tag for every run
 
     '''data product for distribution (only when the data are shared): daily ensemble mean and spread (OL, DA),

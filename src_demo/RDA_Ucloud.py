@@ -43,7 +43,6 @@ def demo1():
 
     '''after the data assimilation'''
     RDA.visualization()
-    RDA.increment_diagnosis()
     RDA.da_evaluation(tag='run13', reference=DATA_ROOT + '/Res/demo_Danube/evaluation/run12')   # new tag for every run;
     #   reference = a tag in Res/demo_Danube/evaluation or the path of a report folder (the 4-member runs are in demo_2)
 

@@ -1,7 +1,7 @@
 {
     "basic": {
         "fromdate": "2002-01-01",
-        "todate": "2003-12-31",
+        "todate": "2006-12-31",
         "ensemble": 30,
         "case": "GDA_Ucloud",
         "basin": "GlobalBasins_v1.0",

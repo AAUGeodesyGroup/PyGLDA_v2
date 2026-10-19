@@ -26,8 +26,7 @@ Order (driver: src_demo/demo_global.py)
     serial:  GDA.config_external_data(), GDA.check_units(), GDA.get_GRACE_obs()
     MPI:     GDA.collect_and_statistics(Stage.OL) -> GDA.DA_run() -> GDA.collect_and_statistics(Stage.DA)  (inherited)
 
-First version (7 Oct 2026). Known limits, to be revised step by step:
-  - increment_diagnosis is still the regional one (made for a few sub-basins)
+First version (7 Oct 2026).
 """
 from pathlib import Path
 from datetime import datetime
@@ -165,8 +164,9 @@ class GDA(RDA, metaclass=_CaseToRDA):
         """
         Evaluation report of the global run (needs post_processing), replacing the regional report (made for one
         basin and a few sub-basins). Written to Res/<case>/evaluation_global/<tag>/:
-          unit_metrics.csv     per unit: fit of OL / DA to GRACE, chi^2, gain, spread, trends, increments per
-                               storage, shapefile attributes
+          unit_metrics.csv     per unit: fit of OL / DA to GRACE, chi^2, gain, spread, trends, increment diagnosis
+                               per storage (increment, drift, correction trends and their shares, storage-TWS
+                               correlation), shapefile attributes
           group_metrics.csv    area-weighted groups: global, region, basin class, SNR class, latitude band
           group_series.csv     area-weighted window series of the groups
           summary.txt / .json  overview, filter health, clipping, warnings; DA_setting.json and logs/ archived

@@ -265,6 +265,11 @@ class RDA:
             sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
             sys.stderr = sys.stdout
 
+        '''banner AFTER the redirect: rank 0 -> terminal (colour), every other rank -> top of its own log (plain)'''
+        print_pyglda_banner()
+        print('\n=================== Spin-up: %s to %s, %d x the first year, %d ranks ===================' %
+              (RDA.spin_up_start, RDA.spin_up_end, RDA.spin_up_years, size), flush=True)
+
         try:
             from misc.time_checker_and_ascii_image import check_time
 
@@ -309,6 +314,11 @@ class RDA:
             sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
             sys.stderr = sys.stdout
 
+        '''banner AFTER the redirect: rank 0 -> terminal (colour), every other rank -> top of its own log (plain)'''
+        print_pyglda_banner()
+        print('\n=================== Open loop: %s to %s, %d ranks ===================' %
+              (RDA.sim_begin_time, RDA.sim_end_time, size), flush=True)
+
         try:
             configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
 
@@ -334,8 +344,9 @@ class RDA:
                   use the existing yearly files)
           step 2  basin / sub-basin series -> Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5
           step 3  (post_process=True) post-processing of this stage:
-                  3a  harmonic maps Harmonic_<stage>.nc on all ranks (members spread over the ranks, rank 1 writes;
-                      every member is fitted, see statistical_analysis.HarmonicMapAnalysis)
+                  3a  harmonic maps Harmonic_<stage>.nc: the daily ensemble-mean fields (tws) of the members are
+                      reduced over all ranks into <stage>/Ens_mean/daily_output_<year>.nc, then rank 1 fits that
+                      series once (ensemble-mean maps only; statistical_analysis.HarmonicMapAnalysis, Fan 11 Oct 2026)
                   3b  RDA.post_processing(stages=[stage], harmonic=False) on rank 1: Res_<stage>.h5 and, for the DA,
                       the GRACE files; the other ranks wait.
                   A failure in step 3 is reported but does not abort the job (the collected files are complete);
@@ -616,34 +627,17 @@ class RDA:
                          variable=WaterGap_storage_variables.tws.name, style='pixel')
 
     @staticmethod
-    def increment_diagnosis(tag=None, event_threshold_mm=40.0):
+    def da_evaluation(tag=None, reference='previous', extra_files=None, thresholds=None, diagnosis=True):
         """
-        Diagnosis of the assimilation increments from the collected basin time series (needs post_processing):
-        A. mean increment per window vs drift inside the windows, per storage (filter-model tug of war)
-        B. windows with a basin-mean increment above event_threshold_mm in one storage, sub-basin breakdown
-        C. cross-member correlation of every storage with TWS in OL and DA
-        D. yearly maxima / minima of the window-mean TWS anomaly (OL, DA, GRACE)
-        Written to Res/<case>/figures/da_increment_diagnosis_<tag>.{txt,json} and da_increments_<tag>.png.
-        """
-        from src_DA.configure_DA import config_DA
-        from src_postprocessing.da_increment_diagnosis import run_diagnosis
-
-        configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
-        res_dir = Path(configDA.basic.res_permanent) / RDA.case
-        return run_diagnosis(res_dir=res_dir, obs_file=Path(configDA.obs.dir) / ('%s_obs_GRACE.hdf5' % RDA.basin),
-                             out_dir=res_dir / 'figures', tag=tag or RDA.case, nens=RDA.ens,
-                             start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
-                             event_threshold_mm=event_threshold_mm)
-
-    @staticmethod
-    def da_evaluation(tag=None, reference='previous', extra_files=None, thresholds=None):
-        """
-        Standard evaluation report of the run (needs post_processing; best after increment_diagnosis, whose output
-        is then archived with it). Written to Res/<case>/evaluation/<tag>/:
+        Standard evaluation report of the run (needs post_processing). Written to Res/<case>/evaluation/<tag>/:
           summary.txt / summary.json   fit to GRACE (overall, by season, per sub-basin, key months), trends,
                                        gain, forecast spread, chi^2, comparison with the reference run, warnings
-          fig1..fig5                   basin series, seasonal correction per storage, groundwater drift,
-                                       sub-basins, filter health
+          diagnosis.txt                increment diagnosis (diagnosis=True): A. increment vs model drift per
+                                       storage and where the long-term correction lands, B. large-increment
+                                       windows with sub-basin breakdown, C. storage-TWS correlation OL vs DA,
+                                       D. yearly peaks of OL / DA / GRACE
+          fig1..fig6                   basin series, seasonal correction per storage, groundwater drift,
+                                       sub-basins, filter health, increments per window
           DA_setting.json, logs/       copies of the configuration and of the filter / clipping / adaptive-inflation
                                        logs and the DA rank logs (parallel_logs/DA/rank_k.log); DA_output/<case> is
                                        temporary and overwritten by the next run
@@ -661,7 +655,7 @@ class RDA:
                             da_output_dir=Path(configDA.basic.DA_output_temp_dir) / RDA.case,
                             setting_file=Path(RDA.setting_dir) / 'DA_setting.json', reference=reference,
                             start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
-                            thresholds=thresholds, figures_dir=res_dir / 'figures',
+                            thresholds=thresholds, figures_dir=res_dir / 'figures', diagnosis=diagnosis,
                             extra_files=list(extra_files or []) +
                             sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
 

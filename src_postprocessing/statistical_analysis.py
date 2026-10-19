@@ -29,6 +29,8 @@ class BasinAverageAnalysis:
 
         return self
 
+    BLOCK_DAYS = 31             # days read per block in get_basin_average (memory, not results)
+
     def get_basin_average(self):
         """
         area-weighted (cos lat) mean of every variable over the basin and every sub-basin -> basin_ts_<stage>.h5
@@ -44,14 +46,14 @@ class BasinAverageAnalysis:
         res = {}
         for key in self.__variable_list:
             da = self.ds[key]
-            '''one dask chunk (= one yearly file) at a time: a global variable over 18 years would be ~14 GB per rank'''
-            t_axis = da.get_axis_num('time')
-            sizes = da.chunks[t_axis] if da.chunks is not None else (n_time,)
-            parts, t0 = [], 0
-            for n in sizes:
+            '''fixed blocks of BLOCK_DAYS days whatever the file chunking: a global variable over 18 years would be
+            ~14 GB per rank, one block is ~32 MB (float32); the unit means are exact for any block size'''
+            parts = []
+            for t0 in range(0, n_time, self.BLOCK_DAYS):
+                n = min(self.BLOCK_DAYS, n_time - t0)
                 block = da.isel(time=slice(t0, t0 + n)).values.reshape(n, -1)   # (days, lat*lon)
                 parts.append(np.asarray(W @ block.T))                           # (n_key, days)
-                t0 += n
+                del block
             means = np.concatenate(parts, axis=1)
             res[key] = {k: means[r].copy() for r, k in enumerate(keys)}
 
@@ -102,7 +104,9 @@ class BasinAverageAnalysis:
             # combine='by_coords' automatically concatenates the datasets along the coordinate dimensions (like time)
             # parallel=False: opening the files from several dask threads calls HDF5 concurrently, which can crash a
             # non-thread-safe HDF5 build (seen as "NetCDF: HDF error" / segfaults); it gives no speed-up for ~18 files
-            ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=False, chunks={"time": 365})
+            # chunks of one month: on the global grid a one-year chunk of one variable is ~380 MB (float32) per
+            # rank and the 31 ranks of collect_and_statistics share one node (OOM on the 96 GB node, 11 Oct 2026)
+            ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=False, chunks={"time": 31})
 
             # restrict to the requested period: the yearly files may extend beyond end_date (e.g. an OL run
             # that is longer than the DA period), and the basin time series must match the date range exactly
@@ -334,8 +338,13 @@ class HarmonicMapAnalysis:
                                                            average an amplitude/phase)
         <var>_<quantity>_ensspread  dims (lat, lon)        std across members 1..N (circular
                                                            std for phases)                    [per_member only]
-    per_member : True  = fit every member (Ens_0..N) and the ensemble mean (default)
-                 False = fit only the ensemble-mean series; Ens_0 is not read, no (ens) maps and no spread
+    per_member : False = (default, Fan 11 Oct 2026) the daily ENSEMBLE-MEAN fields of members 1..N are written first
+                         (ensemble_mean_files -> Res/<case>/<stage>/Ens_mean/daily_output_YYYY.nc, a product of its
+                         own) and the harmonic fit is done ONCE on that series by the root rank: only the
+                         <var>_<quantity>_ensmean maps, no (ens) maps and no spread; memory is one yearly block per
+                         rank for the mean and one series on the root for the fit, whatever the number of members
+                 True  = fit every member (Ens_0..N) as well (per-member maps + spread; the old path, ~4 GB per
+                         rank on the global grid)
     Parallel (run): comm = an MPI communicator -> members are spread over its ranks (rank r takes members
                  r, r+size, ...), the maps are gathered and the ensemble sum reduced on `root`, which writes the
                  file; every rank of comm must call run(). Without comm, n_workers > 1 uses a process pool
@@ -346,7 +355,7 @@ class HarmonicMapAnalysis:
     """
 
     def __init__(self, res_dir, case: str, ens: int, date_begin: str, date_end: str,
-                 variables=(WaterGap_storage_variables.tws.name,), components=None, per_member=True):
+                 variables=(WaterGap_storage_variables.tws.name,), components=None, per_member=False):
         from src_auxiliary.ts import decomposition
         self.res_dir = Path(res_dir)
         self.case = case
@@ -442,6 +451,7 @@ class HarmonicMapAnalysis:
         return self._fit_columns(a[:, cols], cols, tfrac, (n_lat, n_lon))
 
     FIT_BLOCK = 8000            # columns per least-squares call: bounds the float64 temporaries of the fit
+    REDUCE_COLS = 4000          # cells per MPI reduce of the ensemble-sum series (memory, not results)
 
     def _fit_columns(self, obs_cols, cols, tfrac: np.ndarray, shape) -> dict:
         """
@@ -566,15 +576,119 @@ class HarmonicMapAnalysis:
                 take(self._fit_member(stage, ens_id))
         return local
 
+    MEAN_DIR = 'mean'           # Res/<case>/<stage>/Ens_mean: daily ensemble-mean fields of members 1..N
+    MEAN_BLOCK_DAYS = 31        # days per MPI reduce in ensemble_mean_files (memory, not results)
+
+    def ensemble_mean_files(self, stage: Stage, comm=None, root=0, overwrite=True):
+        """
+        Daily ensemble-mean fields of members 1..N (variables of this analysis) -> Res/<case>/<stage>/Ens_mean/
+        daily_output_YYYY.nc, same layout as the member files (float32; a cell that is NaN in one member is NaN).
+        MPI: rank r holds member r (1 <= r <= N; rank 0 = the unperturbed member and ranks > N contribute zeros),
+        the sum is reduced to `root` in blocks of MEAN_BLOCK_DAYS days (one block = ~32 MB per variable on the global
+        grid), root writes the file. Serial (comm None): the members are read one after the other, one year at a time.
+        Returns the list of the written (or existing) yearly files.
+        """
+        import pandas as pd
+        rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
+        years = list(pd.date_range(self.date_begin, self.date_end).year.unique())
+        out_dir = self._member_dir(stage, self.MEAN_DIR)
+        if rank == root:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        files = []
+        for year in years:
+            fn_out = out_dir / f'daily_output_{year}.nc'
+            files.append(fn_out)
+            exists = fn_out.exists()
+            if comm is not None:
+                exists = comm.bcast(exists, root=root)
+            if exists and not overwrite:
+                continue
+            if comm is None:
+                acc = None
+                for k in range(1, self.ens + 1):
+                    with xr.open_dataset(self._member_dir(stage, k) / f'daily_output_{year}.nc', cache=False) as ds:
+                        d = ds[self.variables].sortby('time').load()
+                    acc = d.astype('float64') if acc is None else acc + d.astype('float64')
+                mean = (acc / self.ens).astype('float32')
+            else:
+                from mpi4py import MPI
+                mine = 1 <= rank <= self.ens
+                '''every rank opens a file of the same layout (its own member, or Ens_1 for the ranks without one),
+                lazily: only the coordinates and the shape are needed on the ranks that contribute zeros'''
+                fn = self._member_dir(stage, rank if mine else 1) / f'daily_output_{year}.nc'
+                with xr.open_dataset(fn, cache=False) as ds:
+                    ds = ds[self.variables].sortby('time')
+                    n_t = ds.sizes['time']
+                    mean = None
+                    if rank == root:
+                        mean = xr.Dataset({v: (ds[v].dims, np.zeros(ds[v].shape, dtype=np.float32), ds[v].attrs)
+                                           for v in self.variables}, coords=ds.coords, attrs=ds.attrs)
+                    for v in self.variables:
+                        t_axis = ds[v].get_axis_num('time')
+                        for t0 in range(0, n_t, self.MEAN_BLOCK_DAYS):
+                            sl = slice(t0, min(t0 + self.MEAN_BLOCK_DAYS, n_t))
+                            if mine:
+                                blk = np.ascontiguousarray(ds[v].isel(time=sl).values, dtype=np.float64)
+                            else:
+                                shp = list(ds[v].shape); shp[t_axis] = sl.stop - sl.start
+                                blk = np.zeros(shp, dtype=np.float64)
+                            recv = np.empty_like(blk) if rank == root else None
+                            comm.Reduce(blk, recv, op=MPI.SUM, root=root)
+                            if rank == root:
+                                idx = [slice(None)] * blk.ndim; idx[t_axis] = sl
+                                mean[v].values[tuple(idx)] = (recv / self.ens).astype(np.float32)
+                            del blk, recv
+            if rank == root:
+                mean.attrs.update({'ensemble_mean_of': 'members 1..%d' % self.ens, 'stage': stage.name,
+                                   'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+                mean.to_netcdf(fn_out, encoding={v: {'zlib': True, 'complevel': 1} for v in self.variables})
+                print(f'  ensemble mean {stage.name} {year}: {fn_out}', flush=True)
+            if comm is not None:
+                comm.Barrier()
+        return files
+
+    def _run_mean(self, stage: Stage, save=True, comm=None, root=0):
+        """per_member=False: ensemble-mean files (all ranks), then ONE fit of the mean series on `root`"""
+        rank = comm.Get_rank() if comm is not None else 0
+        err = None
+        try:
+            self.ensemble_mean_files(stage, comm=comm, root=root)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            err = f'rank {rank}: {type(e).__name__}: {e}'
+        if comm is not None:
+            errs = [e for e in comm.allgather(err) if e]
+            if errs:
+                raise RuntimeError('ensemble mean failed on ' + '; '.join(errs))
+        elif err:
+            raise RuntimeError('ensemble mean failed: ' + err)
+        if rank != root:
+            return None
+        lat, lon, time, data = self._load_member_columns(stage, self.MEAN_DIR)
+        tfrac = self._year_fraction(time)
+        data_vars = {}
+        for v in self.variables:
+            cols, d = data[v]
+            for q, arr in self._fit_columns(d, cols, tfrac, (lat.size, lon.size)).items():
+                data_vars[f'{v}_{q}_ensmean'] = (('lat', 'lon'), arr, {'units': self._units(q),
+                                                 'description': 'fit of the ensemble-mean series (members 1..N)'})
+            del d
+        return self._to_dataset(stage, lat, lon, data_vars, save)
+
     def run(self, stage: Stage, save=True, comm=None, root=0, n_workers=1):
         """
         Harmonic maps of one stage -> Res/<case>/Harmonic_<stage>.nc (see the class docstring).
+        per_member=False (default): _run_mean - ensemble-mean files, then one fit on `root` (the other ranks of comm
+                    return None); with comm every rank must call run().
         comm      : MPI communicator; all its ranks call run(), members are spread over the ranks, `root` writes
                     the file and returns the Dataset (the other ranks return None). An error on any rank is raised
                     on every rank (no hang).
         n_workers : without comm, number of processes (one member per task); 1 = serial
         """
-        ids_all = list(range(0 if self.per_member else 1, self.ens + 1))
+        if not self.per_member:
+            return self._run_mean(stage, save=save, comm=comm, root=root)
+        ids_all = list(range(0, self.ens + 1))
         rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
         if rank == root:
             mode = (f'MPI over {size} ranks' if comm is not None else
@@ -622,14 +736,27 @@ class HarmonicMapAnalysis:
                 has_all = np.empty_like(has)
                 comm.Allreduce(has, has_all, op=MPI.MAX)
                 cols = np.flatnonzero(has_all)
-                send = np.zeros((shp[0], cols.size), dtype=np.float64)            # rank without members: 0
+                '''the ensemble sum of the (time, cells) series is reduced in blocks of REDUCE_COLS cells: the full
+                float64 buffer is ~1 GB per rank on the global grid (1826 days x 67420 land cells), only the root
+                holds the whole sum; a rank without members (or without data for a cell) contributes 0 / NaN'''
+                pos = None
                 if local['sums'][v] is not None:
                     c, d = local['sums'][v]
-                    send[:] = np.nan                                           # cells this rank has no data for
-                    send[:, np.searchsorted(cols, c)] = d
-                recv = np.empty_like(send) if rank == root else None
-                comm.Reduce(send, recv, op=MPI.SUM, root=root)
-                sums[v] = (cols, recv) if rank == root else None
+                    pos = np.searchsorted(cols, c)                              # column of every own cell in cols
+                recv_all = np.empty((shp[0], cols.size), dtype=np.float64) if rank == root else None
+                for b0 in range(0, cols.size, self.REDUCE_COLS):
+                    b1 = min(b0 + self.REDUCE_COLS, cols.size)
+                    send = np.zeros((shp[0], b1 - b0), dtype=np.float64)
+                    if pos is not None:
+                        send[:] = np.nan
+                        sel = (pos >= b0) & (pos < b1)
+                        send[:, pos[sel] - b0] = d[:, sel]
+                    recv = np.empty_like(send) if rank == root else None
+                    comm.Reduce(send, recv, op=MPI.SUM, root=root)
+                    if rank == root:
+                        recv_all[:, b0:b1] = recv
+                    del send, recv
+                sums[v] = (cols, recv_all) if rank == root else None
             if rank != root:
                 return None
             maps = {}
@@ -662,8 +789,11 @@ class HarmonicMapAnalysis:
                     data_vars[f'{v}_{q}_ensmean'] = (('lat', 'lon'), arr, {'units': self._units(q),
                                                      'description': 'fit of the ensemble-mean series (members 1..N)'})
 
+        return self._to_dataset(stage, lat, lon, data_vars, save)
+
+    def _to_dataset(self, stage: Stage, lat, lon, data_vars: dict, save=True) -> xr.Dataset:
         coords = {'lat': lat, 'lon': lon}
-        if self.per_member:
+        if any(len(v[0]) == 3 for v in data_vars.values()):
             coords['ens'] = np.arange(self.ens + 1)
         out = xr.Dataset(data_vars, coords=coords,
                          attrs={'case': self.case, 'stage': stage.name, 'period': f'{self.date_begin} to {self.date_end}',

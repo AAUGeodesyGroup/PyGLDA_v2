@@ -3,15 +3,16 @@ Figures of a GLOBAL PyGLDA v2 assimilation run (PyGMT), drawn from the report of
 src_postprocessing.global_evaluation (Res/<case>/evaluation_global/<tag>/), the unit shapefile and the harmonic
 maps Res/<case>/Harmonic_{OL,DA,GRACE}.nc. Written into the same report folder:
 
-    gfig1_unit_maps.png        unit maps (each unit filled with its value): RMS reduction 1 - RMS_DA / RMS_OL,
-                               correlation DA - GRACE, median chi^2, trend DA - OL
+    gfig1_unit_maps.png        unit maps (each unit filled with its value), every quantity side by side on ONE
+                               shared colour scale (Fan, 11 Oct 2026: no difference maps, no reduction ratios):
+                               RMS vs GRACE OL | DA + RMS ratio DA / OL [%], correlation with GRACE OL | DA,
+                               trend GRACE | OL | DA, filter median chi^2 | gain
     gfig2_group_series.png     area-weighted window series GRACE / OL / DA: global land and the HydroBASINS regions
     gfig3_harmonic_maps.png    per 0.5-degree cell (pixel mode): trend, annual amplitude and day of the annual peak
                                of TWS for OL | DA | GRACE (ensemble means), as Visualization.harmonic_maps
-    gfig3b_harmonic_DA-OL.png  the same three quantities as DA - OL (circular difference for the day of the peak)
     gfig4_filter_health.png    distribution of the unit chi^2, innovation vs. its expected size, added inflation
                                spread by region
-    gfig5_rms_vs_snr_area.png  RMS reduction of the units against their GRACE SNR and their area
+    gfig5_rms_vs_snr_area.png  RMS vs GRACE of the units (OL and DA) against their GRACE SNR and their area
 
 Usage:  GDA.visualization(tag='pilot1')   (src_FlowControl/Global_DA.py), or
         from src_postprocessing.global_visualization import plot_global_run
@@ -138,30 +139,73 @@ def _limits(arrays, symmetric):
 
 # ------------------------------------------------------------------------------------------------ figure 1
 def _fig_unit_maps(pygmt, units, polys, tmp, out, width, dpi):
+    """
+    Unit maps in rows; the panels of a row share one colour scale and one colour bar, so OL, DA and GRACE are
+    compared directly (no difference maps):
+        row 1  RMS vs GRACE [mm]            OL | DA           0 .. 98th percentile of the OL values
+               + RMS ratio DA / OL [%]      own scale 0 .. 100
+        row 2  correlation with GRACE [-]   OL | DA           0.5 .. 1
+        row 3  trend [mm/yr]                GRACE | OL | DA   symmetric, 98th percentile of all three
+        row 4  filter                       median chi^2 (log10, 0.1 .. 10) | gain (0 .. 1)   (own scales)
+    """
     ids = _num(units, 'ID').astype(int)
-    trend_d = _num(units, 'trend_DA') - _num(units, 'trend_OL')
+    rms_ol, rms_da = _num(units, 'rms_OL'), _num(units, 'rms_DA')
+    rows = [                        # [(title, values)], cmap, (lo, hi) or None (2-98 %), symmetric, reverse, label
+        ([('RMS OL - GRACE', rms_ol), ('RMS DA - GRACE', rms_da)], 'batlow',
+         (0.0, float(np.nanpercentile(rms_ol[np.isfinite(rms_ol)], 98))), False, True, 'RMS vs. GRACE [mm]'),
+        ([('Correlation OL - GRACE', _num(units, 'corr_OL')), ('Correlation DA - GRACE', _num(units, 'corr_DA'))],
+         'batlow', (0.5, 1.0), False, False, 'correlation with GRACE [-]'),
+        ([('Trend GRACE', _num(units, 'trend_GRACE')), ('Trend OL', _num(units, 'trend_OL')),
+          ('Trend DA', _num(units, 'trend_DA'))], 'vik', None, True, False, 'trend [mm/yr]'),
+    ]
     chi2 = _num(units, 'chi2_median')
-    panels = [                      # title, values, cmap, fixed range (None: 2-98 %, symmetric), reverse, label
-        ('RMS reduction vs. GRACE', _num(units, 'rms_reduction'), 'vik', (-0.6, 0.6), True,
-         '1 - RMS@-DA@- / RMS@-OL@- [-]'),
-        ('Correlation DA - GRACE', _num(units, 'corr_DA'), 'batlow', (0.0, 1.0), False, 'correlation [-]'),
-        ('Median @~c@~@+2@+ of the innovations', np.log10(chi2), 'vik', (-1.0, 1.0), False,
-         'log@-10@- @~c@~@+2@+ [-]'),
-        ('Trend DA - OL', trend_d, 'vik', None, False, 'trend [mm/yr]')]
+    filter_row = [(('Median @~c@~@+2@+ of the innovations', np.log10(chi2)), 'vik', (-1.0, 1.0), False,
+                   'log@-10@- @~c@~@+2@+ [-]  (0 = consistent)'),
+                  (('Effective gain', _num(units, 'gain')), 'batlow', (0.0, 1.0), False, 'gain [-]')]
     height = width * 0.47
-    fig = pygmt.Figure()
-    for k, (title, val, cmap, rng, reverse, label) in enumerate(panels):
-        if k:
-            fig.shift_origin(xshift='%gc' % (width + 1.2) if k % 2 else '%gc' % -(width + 1.2),
-                             yshift='0c' if k % 2 else '-%gc' % (height + 4.0))
-        lo, hi = rng if rng is not None else _limits([val], True)
-        _cpt(pygmt, cmap, lo, hi, reverse)
+    gap, cbar_offset, cbar_block = 1.2, 1.1, 1.6
+    row_step = height + cbar_offset + cbar_block + 1.0
+
+    def panel(fig, title, val):
         fig.basemap(region=REGION, projection=PROJ.format(w=width), frame=['WSne+t%s' % title, 'xa60f30', 'ya30f15'])
         fig.coast(land=GREY_LAND, resolution='c')
         seg = _segments_file(polys, dict(zip(ids, val)), tmp)
-        fig.plot(data=seg, fill='+z', cmap=True, close=True, pen='0.1p,gray40')
-        fig.coast(shorelines='0.4p,gray30', borders='1/0.25p,gray60', resolution='c')
-        fig.colorbar(position='JBC+w%gc/0.3c+o0c/1.1c+h' % width, frame=['xaf+l%s' % label])
+        fig.plot(data=seg, fill='+z', cmap=True, close=True, pen='0.05p,gray55')
+        fig.coast(shorelines='0.3p,gray30', resolution='c')
+
+    fig = pygmt.Figure()
+    n_prev = 1
+    for i, (panels, cmap, rng, symmetric, reverse, label) in enumerate(rows):
+        n_col = len(panels)
+        lo, hi = rng if rng is not None else _limits([v for _, v in panels], symmetric)
+        _cpt(pygmt, cmap, lo, hi, reverse)
+        for j, (title, val) in enumerate(panels):
+            if i or j:
+                fig.shift_origin(xshift='%gc' % (width + gap) if j else '%gc' % -((n_prev - 1) * (width + gap)),
+                                 yshift='0c' if j else '-%gc' % row_step)
+            panel(fig, title, val)
+        x_centre = -(n_col - 1) * (width + gap) / 2 + width / 2        # origin is at the last panel of the row
+        fig.colorbar(position='x%gc/-%gc+w%gc/0.3c+h+jTC' % (x_centre, cbar_offset, min(n_col, 2) * width),
+                     frame=['xaf+l%s' % label])
+        n_prev = n_col
+        if i == 0:
+            '''third panel of row 1: the RMS ratio DA / OL in percent, own colour scale'''
+            fig.shift_origin(xshift='%gc' % (width + gap))
+            _cpt(pygmt, 'batlow', 0.0, 100.0, False)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ratio = np.where(rms_ol > 0, 100.0 * rms_da / rms_ol, np.nan)
+            panel(fig, 'RMS ratio DA / OL', ratio)
+            fig.colorbar(position='x%gc/-%gc+w%gc/0.3c+h+jTC' % (width / 2, cbar_offset, width),
+                         frame=['xa20f10+lRMS@-DA@- / RMS@-OL@- [%]'])
+            n_prev = 3
+    # row 4: two panels with their own colour scales
+    for j, ((title, val), cmap, (lo, hi), reverse, label) in enumerate(filter_row):
+        fig.shift_origin(xshift='%gc' % (width + gap) if j else '%gc' % -((n_prev - 1) * (width + gap)),
+                         yshift='0c' if j else '-%gc' % row_step)
+        _cpt(pygmt, cmap, lo, hi, reverse)
+        panel(fig, title, val)
+        fig.colorbar(position='x%gc/-%gc+w%gc/0.3c+h+jTC' % (width / 2, cbar_offset, width), frame=['xaf+l%s' % label])
+        n_prev = 1
     return _save(fig, out, 'gfig1_unit_maps', dpi)
 
 
@@ -224,16 +268,12 @@ def _pixel_grid(g):
 def _fig_harmonic_maps(pygmt, res_dir, out, width, dpi):
     """
     as Visualization.harmonic_maps(style='pixel'): one row per quantity, columns OL | DA | GRACE with one shared
-    colour scale (2-98 %, symmetric for the trend) and one colour bar centred under the row.
-    gfig3b: DA - OL of the same quantities, one row, own colour bar per panel.
+    colour scale (2-98 %, symmetric for the trend) and one colour bar centred under the row. (The former gfig3b with
+    the DA - OL differences was dropped on 11 Oct 2026: Fan wants OL, DA and GRACE side by side, no differences.)
     """
     presentation = {'trend': ('trend [mm/yr]', 'vik', True, None),
                     'annual_amp': ('annual amplitude [mm]', 'batlow', False, None),
                     'annual_peak_doy': ('annual peak [day of year]', 'romaO', False, (1.0, 365.25))}
-    diff_label = {'trend': 'trend [mm/yr]', 'annual_amp': 'annual amplitude [mm]',
-                  'annual_peak_doy': 'annual peak [days]'}
-    diff_title = {'trend': 'DA - OL: trend', 'annual_amp': 'DA - OL: annual amplitude',
-                  'annual_peak_doy': 'DA - OL: annual peak'}
     if _harmonic(res_dir, 'OL', 'trend') is None or _harmonic(res_dir, 'DA', 'trend') is None:
         print('  [global visualization] no Harmonic_OL/DA.nc in %s - harmonic maps skipped' % res_dir)
         return []
@@ -247,15 +287,13 @@ def _fig_harmonic_maps(pygmt, res_dir, out, width, dpi):
         fig.coast(shorelines='0.4p,gray30', borders='1/0.25p,gray60', resolution='c')
 
     '''step-1: OL | DA | GRACE'''
-    fig, diffs = pygmt.Figure(), {}
+    fig = pygmt.Figure()
     for i, q in enumerate(presentation):
         label, cmap, diverging, fixed = presentation[q]
         grids = [(s, _harmonic(res_dir, s, q)) for s in ('OL', 'DA', 'GRACE')]
         grids = [(s, g) for s, g in grids if g is not None]
         n_col = len(grids)
         vmin, vmax = fixed if fixed is not None else _limits([g.values for _, g in grids], diverging)
-        ol, da = grids[0][1], grids[1][1]
-        diffs[q] = (da - ol + 182.625) % 365.25 - 182.625 if q == 'annual_peak_doy' else da - ol
         _cpt(pygmt, cmap, vmin, vmax)
         for j, (name, g) in enumerate(grids):
             if i or j:
@@ -267,18 +305,6 @@ def _fig_harmonic_maps(pygmt, res_dir, out, width, dpi):
                      frame=['xaf+l%s' % label])
     written = [_save(fig, out, 'gfig3_harmonic_maps', dpi)]
 
-    '''step-2: DA - OL (wider panels, so that the colour bars keep the font size of step-1)'''
-    width = 1.25 * width
-    fig = pygmt.Figure()
-    for j, q in enumerate(presentation):
-        if j:
-            fig.shift_origin(xshift='%gc' % (width + gap))
-        lo, hi = _limits([diffs[q].values], True)
-        _cpt(pygmt, 'vik', lo, hi)
-        panel(fig, diffs[q], diff_title[q])
-        fig.colorbar(position='x%gc/-%gc+w%gc/0.3c+h+jTC' % (width / 2, cbar_offset, width),
-                     frame=['xaf+l%s' % diff_label[q]])
-    written.append(_save(fig, out, 'gfig3b_harmonic_DA-OL', dpi))
     return written
 
 
@@ -329,29 +355,25 @@ def _fig_filter_health(pygmt, units, out, dpi):
 
 # ------------------------------------------------------------------------------------------------ figure 5
 def _fig_rms_vs_snr_area(pygmt, units, out, dpi):
-    red = _num(units, 'rms_reduction')
+    """RMS vs GRACE of every unit, OL (grey) and DA (blue), against the GRACE SNR and the unit area (log x)"""
+    rms_ol, rms_da = _num(units, 'rms_OL'), _num(units, 'rms_DA')
     snr = _num(units, 'SNR')
     area = _num(units, 'SUB_AREA')
-    reg = np.array([(r.get('REGION') or '?').split(',')[0] for r in units])
-    colors = ['30/120/214', '235/104/52', '27/175/122', '237/161/0', '140/80/170', '200/60/80', '90/90/90',
-              '0/160/200']
-    lo = min(-0.5, _nice(abs(np.nanpercentile(red, 1))) * -1)
+    ok_all = np.isfinite(rms_ol) & np.isfinite(rms_da)
+    ymax = _nice(np.nanpercentile(rms_ol[ok_all], 99) * 1.1)
     pw, ph = 9.0, 6.5
     fig = pygmt.Figure()
     for k, (x, xl) in enumerate([(snr, 'GRACE signal-to-noise ratio of the unit'),
                                  (area / 1e3, 'unit area [10@+3@+ km@+2@+]')]):
-        ok = np.isfinite(x) & (x > 0) & np.isfinite(red)
+        ok = ok_all & np.isfinite(x) & (x > 0)
         if k:
             fig.shift_origin(xshift='%gc' % (pw + 1.8))
         xmin, xmax = np.nanmin(x[ok]) * 0.8, np.nanmax(x[ok]) * 1.25
-        fig.basemap(region=[xmin, xmax, lo, 1.0], projection='X%gcl/%gc' % (pw, ph),
-                    frame=['WSne+tRMS reduction vs. %s' % ('SNR' if k == 0 else 'area'),
-                           'xa2f3+l%s' % xl, 'yaf+l1 - RMS@-DA@- / RMS@-OL@-'])
-        fig.plot(x=[xmin, xmax], y=[0, 0], pen='1.5p,black,--')
-        for i, rname in enumerate(sorted(set(reg))):
-            m = ok & (reg == rname)
-            fig.plot(x=x[m], y=red[m], style='c0.16c', fill=colors[i % len(colors)] + '@20',
-                     label=REGION_NAMES.get(rname, rname) if k == 1 else None)
+        fig.basemap(region=[xmin, xmax, 0, ymax], projection='X%gcl/%gc' % (pw, ph),
+                    frame=['WSne+tRMS vs. GRACE against %s' % ('SNR' if k == 0 else 'area'),
+                           'xa2f3+l%s' % xl, 'yaf+lRMS vs. GRACE [mm]'])
+        fig.plot(x=x[ok], y=rms_ol[ok], style='c0.16c', fill='140/140/140@30', label='OL' if k == 1 else None)
+        fig.plot(x=x[ok], y=rms_da[ok], style='c0.16c', fill='42/120/214@20', label='DA' if k == 1 else None)
         if k == 1:
-            fig.legend(position='JMR+o0.3c/0c', box='+gwhite')
+            fig.legend(position='JTR+o0.3c/0.3c', box='+gwhite')
     return _save(fig, out, 'gfig5_rms_vs_snr_area', dpi)

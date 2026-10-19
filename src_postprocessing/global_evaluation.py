@@ -8,11 +8,15 @@ statistics of a unit are the same as in the regional report (da_evaluation.windo
     Res/<case>/evaluation_global/<tag>/
         unit_metrics.csv     one row per unit (ID 1..n): fit of OL and DA to GRACE (RMS, correlation, RMS
                              reduction 1 - RMS_DA / RMS_OL), filter statistics (median chi^2, gain, forecast spread,
-                             GRACE sigma, innovation), trends of GRACE / OL / DA, the mean absolute increment per
-                             storage, and the unit attributes of the shapefile (region, basin class, SNR, area,
-                             lake / wetland / glacier fractions, endorheic, centroid)
-        group_metrics.csv    the same fit numbers for area-weighted groups of units: global, HydroBASINS region,
-                             basin class, SNR class, latitude band
+                             GRACE sigma, innovation), trends of GRACE / OL / DA, the increment diagnosis per storage
+                             (mean and mean absolute increment per window, drift of DA - OL inside the windows,
+                             trend of the cumulative increment and of DA - OL = where the long-term correction
+                             lands, share of the TWS correction trend per storage group, cross-member correlation
+                             of the storage with TWS in OL and DA; da_evaluation.storage_increments) and the unit
+                             attributes of the shapefile (region, basin class, SNR, area, lake / wetland / glacier
+                             fractions, endorheic, centroid)
+        group_metrics.csv    the same fit numbers and the area-weighted correction trends per storage group for
+                             groups of units: global, HydroBASINS region, basin class, SNR class, latitude band
         group_series.csv     the area-weighted window series (GRACE, OL, DA) of every group
         summary.json / summary.txt   overview, filter health, clipping, warnings
         DA_setting.json, logs/       copies of the configuration and the filter / clipping / inflation logs
@@ -27,9 +31,11 @@ from pathlib import Path
 import numpy as np
 import h5py
 
-from src_postprocessing.da_evaluation import (COMP, _rms, _corr, _trend, _decyear, _load_obs, _read_threshold_csvs,
-                                              _read_adaptive_log, _clipping_summary, _filter_log_summary,
-                                              _method_string, archive_logs, observation_windows, window_statistics)
+from src_postprocessing.da_evaluation import (COMP, SURFACE, _rms, _corr, _trend, _decyear, _load_obs, _load_res,
+                                              _read_threshold_csvs, _read_adaptive_log, _clipping_summary,
+                                              _filter_log_summary, _method_string, archive_logs, observation_windows,
+                                              window_statistics, storage_increments, increment_shares,
+                                              storage_tws_correlation)
 
 THRESHOLDS = dict(chi2_low=0.5, chi2_high=2.0,         # median chi^2 of a unit outside this range
                   worse_ratio=1.0,                     # RMS(DA - GRACE) > ratio x RMS(OL - GRACE)
@@ -40,23 +46,13 @@ SNR_CLASSES = [('SNR < 3', 0.0, 3.0), ('SNR 3-6', 3.0, 6.0), ('SNR >= 6', 6.0, n
 LAT_BANDS = [('south of 30S', -90.0, -30.0), ('30S-0', -30.0, 0.0), ('0-30N', 0.0, 30.0), ('30N-60N', 30.0, 60.0),
              ('north of 60N', 60.0, 90.0)]
 UNIT_ATTRS = ('NAME', 'REGION', 'BAS_CLASS', 'SNR', 'SUB_AREA', 'LAKE_FRAC', 'WET_FRAC', 'GLAC_EFF', 'ENDO')
+# storages of the global diagnosis: the state vector of the global DA (gw, soil, snow, river, local + global wetlands)
+DIAG_STORAGES = [c[0] for c in COMP] + ['localwetlandstor', 'globalwetlandstor']
+SHARE_GROUPS = {'groundwstor': ['groundwstor'], 'soilmoist': ['soilmoist'], 'swe': ['swe'],
+                'surface': [v for v in SURFACE if v in DIAG_STORAGES]}
 
 
 # ------------------------------------------------------------------------------------------------ loading
-def _load_daily(path, units, variables):
-    """dict[unit][var] -> (nmem, nday), members 1..N (member '0' = OL thread of the DA run, left out)"""
-    out = {}
-    with h5py.File(path, 'r') as f:
-        for u in units:
-            out[u] = {}
-            for v in variables:
-                key = '%s/%s' % (u, v)
-                if key in f:
-                    mem = sorted([m for m in f[key].keys() if m != '0'], key=int)
-                    out[u][v] = np.array([f[key][m][:] for m in mem])
-    return out
-
-
 def _unit_table(shp_path, n_unit):
     """attributes of the units 1..n from the shapefile (centroid lat/lon added); None when it is not available"""
     try:
@@ -117,12 +113,12 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
     out.mkdir(parents=True, exist_ok=True)
 
     # ---------------------------------------------------------------- data
-    durs, sig_sub, _ = _load_obs(obs_file)
+    durs, sig_sub, _, _, _ = _load_obs(obs_file)
     n_unit = sig_sub.shape[1]
     units = ['sub_basin_%d' % k for k in range(1, n_unit + 1)]
-    storages = [c[0] for c in COMP]
-    DA = _load_daily(res_dir / 'Res_DA.h5', units, storages + ['tws'])
-    OL = _load_daily(res_dir / 'Res_OL.h5', units, storages + ['tws'])
+    storages = DIAG_STORAGES
+    DA = _load_res(res_dir / 'Res_DA.h5', units, storages + ['tws'])
+    OL = _load_res(res_dir / 'Res_OL.h5', units, storages + ['tws'])
     with h5py.File(res_dir / ('GRACE_%s.h5' % basin), 'r') as g:
         GR = np.array([g['original/basin_%d' % k][:] for k in range(1, n_unit + 1)])       # (unit, epoch)
     nmem, nday = DA[units[0]]['tws'].shape
@@ -151,11 +147,18 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
                  spread_fc_median=float(np.median(s['sd_fc'])), sigma_GRACE_median=float(np.median(s['sig'])),
                  innovation_rms=_rms(s['d']), innovation_mean=float(np.mean(s['d'])),
                  trend_GRACE=_trend(tdec, s['gr']), trend_OL=_trend(tdec, s['ol']), trend_DA=_trend(tdec, s['da']))
-        for v in storages:                                         # mean |increment| of the storage per window
-            if v in DA[u] and v in OL[u]:
-                inc = [np.mean((DA[u][v][:, i0] - DA[u][v][:, i0 - 1]) - (OL[u][v][:, i0] - OL[u][v][:, i0 - 1]))
-                       for _, i0, _ in win]
-                r['abs_increment_%s' % v] = float(np.mean(np.abs(inc)))
+        # increment diagnosis per storage (da_evaluation.storage_increments): mean and mean |increment| per window
+        # [mm], drift of DA - OL inside the windows [mm/day], trend of the cumulative increment and of DA - OL [mm/yr]
+        INC = storage_increments(OL[u], DA[u], win, tdec, storages + ['tws'])
+        for v, x in INC.items():
+            m = x['inc'].mean(0)
+            r.update({'inc_mean_%s' % v: float(m.mean()), 'inc_abs_%s' % v: float(np.abs(m).mean()),
+                      'drift_%s' % v: float(x['drift'].mean()), 'inc_trend_%s' % v: x['inc_trend'],
+                      'state_trend_%s' % v: x['state_trend']})
+        for g, x in increment_shares(INC, SHARE_GROUPS).items():
+            r['share_%s' % g] = x['share']
+        for v, x in storage_tws_correlation(OL[u], DA[u]).items():
+            r.update({'corr_tws_%s_OL' % v: x['OL'], 'corr_tws_%s_DA' % v: x['DA']})
         if tab is not None:
             for a in UNIT_ATTRS + ('lat_c', 'lon_c'):
                 if a in tab:
@@ -178,6 +181,14 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
                           trend_DA=_trend(tdec, gser['da']),
                           median_unit_rms_reduction=float(np.nanmedian([rows[j]['rms_reduction'] for j in ix])),
                           median_unit_chi2=float(np.median([rows[j]['chi2_median'] for j in ix]))))
+        # area-weighted correction trends per storage group and their share of the TWS correction trend
+        st = {g: float(np.sum(w * np.array([sum(rows[j].get('state_trend_%s' % v, 0.0) for v in vs) for j in ix])))
+              for g, vs in SHARE_GROUPS.items()}
+        tot = float(np.sum(w * np.array([rows[j].get('state_trend_tws', np.nan) for j in ix])))
+        for g, t in st.items():
+            grows[-1]['state_trend_%s' % g] = t
+            grows[-1]['share_%s' % g] = t / tot if abs(tot) > 1e-9 else np.nan
+        grows[-1]['state_trend_tws'] = tot
 
     # ---------------------------------------------------------------- filter logs
     fsum, thr, alog = {}, [], []
@@ -216,6 +227,12 @@ def evaluate_global_run(res_dir, obs_file, out_root, tag=None, basin='GlobalBasi
     summ['filter_log'] = _filter_log_summary(fsum)
     summ['groups'] = {g['group']: {k: g[k] for k in ('n_units', 'rms_reduction', 'corr_DA', 'median_unit_chi2')}
                       for g in grows}
+    summ['correction_destination'] = {g: dict(state_trend=grows[0]['state_trend_%s' % g], share=grows[0]['share_%s' % g])
+                                      for g in SHARE_GROUPS}
+    summ['correction_destination']['tws'] = dict(state_trend=grows[0]['state_trend_tws'])
+    summ['correlation_tws_median'] = {v: dict(OL=float(np.nanmedian([r.get('corr_tws_%s_OL' % v, np.nan) for r in rows])),
+                                              DA=float(np.nanmedian([r.get('corr_tws_%s_DA' % v, np.nan) for r in rows])))
+                                      for v in storages if 'corr_tws_%s_OL' % v in rows[0]}
     summ['warnings'] = _warnings(rows, unit_chi2, summ, res_dir, TH)
     summ['archived'] = archive_logs(out, da_output_dir, setting_file, None, extra_files)
 
@@ -313,7 +330,14 @@ def _report_text(s, grows):
          'Filter: chi^2 median %(chi2_median_all)s (mean %(chi2_mean_all)s), unit-windows above the high limit '
          '%(frac_unit_windows_chi2_above_high)s, below the low limit %(frac_unit_windows_chi2_below_low)s; median gain '
          '%(gain_median)s, forecast spread %(spread_fc_median)s mm, GRACE sigma %(sigma_GRACE_median)s mm'
-         % s['filter'], '', 'Groups (area-weighted series):',
+         % s['filter'], '',
+         'Long-term correction (trend of DA-OL, area-weighted, %s mm/yr for TWS) lands in: ' %
+         s['correction_destination']['tws']['state_trend'] +
+         ', '.join('%s %s mm/yr (%s)' % (g, x['state_trend'], ('%.0f %%' % (100 * x['share'])) if x['share'] is not None
+                                        else '-') for g, x in s['correction_destination'].items() if g != 'tws'),
+         'Storage-TWS cross-member correlation, median over units (OL -> DA): ' +
+         ', '.join('%s %s -> %s' % (v, c['OL'], c['DA']) for v, c in s.get('correlation_tws_median', {}).items()),
+         '', 'Groups (area-weighted series):',
          '  %-34s %6s %9s %9s %9s %7s %7s %9s' % ('group', 'units', 'RMS_OL', 'RMS_DA', 'reduct.', 'corrOL', 'corrDA',
                                                   'unit chi2')]
     for g in grows:

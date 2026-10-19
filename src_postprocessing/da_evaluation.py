@@ -15,6 +15,8 @@ the Harmonic_*.nc maps). Each call writes one report folder
         fig3_groundwater_drift.png  monthly DA - OL groundwater, basin and sub-basins
         fig4_sub_basins.png         GRACE / OL / DA per sub-basin
         fig5_filter_health.png      chi^2 per window, forecast spread vs innovation, added spread, clipping
+        diagnosis.txt               increment diagnosis (tables A-D below), also under 'diagnosis' in summary.json
+        fig6_increments.png         basin-mean increment per window and storage (members and ensemble mean)
 and appends one line to Res/<case>/evaluation/runs_index.csv (one row per evaluated run).
 
 Numbers in the report
@@ -30,6 +32,18 @@ Numbers in the report
             more tightly than the GRACE error, chi^2 far from 1, clipping rates (Ens_k/threshold_monthly.csv),
             large single-cell increments / capped weights (filter_summary.json), the adaptive inflation at
             its limits (adaptive_inflation_log.csv).
+  diagnosis why the filter behaves as it does (evaluate_run(diagnosis=True), default):
+            A. tug of war: mean increment per window vs mean drift of DA - OL inside the windows, per storage
+               (increment + (window length - 1) x drift ~ 0 means the filter puts water in a store and the model
+               takes it out again before the next update); trend of the cumulative increment (what the filter put
+               in) and of DA - OL (what stayed) per storage = where the long-term correction lands.
+            B. events: windows whose basin-mean increment of one storage exceeds a threshold in any member, with the
+               sub-basin breakdown of the largest ones and the observation innovation.
+            C. correlations: cross-member correlation of every storage with TWS in OL and DA (negative in the DA =
+               the filter has made the storages compensate each other).
+            D. peaks: year-by-year maximum / minimum of the window-mean TWS anomaly (OL, DA, GRACE).
+            The increment of a storage is computed once, by storage_increments(), for both the regional and the
+            global report (src_postprocessing.global_evaluation).
 
 Usage:  RDA.da_evaluation(tag='run10', reference='run9')   (src_FlowControl/Regional_DA.py), or
         from src_postprocessing.da_evaluation import evaluate_run
@@ -47,6 +61,11 @@ plt.rcParams.update({'font.size': 12, 'font.weight': 'bold', 'axes.labelweight':
 
 COMP = [('groundwstor', 'Groundwater', '#2a78d6', 'o'), ('soilmoist', 'Soil moisture', '#eb6834', 's'),
         ('swe', 'Snow', '#1baf7a', '^'), ('riverstor', 'River', '#eda100', 'D')]
+# all WaterGAP storages of the collected series (the diagnosis uses every one that is present)
+STORAGES = ['groundwstor', 'soilmoist', 'swe', 'riverstor', 'canopystor', 'locallakestor', 'globallakestor',
+            'localwetlandstor', 'globalwetlandstor', 'reservoirstor']
+SURFACE = ['riverstor', 'locallakestor', 'globallakestor', 'localwetlandstor', 'globalwetlandstor', 'reservoirstor']
+DIAG_SHOW = ['groundwstor', 'soilmoist', 'riverstor', 'tws']        # storages in the event table and fig6
 C_GR, C_OL, C_DA, C_REF = 'k', '#8c8c8c', '#2a78d6', '#eb6834'
 SEASONS = {'DJF': (12, 1, 2), 'MAM': (3, 4, 5), 'JJA': (6, 7, 8), 'SON': (9, 10, 11)}
 KEY_MONTHS = ['2003-08', '2006-03', '2006-04', '2006-05', '2007-09', '2007-10', '2010-04', '2011-04', '2012-09',
@@ -59,6 +78,8 @@ THRESHOLDS = dict(trend_cell_mm_yr=20.0,          # |trend| of a grid cell (OL o
                   chi2_low=0.5, chi2_high=2.0,    # median chi^2 outside this range
                   clip_frac=0.05,                 # fraction of clipped cells of one storage in one month
                   single_increment_mm=1000.0,     # largest single-cell increment
+                  event_increment_mm=40.0,        # diagnosis B: |basin-mean increment| of one storage in one member
+                  n_events_detail=5,              # diagnosis B: events listed with their sub-basin breakdown
                   n_list=8)                       # rows listed per warning
 
 
@@ -110,15 +131,18 @@ def _load_res(path, units, variables):
 
 
 def _load_obs(obs_file):
+    """observation windows, GRACE sigma per sub-basin / unit and for the basin, the unperturbed observations
+    ens_0 (nobs, nsub; model datum) and the area weights of the sub-basins"""
     with h5py.File(obs_file, 'r') as o:
         durs = [[dt.datetime.strptime(x, '%Y-%m-%d').date() for x in d.split('_')]
                 for d in o['duration'][:].astype(str)]
         cov = o['cov'][:]
         area = o['sub_basin_area'][:] if 'sub_basin_area' in o else np.ones(cov.shape[1])
+        Y = o['ens_0'][:] if 'ens_0' in o else None
     w = area / area.sum()
     sig_sub = np.sqrt(np.einsum('kjj->kj', cov))
     sig_basin = np.sqrt(np.einsum('i,kij,j->k', w, cov, w))
-    return durs, sig_sub, sig_basin
+    return durs, sig_sub, sig_basin, Y, w
 
 
 def _read_threshold_csvs(da_output_dir):
@@ -178,10 +202,53 @@ def window_statistics(ol_daily, da_daily, grace, sig, win):
                 sd_fc=sdf, chi2=chi2, sig=sig)
 
 
+def storage_increments(ol_u, da_u, win, tdec, storages=None):
+    """
+    Increments of every storage of one unit (shared by evaluate_run and src_postprocessing.global_evaluation).
+    ol_u, da_u : dict var -> (nmem, nday) daily series of the members;  win : observation_windows(...);
+    tdec : decimal year of the window centres.
+    increment = jump of DA - OL on the first day of a window [mm], (nmem, nwin); drift = mean daily change of
+    DA - OL on the other days [mm/day] per member (drift_OL: the same for the OL alone); cum = cumulative
+    ensemble-mean increment over the windows = the water the filter has placed in the storage so far; inc_trend =
+    its linear trend [mm/yr] (what the filter puts in), state_trend = trend of the window-mean DA - OL [mm/yr]
+    (what stays in the storage after the model has reacted). Summed over the storages, state_trend is the trend
+    of the TWS correction, so the shares state_trend / state_trend(tws) say where the long-term correction lands.
+    Returns dict var -> dict(inc, drift, drift_OL, cum, inc_trend, state_trend), var in `storages` (default: every
+    storage of STORAGES present in both stages, plus 'tws').
+    """
+    nday = next(iter(da_u.values())).shape[1]
+    starts = np.array([i0 for _, i0, _ in win])
+    inside = np.setdiff1d(np.arange(1, nday), starts)
+    out = {}
+    for v in (storages or STORAGES + ['tws']):
+        if v not in da_u or v not in ol_u:
+            continue
+        dd = np.diff(da_u[v] - ol_u[v], axis=1)                   # dd[:, i-1] = change from day i-1 to day i
+        inc = dd[:, starts - 1]
+        cum = np.cumsum(inc.mean(0))
+        corr = np.array([(da_u[v][:, i0:i1 + 1] - ol_u[v][:, i0:i1 + 1]).mean() for _, i0, i1 in win])
+        out[v] = dict(inc=inc, drift=dd[:, inside - 1].mean(1), drift_OL=np.diff(ol_u[v], axis=1)[:, inside - 1].mean(1),
+                      cum=cum, inc_trend=_trend(tdec, cum), state_trend=_trend(tdec, corr))
+    return out
+
+
+def increment_shares(INC_u, groups=None):
+    """share of the TWS correction trend (state_trend) that lands in each storage group; groups: name -> storages
+    (default groundwater / soil / snow / surface); the shares sum to 1 when the groups cover the TWS"""
+    groups = groups or {'groundwstor': ['groundwstor'], 'soilmoist': ['soilmoist'], 'swe': ['swe'],
+                        'surface': SURFACE}
+    tot = INC_u['tws']['state_trend'] if 'tws' in INC_u else sum(INC_u[v]['state_trend'] for v in INC_u)
+    out = {}
+    for g, vs in groups.items():
+        t = sum(INC_u[v]['state_trend'] for v in vs if v in INC_u)
+        out[g] = dict(state_trend=float(t), share=float(t / tot) if abs(tot) > 1e-9 else float('nan'))
+    return out
+
+
 # ------------------------------------------------------------------------------------------------ main entry
 def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=None, setting_file=None,
                  reference=None, start=dt.date(2002, 1, 1), key_months=None, thresholds=None, figures_dir=None,
-                 extra_files=None, verbose=True):
+                 extra_files=None, diagnosis=True, verbose=True):
     """
     res_dir       : Res/<case>  (Res_OL.h5, Res_DA.h5, GRACE_<basin>.h5, Harmonic_{OL,DA,GRACE}.nc)
     obs_file      : <basin>_obs_GRACE.hdf5 written by get_GRACE_obs (windows, covariance, sub-basin areas)
@@ -194,8 +261,9 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     reference     : tag of an earlier report in out_root, the path of a report folder, or 'previous' (the last
                     run in runs_index.csv) to compare with; None: no comparison
     start         : first day of the daily series in Res_*.h5
-    figures_dir   : Res/<case>/figures; the increment diagnosis and DA_eval_stats.json found there are archived
+    figures_dir   : Res/<case>/figures; DA_eval_stats.json found there is archived
     extra_files   : further files to archive in <report>/logs (e.g. rank logs)
+    diagnosis     : add the increment diagnosis (tables A-D, diagnosis.txt, fig6) to the report
     returns       : the summary dict (as in summary.json)
     """
     TH = dict(THRESHOLDS, **(thresholds or {}))
@@ -206,12 +274,12 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     out.mkdir(parents=True, exist_ok=True)
 
     # ---------------------------------------------------------------- data
-    durs, sig_sub, sig_basin = _load_obs(obs_file)
+    durs, sig_sub, sig_basin, Y, w_area = _load_obs(obs_file)
     nsub = sig_sub.shape[1]
     units = ['basin'] + ['sub_basin_%d' % k for k in range(1, nsub + 1)]
     gkeys = ['basin_%d' % k for k in range(nsub + 1)]
     names = ['Basin'] + ['Sub-basin %d' % k for k in range(1, nsub + 1)]
-    variables = [c[0] for c in COMP] + ['tws']
+    variables = STORAGES + ['tws']
     DA = _load_res(res_dir / 'Res_DA.h5', units, variables)
     OL = _load_res(res_dir / 'Res_OL.h5', units, variables)
     with h5py.File(res_dir / ('GRACE_%s.h5' % basin), 'r') as g:
@@ -311,6 +379,17 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     # ---------------------------------------------------------------- warnings
     summ['warnings'] = _warnings(summ, S, units, wdate, sig_sub, kk, res_dir, thr, TH)
 
+    # ---------------------------------------------------------------- increment diagnosis (tables A-D)
+    INC = None
+    if diagnosis:
+        INC = {u: storage_increments(OL[u], DA[u], win, tdec) for u in units}
+        summ['diagnosis'] = dict(
+            tug_of_war=tug_of_war(INC, units, win),
+            events=increment_events(OL, DA, INC, units, win, Y, w_area, kk, days, TH['event_increment_mm'],
+                                    TH['n_events_detail']),
+            correlation=storage_tws_correlation(OL[b], DA[b]),
+            peaks=yearly_peaks(S[b], wdate))
+
     # ---------------------------------------------------------------- reference
     ref = _load_reference(reference, out_root, tag)
     if ref is not None:
@@ -329,6 +408,11 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     _fig_gw_drift(out, DA, OL, units, names, days, tag)
     _fig_sub_basins(out, S, units, names, wdate, ref, tag)
     _fig_health(out, S, wdate, alog, thr, tag, nsub)
+    if INC is not None:
+        dtext = diagnosis_text(summ['diagnosis'], tag, len(win), nmem, days)
+        open(out / 'diagnosis.txt', 'w').write(dtext)
+        _fig_increments(out, INC[b], wdate, tag)
+        text += '\n' + dtext
     if verbose:
         print(text)
         print('evaluation report written to %s' % out)
@@ -343,7 +427,7 @@ def archive_logs(out, da_output_dir=None, setting_file=None, figures_dir=None, e
         <out>/DA_setting.json
         <out>/logs/filter_summary.json, adaptive_inflation_log.csv
         <out>/logs/Ens_k/threshold_log.json, threshold_monthly.csv
-        <out>/logs/figures/da_increment_diagnosis_*, da_increments_*.png, DA_eval_stats.json
+        <out>/logs/figures/DA_eval_stats.json
         <out>/logs/<extra files>
     returns the list of archived files (relative to out)
     """
@@ -367,9 +451,7 @@ def archive_logs(out, da_output_dir=None, setting_file=None, figures_dir=None, e
             for name in ('threshold_log.json', 'threshold_monthly.csv'):
                 cp(ens / name, logs / ens.name / name)
     if figures_dir is not None:
-        f = Path(figures_dir)
-        for p in list(f.glob('da_increment_diagnosis_*')) + list(f.glob('da_increments_*')) + \
-                list(f.glob('DA_eval_stats.json')):
+        for p in Path(figures_dir).glob('DA_eval_stats.json'):
             cp(p, logs / 'figures' / p.name)
     for p in extra_files or []:
         cp(p, logs / Path(p).name)
@@ -635,6 +717,181 @@ def _compare(a, b):
         out.append(dict(item=lab, this=x, reference=y,
                         change=(x - y) if isinstance(x, (int, float)) and isinstance(y, (int, float)) else None))
     return out
+
+
+# ------------------------------------------------------------------------------------------------ diagnosis
+def tug_of_war(INC, units, win):
+    """
+    Table A. Per storage (basin, ensemble mean): increment at the window start [mm/window] vs drift of DA - OL
+    inside the windows [mm/day]; increment + (window length - 1) x drift is the net change per window. Trends of the
+    cumulative increment (inc_trend) and of the window-mean DA - OL (state_trend) [mm/yr] and the share of the TWS
+    correction trend per storage group. Per sub-basin: increment / drift of groundwater and river.
+    """
+    win_len = float(np.mean([i1 - i0 + 1 for _, i0, i1 in win]))
+    n_in = max(win_len - 1.0, 1.0)
+    b = units[0]
+    rows = {}
+    for v, r in INC[b].items():
+        inc, drf = float(r['inc'].mean()), float(r['drift'].mean())
+        rows[v] = dict(increment=inc, drift=drf, net_per_window=inc + n_in * drf, drift_OL=float(r['drift_OL'].mean()),
+                       inc_trend=r['inc_trend'], state_trend=r['state_trend'])
+    sub = {}
+    for u in units[1:]:
+        sub[u] = {v: dict(increment=float(INC[u][v]['inc'].mean()), drift=float(INC[u][v]['drift'].mean()))
+                  for v in ('groundwstor', 'riverstor') if v in INC[u]}
+    return dict(window_length_days=win_len, basin=rows, shares=increment_shares(INC[b]), sub_basins=sub)
+
+
+def increment_events(OL, DA, INC, units, win, Y, w_area, kk, days, threshold_mm, n_detail):
+    """
+    Table B. Windows whose basin-mean increment of one storage exceeds threshold_mm in any member (score = the
+    largest |increment| over storages and members). For the n_detail largest events: the member with the largest
+    groundwater jump, the increments per sub-basin (storages of DIAG_SHOW), the innovation obs - OL window mean
+    and DA - OL before the window. Y: unperturbed observations (nobs, nsub) in the model datum; None: no innovation.
+    """
+    b = units[0]
+    starts = np.array([i0 for _, i0, _ in win])
+    show = [v for v in DIAG_SHOW if v in INC[b]]
+    score = np.zeros(len(win))
+    for v in INC[b]:
+        if v != 'tws':
+            score = np.maximum(score, np.abs(INC[b][v]['inc']).max(0))
+    ev = np.where(score > threshold_mm)[0]
+    events = []
+    for i in ev:
+        events.append(dict(date=str(days[starts[i]]), score=float(score[i]),
+                           range={v: [float(INC[b][v]['inc'][:, i].min()), float(INC[b][v]['inc'][:, i].max())]
+                                  for v in show}))
+    detail = []
+    for i in ev[np.argsort(-score[ev])][:n_detail]:
+        s = starts[i]
+        m = int(np.argmax(np.abs(INC[b]['groundwstor']['inc'][:, i]))) if 'groundwstor' in INC[b] else 0
+        _, i0, i1 = win[i]
+        rows = []
+        for j, u in enumerate(units):
+            r = dict(unit=u, increments={v: float((DA[u][v][m, s] - DA[u][v][m, s - 1]) -
+                                                 (OL[u][v][m, s] - OL[u][v][m, s - 1])) for v in show},
+                     da_minus_ol_before=float(DA[u]['tws'][m, s - 1] - OL[u]['tws'][m, s - 1]))
+            if Y is not None:
+                ol_win = OL[u]['tws'][:, i0:i1 + 1].mean()
+                obs = Y[kk[i]] @ w_area if u == b else Y[kk[i], j - 1]
+                r['innovation_obs_minus_OL'] = float(obs - ol_win)
+            rows.append(r)
+        detail.append(dict(date=str(days[s]), member=m + 1, rows=rows))
+    return dict(threshold_mm=threshold_mm, n_windows=len(win), events=events, detail=detail)
+
+
+def storage_tws_correlation(ol_u, da_u):
+    """
+    Table C. Cross-member correlation of every storage with TWS (mean over days) and the member spread [mm], in
+    the open loop and in the DA. Negative values in the DA = the filter has made the storages compensate.
+    """
+    def corr_spread(S, v):
+        T, V = S['tws'], S[v]
+        Tc, Vc = T - T.mean(0), V - V.mean(0)
+        c = (Tc * Vc).sum(0) / np.sqrt((Tc ** 2).sum(0) * (Vc ** 2).sum(0) + 1e-12)
+        return float(np.nanmean(c)), float(np.nanmean(V.std(0, ddof=1)))
+
+    out = {}
+    for v in STORAGES:
+        if v in da_u and v in ol_u:
+            c0, s0 = corr_spread(ol_u, v)
+            c1, s1 = corr_spread(da_u, v)
+            out[v] = dict(OL=c0, DA=c1, spread_OL=s0, spread_DA=s1)
+    return out
+
+
+def yearly_peaks(s, wdate):
+    """
+    Table D. Year-by-year maximum / minimum of the window-mean TWS anomaly (common mean removed) of OL, DA and
+    GRACE from the window statistics of the basin; incomplete years are skipped.
+    """
+    ol, da, gr = s['ol'] - s['ol'].mean(), s['da'] - s['da'].mean(), s['gr'] - s['gr'].mean()
+    years = np.array([d.year for d in wdate])
+    uy = np.unique(years)
+    per_year = len(years) / max(len(uy) - 1, 1)
+    out = {}
+    for y in uy:
+        sel = years == y
+        if sel.sum() < 0.6 * per_year:
+            continue
+        out[int(y)] = dict(ol_max=float(ol[sel].max()), da_max=float(da[sel].max()), gr_max=float(gr[sel].max()),
+                           ol_min=float(ol[sel].min()), da_min=float(da[sel].min()), gr_min=float(gr[sel].min()))
+    return out
+
+
+def diagnosis_text(d, tag, n_win, nmem, days):
+    L = ['Increment diagnosis  [%s]   %d windows, %d members, %s .. %s' % (tag, n_win, nmem, days[0], days[-1])]
+    P = L.append
+    t = d['tug_of_war']
+    n_in = round(max(t['window_length_days'] - 1.0, 1.0))
+    P('')
+    P('A. Tug of war (basin, ensemble mean): increment at window start [mm] vs drift of DA-OL inside the windows '
+      '[mm/day] (mean window length %.1f days); trends [mm/yr] of the cumulative increment (what the filter puts in) '
+      'and of DA-OL (what stays)' % t['window_length_days'])
+    P('   %-18s %10s %10s %14s %10s | %10s %11s' % ('storage', 'increment', 'drift', 'incr+%d*drift' % n_in, 'OL drift',
+                                                    'inc trend', 'state trend'))
+    for v, r in t['basin'].items():
+        P('   %-18s %+10.3f %+10.3f %+14.3f %+10.3f | %+10.2f %+11.2f' % (
+            v, r['increment'], r['drift'], r['net_per_window'], r['drift_OL'], r['inc_trend'], r['state_trend']))
+    P('   long-term correction (trend of DA-OL) lands in: ' + ', '.join(
+        '%s %+.2f mm/yr (%s)' % (g, x['state_trend'], '%.0f %%' % (100 * x['share']) if np.isfinite(x['share']) else '-')
+        for g, x in t['shares'].items()))
+    if t['sub_basins']:
+        P('   per sub-basin, increment [mm] / drift [mm/day] of groundwater and river')
+        P('   %-12s %9s %9s | %9s %9s' % ('sub-basin', 'GW incr', 'GW drift', 'RIV incr', 'RIV drift'))
+        for u, r in t['sub_basins'].items():
+            g, rv = r.get('groundwstor', {}), r.get('riverstor', {})
+            P('   %-12s %+9.3f %+9.3f | %+9.3f %+9.3f' % (u.replace('sub_basin_', ''), g.get('increment', np.nan),
+                                                        g.get('drift', np.nan), rv.get('increment', np.nan),
+                                                        rv.get('drift', np.nan)))
+    e = d['events']
+    P('')
+    P('B. Events: windows with |basin-mean increment| > %.0f mm for one storage in any member: %d of %d windows'
+      % (e['threshold_mm'], len(e['events']), e['n_windows']))
+    for ev in e['events']:
+        P('   %s  %s' % (ev['date'], ' '.join('%s %+.0f..%+.0f' % (v[:5], lo, hi) for v, (lo, hi) in ev['range'].items())))
+    for det in e['detail']:
+        P('   detail %s, member %d (largest groundwater jump): unit, increments %s [mm], innovation obs - OL window '
+          'mean, DA-OL before the window' % (det['date'], det['member'], '/'.join(v[:5] for v in det['rows'][0]['increments'])))
+        for r in det['rows']:
+            P('   %-6s %s | inno %8s | before %8.0f' % (
+                r['unit'].replace('sub_basin_', ''), ' '.join('%8.0f' % x for x in r['increments'].values()),
+                '%.1f' % r['innovation_obs_minus_OL'] if 'innovation_obs_minus_OL' in r else '-', r['da_minus_ol_before']))
+    P('')
+    P('C. Cross-member correlation of each storage with TWS (mean over days) and member spread [mm], basin')
+    P('   %-18s %8s %8s | %8s %8s' % ('storage', 'OL corr', 'OL sprd', 'DA corr', 'DA sprd'))
+    for v, r in d['correlation'].items():
+        P('   %-18s %+8.2f %8.1f | %+8.2f %8.1f' % (v, r['OL'], r['spread_OL'], r['DA'], r['spread_DA']))
+    P('')
+    P('D. Yearly maximum / minimum of the window-mean basin TWS anomaly [mm] (common mean removed)')
+    P('   %4s | %8s %8s %8s | %8s %8s %8s | %8s %8s %8s' % ('year', 'OL max', 'DA max', 'GRACE', 'OL min', 'DA min',
+                                                           'GRACE', 'amp OL', 'amp DA', 'amp GR'))
+    for y, r in d['peaks'].items():
+        P('   %4s | %8.0f %8.0f %8.0f | %8.0f %8.0f %8.0f | %8.0f %8.0f %8.0f' % (
+            y, r['ol_max'], r['da_max'], r['gr_max'], r['ol_min'], r['da_min'], r['gr_min'],
+            r['ol_max'] - r['ol_min'], r['da_max'] - r['da_min'], r['gr_max'] - r['gr_min']))
+    return '\n'.join(L) + '\n'
+
+
+def _fig_increments(out, INC_b, wdate, tag):
+    """fig6: basin-mean increment per window and storage; grey = members, red = ensemble mean"""
+    show = [v for v in DIAG_SHOW if v in INC_b]
+    fig, axes = plt.subplots(len(show), 1, figsize=(12, 2.6 * len(show)), sharex=True)
+    for ax, v in zip(np.atleast_1d(axes), show):
+        inc = INC_b[v]['inc']
+        for m in range(inc.shape[0]):
+            ax.plot(wdate, inc[m], color='0.6', lw=0.7)
+        ax.plot(wdate, inc.mean(0), color='tab:red', lw=1.2, label='ensemble mean')
+        ax.axhline(0, color='k', lw=0.8)
+        ax.set_ylabel('%s\nincrement [mm]' % v)
+        lim = np.percentile(np.abs(inc), 99.5)
+        ax.set_ylim(-1.2 * lim, 1.2 * lim)
+    np.atleast_1d(axes)[0].set_title('Basin-mean increments per window: %s  (grey: members, red: ensemble mean)' % tag)
+    np.atleast_1d(axes)[0].legend(loc='upper right')
+    _datefmt(np.atleast_1d(axes)[-1])
+    fig.tight_layout()
+    _save(fig, out, 'fig6_increments')
 
 
 # ------------------------------------------------------------------------------------------------ writing
@@ -928,12 +1185,9 @@ def _fig_health(out, S, wdate, alog, thr, tag, nsub):
 
 
 def demo1():
-    """stand-alone use with the demo_2 paths"""
-    root = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-    evaluate_run(res_dir=root / 'Res/demo_2', obs_file=root / 'GRACE/obs/Danube_obs_GRACE.hdf5',
-                 out_root=root / 'Res/demo_2/evaluation', tag='run', basin='Danube',
-                 da_output_dir=root / 'DA_output/demo_2',
-                 setting_file='/media/user/My Book/Fan/PyGLDA_v2/settings/demo_2/DA_setting.json', reference=None)
+    """stand-alone use with the case of src_FlowControl.Regional_DA (RDA.setting_dir / RDA.case / RDA.basin)"""
+    from src_FlowControl.Regional_DA import RDA
+    RDA.da_evaluation(tag='run', reference=None)
 
 
 if __name__ == '__main__':
