@@ -10,8 +10,8 @@ browser. It READS the files the pipeline already writes and never touches the as
     Basin/shp/<...>.shp                   unit polygons (map), optional
 
 Start (pyglda_v2 env, from the PyGLDA_v2 folder or anywhere):
-    streamlit run src_GUI/dashboard.py -- --data /work/PyGLDA_v2_external_data --case GDA_Ucloud
-then open http://localhost:8501 (on UCloud: open the port through the job's web interface). All arguments are
+    streamlit run src_GUI/dashboard.py -- --data <external_data> --case GDA_Global
+then open http://localhost:8501 (on a remote HPC job, e.g. UCloud: open the port through the job's web interface). All arguments are
 optional and can be changed in the sidebar; the environment variable PYGLDA_DATA is used as the default data root.
 
 Tabs: Overview (fit, filter health, warnings), Map (one metric per unit; click a unit), Unit (window series of
@@ -53,9 +53,9 @@ METRICS = {                                   # column of unit_metrics.csv: (lab
 # ------------------------------------------------------------------------------------------------ arguments
 def _args():
     p = argparse.ArgumentParser(add_help=False)
-    p.add_argument('--data', default=os.environ.get('PYGLDA_DATA', '/work/PyGLDA_v2_external_data'))
-    p.add_argument('--case', default='GDA_Ucloud')
-    p.add_argument('--basin', default='GlobalBasins_v1.0')
+    p.add_argument('--data', default=os.environ.get('PYGLDA_DATA', ''))
+    p.add_argument('--case', default='GDA_Global')
+    p.add_argument('--basin', default='GlobalBasins_v2.0')
     p.add_argument('--shp', default=None)
     p.add_argument('--tag', default=None)
     a, _ = p.parse_known_args()
@@ -284,7 +284,7 @@ def main():
         tags = sorted([p.name for p in rep_root.glob('*') if (p / 'unit_metrics.csv').exists()]) if rep_root.exists() else []
         tag = st.selectbox('evaluation report', tags, index=tags.index(a.tag) if a.tag in tags else len(tags) - 1) if tags else None
         basin = st.text_input('basin / unit set', a.basin)
-        shp_default = a.shp or str(data_root / 'Basin' / 'shp' / 'Global_v1.0' / ('%s.shp' % basin))
+        shp_default = a.shp or str(data_root / 'Basin' / 'shp' / 'Global_v2.0' / ('%s.shp' % basin))
         shp_path = st.text_input('unit shapefile (map)', shp_default)
         obs_file = data_root / 'GRACE' / 'obs' / ('%s_obs_GRACE.hdf5' % basin)
         st.caption('results: %s' % res_dir)

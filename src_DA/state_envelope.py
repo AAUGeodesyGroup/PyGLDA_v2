@@ -7,11 +7,11 @@ storages that have no physical capacity in the model (river storage): the analys
 Output: <Auxiliary_dir>/state_envelope_<basin>.nc with variables <var>_min and <var>_max on the (lat, lon) box
 of the collected files (NaN outside the basin), and for the storages in `monthly` <var>_max_month (month, lat, lon):
 the largest value of every calendar month over all years and members (snow cap of src_DA.Threshold / bounds,
-"envelope_factor" of "snow_bounds", 9 Oct 2026). Called from DA_GRACE.make_state_envelope() (automatically in RDA.DA_run).
+"envelope_factor" of "snow_bounds"). Called from DA_GRACE.make_state_envelope() (automatically in RDA.DA_run).
 
-Parallel (comm given, 9 Oct 2026): every rank reads only the members assigned to it (member k on rank k % size, so
+Parallel (comm given): every rank reads only the members assigned to it (member k on rank k % size, so
 in the DA layout Ens_k on rank k) and the per-rank minima / maxima are combined with one MPI reduction; the result is
-identical to the serial loop. Until 9 Oct 2026 rank 0 read all members while the other ranks waited.
+identical to the serial loop.
 Reuse: the file records a fingerprint of the open-loop files it was built from (names, sizes, modification times);
 an existing file with the same variables and the same fingerprint is reused, any change of the open loop (new
 perturbation, new collection, other period or members) rebuilds it. force=True always rebuilds.

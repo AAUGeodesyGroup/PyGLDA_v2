@@ -1,14 +1,22 @@
-import h5py
+"""
+Print the tree of groups and datasets (with shapes) of an HDF5 file:
+    python -m src_auxiliary.get_h5_structure <file.h5|file.hdf5>
+"""
+import sys
 from pathlib import Path
 
+import h5py
+
+
 def get_hdf5_structure(filepath):
+    """text tree of the groups and datasets (with their shapes) of an .h5 / .hdf5 file"""
     def append_structure(fdata, flevel=0, texts=None):
         if texts is None:
             texts = []
 
         texts.append(f"{'|  ' * flevel}|--{fdata.name.split('/')[-1]}")
 
-        if type(fdata) is h5py._hl.group.Group:
+        if isinstance(fdata, h5py.Group):
             flevel += 1
             texts.append('|  ' * flevel + '|')
             for fkey in fdata.keys():
@@ -16,14 +24,13 @@ def get_hdf5_structure(filepath):
             flevel -= 1
             texts.append('|  ' * flevel + '|')
 
-        elif type(fdata) is h5py._hl.dataset.Dataset:
-            lines[-1] += f' {fdata.shape}'
-            pass
+        elif isinstance(fdata, h5py.Dataset):
+            texts[-1] += f' {fdata.shape}'
 
         return texts
 
     filepath = Path(filepath)
-    assert filepath.name.endswith('.hdf5')
+    assert filepath.suffix in ('.h5', '.hdf5'), filepath
     lines = []
 
     with h5py.File(filepath, 'r') as f:
@@ -41,13 +48,8 @@ def get_hdf5_structure(filepath):
 
     return '\n'.join(lines)
 
-def view_h5(filepath):
-    rr= h5py.File(name=filepath, mode='r')
-    pass
-
 
 if __name__ == '__main__':
-    filepath='/media/user/My Book/Fan/SummerSchool/External Data/GRACE/output/Brahmaputra3subbasins_signal.hdf5'
-    # a=view_h5(filepath=filepath)
-    print(get_hdf5_structure(filepath=filepath))
-    pass
+    if len(sys.argv) != 2:
+        sys.exit('usage: python -m src_auxiliary.get_h5_structure <file.h5|file.hdf5>')
+    print(get_hdf5_structure(sys.argv[1]))

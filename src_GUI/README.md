@@ -14,11 +14,11 @@ the two pip wheels install in seconds and touch nothing else.)
 ## Run
 
     cd PyGLDA_v2
-    streamlit run src_GUI/dashboard.py -- --data /work/PyGLDA_v2_external_data --case GDA_Ucloud
+    streamlit run src_GUI/dashboard.py -- --data <external_data> --case GDA_Global
 
 then open http://localhost:8501. The data root can also come from the environment variable `PYGLDA_DATA`;
-case, report tag, basin and shapefile are chosen in the sidebar. On UCloud start it inside the job and open the
-port through the job's web interface; on the workstation it runs locally.
+case, report tag, basin and shapefile are chosen in the sidebar. On a remote HPC job (e.g. UCloud) start it inside the
+job and open the port through the job's web interface; on a workstation it runs locally.
 
 ## Tabs
 

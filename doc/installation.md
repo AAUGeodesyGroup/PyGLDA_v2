@@ -1,7 +1,7 @@
 # PyGLDA v2 — installation guide
 
-This guide covers the Python environment for running PyGLDA v2, on a desktop and on UCloud, and how to
-launch the code correctly once it is installed. Everything lives in `installation/`:
+This guide covers the Python environment for running PyGLDA v2, on a desktop and on an HPC node (the example
+is UCloud, the Danish national research cloud), and how to launch the code once it is installed. Everything lives in `installation/`:
 
 | file | purpose |
 |---|---|
@@ -48,10 +48,9 @@ The log is `installation/env_setup.log`; the solved versions go to `installation
 
 ---
 
-## 3. UCloud install (env under a persistent prefix)
+## 3. HPC install (env under a persistent prefix; example: UCloud)
 
-On UCloud only two folders survive a job: the code folder `/work/PyGLDA` (Syncthing-synced with the desktop)
-and the data root `/work/PyGLDA_v2_external_data`. The job's home directory, `/usr/local`, and the default
+On UCloud only two folders survive a job: the code folder `/work/PyGLDA` and the data root `/work/PyGLDA_v2_external_data`. The job's home directory, `/usr/local`, and the default
 conda location are wiped. So everything goes under a **prefix** in the data root:
 
 ```
@@ -59,8 +58,6 @@ conda location are wiped. So everything goes under a **prefix** in the data root
 ├── miniforge3/        private Miniforge (the UCloud image has no conda)
 ├── pyglda_v2/         the model env
 ├── pygmt/             the visualization env            (--with-pygmt)
-├── claude_home/       Claude Code binary               (--with-claude)
-├── claude_config/     Claude Code login and settings   (--with-claude)
 ├── activate.sh        source in every shell
 ├── ucloud_init.sh        select as the job "Initialization" script
 ├── environment.lock.yml, environment_pygmt.lock.yml
@@ -71,20 +68,19 @@ One-time setup, from any UCloud job that mounts both folders:
 
 ```bash
 cd /work/PyGLDA
-bash installation/setup_env.sh install --prefix /work/PyGLDA_v2_external_data/envs --with-pygmt --with-claude
+bash installation/setup_env.sh install --prefix /work/PyGLDA_v2_external_data/envs --with-pygmt
 ```
 
 The script bootstraps Miniforge if no conda is found, creates the envs, runs the verifications of section 4,
 and writes `activate.sh` and `ucloud_init.sh`. Re-running it is safe: existing envs are verified, not rebuilt.
-Keep large files out of `/work/PyGLDA`; the envs folder is deliberately in the data root so Syncthing
-never sees it.
+Keep large files out of the code folder; the envs folder is deliberately in the data root.
 
 ### Every new UCloud job
 
 1. In the submission form mount both folders, enable ssh and tmux, and select
    `/work/PyGLDA_v2_external_data/envs/ucloud_init.sh` in the **Initialization** field.
-2. Open a terminal. Every shell now starts with `pyglda_v2` on PATH, and `conda`, `mamba`,
-   `conda activate pygmt` and `claude` all work. If the init script was not selected, run
+2. Open a terminal. Every shell now starts with `pyglda_v2` on PATH, and `conda`, `mamba` and
+   `conda activate pygmt` work. If the init script was not selected, run
    `source /work/PyGLDA_v2_external_data/envs/activate.sh` yourself.
 3. Check `cat /work/PyGLDA_v2_external_data/envs/last_job_init.log`: a fresh timestamp and both
    `rank 0 of 2` and `rank 1 of 2`.
@@ -118,48 +114,47 @@ Then the exact solved versions are exported to the lock file.
 
 ---
 
-## 5. Launching PyGLDA correctly
+## 5. Running PyGLDA
 
-Three rules, all learned the hard way:
+Set the data root and start the drivers of `src_demo/` (see `doc/configuration.md` for the stages):
+
+```bash
+export PYGLDA_DATA=/work/PyGLDA_v2_external_data
+cd /work/PyGLDA/src_demo
+python global_run.py prepare                        # serial stages
+mpiexec -n 31 python -u global_run.py ensemble      # MPI stages: ensemble size + 1 ranks
+mpiexec -n 31 python -u global_run.py assimilate
+python global_run.py evaluate
+```
 
 - **Use the env's `mpiexec`.** Inside an activated env it is first on PATH. On UCloud the system
   `/usr/local/bin/mpirun` is Open MPI and starts every rank as rank 0 with no error message.
-  ```bash
-  cd /work/PyGLDA/src_demo
-  mpiexec -n 31 python -u RDA_Ucloud.py Config_ReWaterGAP.json
-  ```
-- **Always pass the config file name as the single positional argument**, even to serial stages:
-  WaterGAP parses `sys.argv` at import time.
-- **Run from a directory that contains `cf_conv.json`** (WaterGAP reads it relative to the cwd).
-  `src_demo/` and `temp/env_test/` have one.
+- WaterGAP parses `sys.argv` at import time and reads `cf_conv.json` from the working directory; the drivers take
+  care of both (they pass the run copy of `Config_ReWaterGAP.json` and change to `src_demo/`).
 
-Rank 0 is the unperturbed control member and is never updated; rank 1 is the main thread that prints to
-the terminal; every other rank logs to `parallel_logs/<stage>/rank_k.log` at the repo root.
+Rank 0 is the unperturbed control member and is never updated; one rank prints to the terminal, every other rank
+logs to `parallel_logs/<stage>/rank_k.log` at the repository root.
 
 ---
 
-## 6. Smoke test
+## 6. Data
 
-`temp/env_test/` runs a one-month ensemble spin-up (Dec 2000) on 5 ranks, then a 5-day resume, entirely
-inside its own folder. It needs `Ensemble_input/Ens_0..4/monthly_climate_forcing/{2000-12,2001-01}.nc` and
-`Ens_k/parameters/` in the data root. Paths inside the two runners point to `/work/PyGLDA_v2_external_data`;
-edit `EXT` at the top of each for another machine.
+The data root holds the inputs and receives all outputs:
 
-```bash
-cd /work/PyGLDA/temp/env_test
-mpiexec -n 5 python -u run_test.py   settings/Config_ReWaterGAP.json
-mpiexec -n 5 python -u run_resume.py settings/Config_ReWaterGAP.json
-```
-
-Judge by `summary.json` and `summary_resume.json` (`"all_ok": true`). Per-rank logs are in
-`temp/env_test/logs/`. On UCloud (5 Oct 2026) both passed: ~117 s per rank for the spin-up, ~31 s for the resume.
+| folder | content |
+|---|---|
+| `Input_data/` | WaterGAP 2.2e input: monthly climate forcing (GSWP3-W5E5, converted with `src_auxiliary/ForcingFieldConversion.py`), water use, static land data, global parameter file |
+| `Basin/shp/`, `Basin/mask/` | unit shapefiles (GlobalBasins v2.0, Danube, Amazon) and their 0.5° / 1° masks |
+| `GRACE/` | CSR RL06.3 mascons (`SaGEA/signal_Mascon`), DDK3 Monte-Carlo error samples (`SaGEA/sample_DDK3`, produced with SaGEA), the WaterGAP land mask (`global_mask/`), and the prepared observations |
+| `Auxiliary/` | `smax.nc` (maximum soil water content of WaterGAP) |
+| `Ensemble_input/`, `Ensemble_Initialization/`, `OL_output/`, `DA_output/`, `Res/`, `settings/` | written by the runs |
 
 ---
 
 ## 7. The visualization env `pygmt`
 
-Used only by `src_postprocessing/Visualization.py`, `src_auxiliary/HydroShed.py` and `Shape.py`, which
-import pygmt lazily inside the plotting functions. It mirrors the desktop `pygmt-2` env: Python 3.13,
+Used only by `src_postprocessing/Visualization.py`, `src_postprocessing/global_visualization.py` and
+`src_auxiliary/HydroShed.py`, which import pygmt lazily inside the plotting functions. It uses Python 3.13,
 pygmt 0.16, GMT 6.6, plus Ghostscript (GMT cannot write PNG/PDF without it) and `pandas<3`.
 
 ```bash
@@ -175,26 +170,7 @@ Figure pop-ups are off by default in the pipeline (`allow_pop_up=False`); figure
 
 ---
 
-## 8. Claude Code on UCloud
-
-`--with-claude` installs the native Claude Code binary under `envs/claude_home` (the image's node 18 is
-too old for the npm package) and `activate.sh` sets `CLAUDE_CONFIG_DIR=envs/claude_config`, so the login
-done once persists across jobs. The auto-updater is disabled because updates would land in the
-ephemeral home. First use:
-
-```bash
-source /work/PyGLDA_v2_external_data/envs/activate.sh
-cd /work/PyGLDA
-claude            # follow the browser login link once
-```
-
-Running Claude Code on the node is handy for watching long runs and reading large outputs. The desktop
-Claude Code can drive the node through ssh instead; both share the synced code folder, so do not edit
-the same file from both sides at the same time.
-
----
-
-## 9. Troubleshooting
+## 8. Troubleshooting
 
 | symptom | cause | fix |
 |---|---|---|

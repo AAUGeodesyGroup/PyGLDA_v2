@@ -4,27 +4,6 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 
-# ── controller alias: bare-path ↔ full-path ────────────────────────────────
-# WaterGAP's internals import controller.* via bare path; our Interface files
-# import via src_GHM.ReWaterGAP.controller.*. Without this block Python creates
-# two separate module objects so configure_time's updates never reach WaterGAP.
-# Fix: load everything via bare path first, then register under the full path
-# so both spellings resolve to the same object in sys.modules.
-# import sys, importlib, pkgutil
-# from pathlib import Path as _Path
-#
-# _rewatergap = str(_Path(__file__).resolve().parent.parent / 'src_GHM' / 'ReWaterGAP')
-# if _rewatergap not in sys.path:
-#     sys.path.insert(0, _rewatergap)
-#
-# import controller as _ctrl
-# sys.modules.setdefault('src_GHM.ReWaterGAP.controller', _ctrl)
-# for _mi in pkgutil.iter_modules(_ctrl.__path__):
-#     _bare_mod = importlib.import_module(f'controller.{_mi.name}')
-#     sys.modules[f'src_GHM.ReWaterGAP.controller.{_mi.name}'] = _bare_mod
-# # ───────────────────────────────────────────────────────────────────────────
-
-
 def _abort_with_report(comm, rank, stage):
     """
     Call from an `except` block inside an MPI stage.
@@ -46,26 +25,59 @@ def _abort_with_report(comm, rank, stage):
 
 
 class RDA:
-    setting_dir = '/media/user/My Book/Fan/PyGLDA_v2/settings/demo_1'
-    ens = 4
-
-    external_data_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data'
-    case = 'demo_1'
-    basin = 'Brahmaputra'
-    shp_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data/Basin/shp/Brahmaputra/Brahmaputra.shp'
+    """
+    Regional (and, through src_FlowControl.Global_DA.GDA, global) data assimilation: every stage of an experiment
+    (masks, GRACE preparation, perturbation, spin-up, open loop, assimilation, collection, evaluation) as a static
+    method working on the case described by the class attributes below. A driver (src_demo) sets them, calls
+    prepare_settings once and then runs the stages; all stages read the settings of the run folder setting_dir.
+    """
+    setting_dir = None              # run copy of the settings, set by prepare_settings
+    ens = 30
+    external_data_path = None       # data root (inputs, outputs, GRACE, masks)
+    case = None
+    basin = None
+    shp_path = None
 
     '''for spin-up'''
     spin_up_start = '2000-01-01'
     spin_up_end = '2001-12-31'
-
-    spin_up_years = 5
+    spin_up_years = 8
 
     '''for open-loop and data assimilation'''
-    sim_begin_time = '2002-05-01'
-    sim_end_time = '2005-04-30'
+    sim_begin_time = '2002-01-01'
+    sim_end_time = '2006-12-31'
+
+    SETTING_FILES = ('DA_setting.json', 'perturbation.json', 'Config_ReWaterGAP.json')
+
+    @staticmethod
+    def prepare_settings(source_dir, write=True):
+        """
+        Run copy of the settings of the case: the three files of source_dir (settings/<case> of the repository) are
+        copied to <external_data_path>/settings/<case>, and the paths there are made absolute for this machine
+        (config_external_data: "${DATA_ROOT}/..." -> <external_data_path>/...). RDA.setting_dir then points to the run
+        copy, which the stages read and update (period, ensemble size, case); the files in the repository are never
+        written. write=False only sets setting_dir (the other MPI ranks, after rank 0 has written).
+        """
+        import shutil
+        src = Path(source_dir)
+        run_dir = Path(RDA.external_data_path) / 'settings' / RDA.case
+        RDA.setting_dir = str(run_dir)
+        if not write:
+            return RDA.setting_dir
+        run_dir.mkdir(parents=True, exist_ok=True)
+        for fn in RDA.SETTING_FILES:
+            f = src / fn
+            if not f.exists():
+                raise FileNotFoundError('%s is missing; every case folder holds %s' % (f, ', '.join(RDA.SETTING_FILES)))
+            shutil.copy(f, run_dir / fn)
+        RDA.config_external_data()
+        RDA.read_config_and_save()
+        return RDA.setting_dir
 
     @staticmethod
     def config_external_data():
+        """paths of the settings files in setting_dir rewritten to the data root of this machine: every path is
+        recognised by its first data folder (Input_data, Basin, Res, GRACE, ...) and put under external_data_path"""
         import json
 
         def reformulate(st: str):
@@ -74,10 +86,7 @@ class RDA:
                             '/OL_output', '/DA_output', '/Ensemble_Initialization', '/Auxiliary',
                             '/GRACE']:
                 if keyword in st:
-                    # print(keyword)
-                    # print(st)
                     new = RDA.external_data_path + keyword + st.split(keyword)[1]
-                    # print(new)
                     break
 
             return new
@@ -101,10 +110,8 @@ class RDA:
                     elif isinstance(item, (dict, list)):
                         func(item)
 
-        for file_name in ['DA_setting.json', 'perturbation.json', 'Config_ReWaterGAP.json']:
-            print(file_name)
+        for file_name in RDA.SETTING_FILES:
             config = json.load(open(Path(RDA.setting_dir) / file_name, 'r'))
-            # print(Path(RDA.setting_dir) / file_name)
             func(config)
             with open(Path(RDA.setting_dir) / file_name, 'w') as f:
                 json.dump(config, f, indent=4)
@@ -113,6 +120,7 @@ class RDA:
 
     @staticmethod
     def read_config_and_save():
+        """case, basin, shapefile, mask, ensemble size and period of the class attributes into DA_setting.json of setting_dir"""
         from src_DA.configure_DA import config_DA
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
@@ -122,6 +130,8 @@ class RDA:
         configDA.basic.basin_shp = RDA.shp_path
         configDA.basic.ensemble = RDA.ens
         configDA.basic.basin_mask = str(Path(RDA.external_data_path) / 'Basin/mask' / RDA.basin / ('%s_res_0.5.h5' % RDA.basin))
+        configDA.basic.fromdate = RDA.sim_begin_time
+        configDA.basic.todate = RDA.sim_end_time
 
         configDA.save_json(save_path=Path(RDA.setting_dir) / 'DA_setting.json')
 
@@ -186,6 +196,8 @@ class RDA:
                          is_diagonal=kwargs['is_diagonal'])
             return
 
+        GR.set_options(resample=configDA.obs.GRACE.get('resample', 'subsample'),
+                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'))
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.grid_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.basin_COV(month_begin=t1, month_end=t2, dir_in=cov_dir_in, dir_out=dir_out,
@@ -346,7 +358,7 @@ class RDA:
           step 3  (post_process=True) post-processing of this stage:
                   3a  harmonic maps Harmonic_<stage>.nc: the daily ensemble-mean fields (tws) of the members are
                       reduced over all ranks into <stage>/Ens_mean/daily_output_<year>.nc, then rank 1 fits that
-                      series once (ensemble-mean maps only; statistical_analysis.HarmonicMapAnalysis, Fan 11 Oct 2026)
+                      series once (ensemble-mean maps only; statistical_analysis.HarmonicMapAnalysis)
                   3b  RDA.post_processing(stages=[stage], harmonic=False) on rank 1: Res_<stage>.h5 and, for the DA,
                       the GRACE files; the other ranks wait.
                   A failure in step 3 is reported but does not abort the job (the collected files are complete);
@@ -374,7 +386,6 @@ class RDA:
             # buffering=1 enables line-buffering so every print is flushed
             # immediately - otherwise the log is empty if the process is killed
             sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            # sys.stdout = TqdmLogFilter(log_path)
             sys.stderr = sys.stdout
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
@@ -466,7 +477,7 @@ class RDA:
             Stage.DA -> configDA.basic.DA_output_temp_dir / <case> / Ens_k
         The stage must already be collected (Res/<case>/<stage>/Ens_k/basin_ts_<stage>.h5 present for
         every member), otherwise nothing is deleted unless force=True. The OL scratch is shared between cases
-        (a global open loop is reused, e.g. by demo_Global), so Stage.OL is always refused without force=True.
+        (a global open loop can be reused by other cases), so Stage.OL is always refused without force=True.
         dry_run=True (default) only reports the files and their size. Run it as a single process
         (not under mpiexec), e.g. from demo1() after collect_and_statistics() has finished.
         """
@@ -503,7 +514,6 @@ class RDA:
             da.configure_setting(ens_size=RDA.ens, case_name=RDA.case, basin_name=RDA.basin,
                                  basin_dir=Path(RDA.external_data_path) / 'Basin', basin_shp=RDA.shp_path)
             da.configure_date(begin_date=RDA.sim_begin_time, end_date=RDA.sim_end_time)
-            # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
 
             comm.barrier()                  # every rank has read DA_setting.json before rank 0 rewrites it
             if rank == 0:
@@ -644,7 +654,7 @@ class RDA:
                                        logs and the DA rank logs (parallel_logs/DA/rank_k.log); DA_output/<case> is
                                        temporary and overwritten by the next run
         and one row in Res/<case>/evaluation/runs_index.csv.
-        tag       : name of the run, e.g. 'run10' (None: date and time)
+        tag       : name of the run, e.g. 'run1' (None: date and time)
         reference : tag of an earlier report, 'previous' (last row of runs_index.csv) or None
         """
         from src_DA.configure_DA import config_DA
@@ -683,49 +693,3 @@ class RDA:
         """land mask of the GRACE processing: WaterGAP land (src_auxiliary.watergap_land_mask), the cells over which
         the DA averages the model, so that GRACE and model unit means are consistent"""
         return Path(RDA.external_data_path) / 'GRACE/global_mask/WaterGAPLandMask.hdf5'
-
-
-
-
-def demo1():
-
-    '''Before open loop'''
-    # RDA.config_external_data()
-    # RDA.read_config_and_save()
-    RDA.model_perturbation()
-
-    '''before data assimilation'''
-    # RDA.config_basin_mask()  # pygmt
-    # RDA.get_GRACE_obs(is_diagonal=False) # pygmt
-
-    '''after data assimilation'''
-    # RDA.post_processing()
-    # RDA.visualization()
-
-    pass
-
-
-def demo2():
-    from src_DA.EnumDA import Stage
-
-    RDA.spin_up()
-    #
-    # RDA.OL_run()
-
-    # RDA.collect_and_statistics(Stage.OL, skip_collect=False)
-
-    # try:
-    #     RDA.DA_run()  # or whatever your entry point is
-    # except Exception:
-    #     import traceback
-    #     traceback.print_exc()
-    #     MPI.COMM_WORLD.Abort(1)
-    #
-    # RDA.collect_and_statistics(Stage.DA, skip_collect=False)
-
-    pass
-
-
-if __name__ == '__main__':
-    demo1()
-    # demo2()

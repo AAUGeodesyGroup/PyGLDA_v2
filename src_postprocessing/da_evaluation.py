@@ -45,9 +45,9 @@ Numbers in the report
             The increment of a storage is computed once, by storage_increments(), for both the regional and the
             global report (src_postprocessing.global_evaluation).
 
-Usage:  RDA.da_evaluation(tag='run10', reference='run9')   (src_FlowControl/Regional_DA.py), or
+Usage:  RDA.da_evaluation(tag='new_run', reference='old_run')   (src_FlowControl/Regional_DA.py), or
         from src_postprocessing.da_evaluation import evaluate_run
-        evaluate_run(res_dir, obs_file, out_root, tag, da_output_dir=..., setting_file=..., reference='run9')
+        evaluate_run(res_dir, obs_file, out_root, tag, da_output_dir=..., setting_file=..., reference='old_run')
 It reads results only and does not touch the assimilation code.
 """
 import csv, json, shutil, datetime as dt
@@ -255,7 +255,7 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
     res_dir       : Res/<case>  (Res_OL.h5, Res_DA.h5, GRACE_<basin>.h5, Harmonic_{OL,DA,GRACE}.nc)
     obs_file      : <basin>_obs_GRACE.hdf5 written by get_GRACE_obs (windows, covariance, sub-basin areas)
     out_root      : folder that holds the reports (Res/<case>/evaluation); the report goes to out_root/<tag>
-    tag           : name of this run (e.g. 'run10'); None: date and time (YYYYmmdd_HHMM). An existing report
+    tag           : name of this run (e.g. 'new_run'); None: date and time (YYYYmmdd_HHMM). An existing report
                     with the same tag is overwritten.
     basin         : basin name, used for GRACE_<basin>.h5
     da_output_dir : DA_output/<case> (filter_summary.json, adaptive_inflation_log.csv, Ens_k/threshold_monthly.csv)
@@ -324,9 +324,8 @@ def evaluate_run(res_dir, obs_file, out_root, tag, basin='basin', da_output_dir=
         K = sd_fc^2 / (sd_fc^2 + sigma^2), i.e. sigma^4 / (sd_fc^2 + sigma^2); the analysis is expected to sit
         closer to GRACE than sigma (gain 0.7 -> ~0.55 sigma), so RMS < sigma alone is no sign of over-fitting.
         Only regular windows (sigma <= grace_sigma_factor x its median, the same rule as the degraded-month
-        warning): the sigma^4 term of a few degraded months (run12 sub-basin 1: sigma up to 176 mm) otherwise
-        dominates the mean (19.4 mm expected vs 11.4 mm on regular windows). The actual RMS is returned on the
-        same windows. Caveat: the scalar formula ignores the information a sub-basin receives from its correlated
+        warning): the sigma^4 term of a few degraded months (sigma of more than 100 mm) would otherwise dominate
+        the mean. The actual RMS is returned on the same windows. Caveat: the scalar formula ignores the information a sub-basin receives from its correlated
         neighbours in the joint update, so a modest ratio below 1 is not by itself over-fitting.
         Returns (expected RMS, actual RMS on the regular windows, number of regular windows).'''
         s = S[u]
@@ -1184,13 +1183,3 @@ def _fig_health(out, S, wdate, alog, thr, tag, nsub):
     fig.suptitle('Filter health: %s' % tag, y=0.995, fontweight='bold')
     fig.tight_layout()
     _save(fig, out, 'fig5_filter_health')
-
-
-def demo1():
-    """stand-alone use with the case of src_FlowControl.Regional_DA (RDA.setting_dir / RDA.case / RDA.basin)"""
-    from src_FlowControl.Regional_DA import RDA
-    RDA.da_evaluation(tag='run', reference=None)
-
-
-if __name__ == '__main__':
-    demo1()

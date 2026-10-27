@@ -8,30 +8,40 @@
 # You should have received a copy of the LGPLv3 License along with WaterGAP.
 # if not see <https://www.gnu.org/licenses/lgpl-3.0>
 # =============================================================================
-"""Run WaterGAP."""
+"""
+Run WaterGAP (cold start with spin-up) with the PyGLDA extensions fan_*.
+
+Same as WaterGAP's run_watergap.py, but the forcing/static reader, the vertical water balance, the output writer
+and the restart module are the PyGLDA versions of src_GHM/Extension, and the output is written as one file per day
+(save_netcdf_daily_single_file). It is a stand-alone run of one model, outside the assimilation; the hot-start
+counterpart used by the ensemble is src_GHM/Interface/Hotrun.py.
+
+WaterGAP reads its configuration (Config_ReWaterGAP.json) from the command line when controller.configuration_module
+is imported, so run it from the code root as
+    python -m src_GHM.Extension.fan_run_watergap <path>/Config_ReWaterGAP.json
+(or import it after sys.argv has been set to the configuration file, as src_demo/global_run.py does).
+"""
 # =============================================================================
 # This module runs WaterGAP for a user selected period by calling both
 # vertical and lateral waterbalance functions
 # =============================================================================
 
+import src_GHM.Interface  # noqa: F401  puts src_GHM/ReWaterGAP on sys.path for WaterGAP's bare imports
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
 from termcolor import colored
 from misc.time_checker_and_ascii_image import check_time
 from controller import configuration_module as cm
-# from controller import read_forcings_and_static as rd
-from Extensions import fan_read_forcings_and_static as rd
+from src_GHM.Extension import fan_read_forcings_and_static as rd
 from controller import wateruse_handler as wateruse
 from model import parameters as pm
 from model import land_surfacewater_fraction_init as lwf
 from model.lateralwaterbalance import waterbalance_lateral as lb
-# from model.utility import restart_watergap as restartwatergap
 from model.utility import get_upstream_basin as get_basin
-# from model.verticalwaterbalance import waterbalance_vertical_init as vb
-from Extensions import fan_waterbalance_vertical_init as vb
-from Extensions import fan_createandwrite as cw
-from Extensions import fan_restart_watergap as restartwatergap
+from src_GHM.Extension import fan_waterbalance_vertical_init as vb
+from src_GHM.Extension import fan_createandwrite as cw
+from src_GHM.Extension import fan_restart_watergap as restartwatergap
 
 
 def run(calib_station=None, watergap_basin=None, basin_id=None):
@@ -314,40 +324,10 @@ def run(calib_station=None, watergap_basin=None, basin_id=None):
                 # =============================================================
                 # Store ouput variable if selected by user
                 # =============================================================
-                #  store data yearly or if end date of simulation period is
-                # reached (eg. is data is less than a year)
-                # if (pd.to_datetime(date).month == 12 and
-                #         pd.to_datetime(date).day == 31) or end_date == \
-                #         date.astype('datetime64[D]'):
-                #     save_year = date.astype('datetime64[D]')
-                #
-                #     if run_calib:
-                #         annual_streamflow = create_out_var.lb_fluxes['dis'].data.\
-                #             sel(lat=calib_station["lat"].values, lon=calib_station["lon"].values)
-                #
-                #         # km3/year for station
-                #         annual_streamflow = annual_streamflow.dis.resample(time='Y').sum().values
-                #         get_annual_streamflow.append(annual_streamflow[0][0][0])
-                #
-                #         annual_pot_cell_runoff = create_out_var.lb_fluxes['pot_cell_runoff'].data
-                #         annual_pot_cell_runoff = annual_pot_cell_runoff.pot_cell_runoff.\
-                #             resample(time='Y').sum(skipna=False)
-                #         annual_pot_cell_runoff.attrs['units'] = "km3/year"
-                #         get_annual_pot_cell_runoff.append(annual_pot_cell_runoff)
-                #     else:
-                #         print(f'\nWriting data for {save_year} to NetCDF\n')
-                #
-                #         create_out_var.base_units(initialize_forcings_static.static_data.cell_area,
-                #                                   initialize_forcings_static.static_data.
-                #                                   land_surface_water_fraction.contfrac)
-                #
-                #         create_out_var.save_netcdf_parallel(str(save_year))
-
                 #  store data on daily basis
                 create_out_var.base_units(initialize_forcings_static.static_data.cell_area,
                                           initialize_forcings_static.static_data.
                                           land_surface_water_fraction.contfrac)
-                # create_out_var.save_netcdf_parallel(str(date))
                 create_out_var.save_netcdf_daily_single_file(str(date))
 
 

@@ -14,19 +14,14 @@ class model_state_threshold:
     Rules (only for the storages that are part of the DA state, configDA.model.layer == True):
       soilmoist          0 <= S <= smax x land/continental fraction (smax from <Auxiliary_dir>/smax.nc; the fraction
                          is the member's largest of the window, set_soil_scale)
-      groundwstor        no bound by default. The open-loop envelope (min - (env_high-1)*range .. max + (env_high-1)*range)
-                         was a safety net against metre-scale blow-ups of the 4-member standard EnKF partition
-                         (Amazon run 3); with the non-negative partition and sub-basin-coherent additive inflation it
-                         clipped real signal instead (Danube: 2006 spring peak, 2007/2011-12 droughts).
-                         gw_lower=True / gw_upper=True restore the lower / upper edge
+      groundwstor        no bound (signed storage; follows GRACE beyond the open-loop range)
       riverstor          positive floor (a storage of exactly zero makes the Manning velocity divide by zero
                          in river_routing) and, if available, a per-cell envelope learned from the open loop:
                              env_low  * min_OL(cell)  <=  S  <=  env_high * max_OL(cell)
                          read from <Auxiliary_dir>/state_envelope_<basin>.nc (see src_DA.state_envelope);
                          without the file only the floor is applied
       swe                S >= 0 (no fixed upper limit: the filter limits snow relative to each member's forecast,
-                         see src_DA.bounds; snow_max sets an absolute safety limit if wanted, default none).
-                         With "envelope_factor": f, "envelope_offset_mm": o in "snow_bounds" (9 Oct 2026):
+                         see src_DA.bounds). With "envelope_factor": f, "envelope_offset_mm": o in "snow_bounds":
                              S <= f x max_OL(cell, calendar month of the day) + o
                          from swe_max_month of <Auxiliary_dir>/state_envelope_<basin>.nc (the open loop's largest snow
                          of that month over all years and members). The filter applies the same cap inside the
@@ -47,14 +42,9 @@ class model_state_threshold:
     them as a table (var, month, sub_basin, n_checked, n_lower, n_upper, water_added_mm, water_removed_mm).
     """
 
-    ENVELOPE_VARS = ('riverstor', 'groundwstor')     # storages bounded by the open-loop envelope
-
-    def __init__(self, configDA: config_DA, env_low: float = 0.5, env_high: float = 1.5, river_floor: float = 1e-3,
-                 snow_max: float = None, gw_lower: bool = False, gw_upper: bool = False):
+    def __init__(self, configDA: config_DA, env_low: float = 0.5, env_high: float = 1.5, river_floor: float = 1e-3):
         self.layers = [key for key, value in configDA.model.layer.items() if value is True]
-        self.env_low, self.env_high, self.river_floor, self.snow_max = env_low, env_high, river_floor, snow_max
-        self.gw_lower = gw_lower            # lower edge of the open-loop envelope for groundwater (default off)
-        self.gw_upper = gw_upper            # upper edge of the open-loop envelope for groundwater (default off)
+        self.env_low, self.env_high, self.river_floor = env_low, env_high, river_floor
 
         box_crop, _ = load_mask(mask_path=configDA.basic.basin_mask)
         self._lat_slice = slice(box_crop['lat_max'], box_crop['lat_min'])   # descending latitude
@@ -85,28 +75,13 @@ class model_state_threshold:
             env = xr.open_dataset(env_fn).sel(lon=self._lon_slice, lat=self._lat_slice)
             if self.snow_cap is not None and 'swe_max_month' in env:
                 self.snow_env_month = env['swe_max_month'].transpose('month', 'lat', 'lon').values.astype(float)
-            for var in [v for v in self.layers if v in self.ENVELOPE_VARS]:
-                if var == 'groundwstor' and not (self.gw_lower or self.gw_upper):
-                    continue                                # groundwater unbounded (default)
-                if ('%s_min' % var in env) and ('%s_max' % var in env):
-                    lo = env['%s_min' % var].values.astype(float)
-                    hi = env['%s_max' % var].values.astype(float)
-                    # outside the basin (NaN) -> no bound. For positive storages the bounds are env_low*min and
-                    # env_high*max; for signed storages (groundwater) the OL range is widened on both sides by
-                    # (env_high-1)*range so that a negative minimum does not shrink the interval
-                    rng = hi - lo
-                    signed = np.nanmin(lo) < 0
-                    if signed:
-                        lo_b, hi_b = lo - (self.env_high - 1.0) * rng, hi + (self.env_high - 1.0) * rng
-                    else:
-                        lo_b, hi_b = self.env_low * lo, self.env_high * hi
-                    lo = np.where(np.isfinite(lo), lo_b, -np.inf)
-                    hi = np.where(np.isfinite(hi), hi_b, np.inf)
-                    if var == 'groundwstor' and not self.gw_lower:
-                        lo = np.full_like(lo, -np.inf)       # follow GRACE droughts / declines beyond the OL range
-                    if var == 'groundwstor' and not self.gw_upper:
-                        hi = np.full_like(hi, np.inf)        # follow GRACE wet extremes beyond the OL range
-                    self.envelope[var] = (lo, hi)
+            if 'riverstor' in self.layers and 'riverstor_min' in env and 'riverstor_max' in env:
+                lo = env['riverstor_min'].values.astype(float)
+                hi = env['riverstor_max'].values.astype(float)
+                # outside the basin (NaN) -> no bound
+                lo = np.where(np.isfinite(lo), self.env_low * lo, -np.inf)
+                hi = np.where(np.isfinite(hi), self.env_high * hi, np.inf)
+                self.envelope['riverstor'] = (lo, hi)
             env.close()
         elif 'riverstor' in self.layers:
             print('model_state_threshold: %s not found -> riverstor bounded by the positive floor only' % env_fn)
@@ -116,6 +91,7 @@ class model_state_threshold:
 
         self.non_negative_vars = ['canopystor', 'reservoirstor', 'localwetlandstor', 'globalwetlandstor']
         self.unbounded_vars = ['locallakestor', 'globallakestor']
+        self.lake_floor = {}            # {lake storage: (lower, upper) 2-D}, set_lake_floor (lakes in the DA state)
 
         '''clipping statistics'''
         self.stats = {var: dict(n_calls=0, n_cells_checked=0, n_cells_clipped=0, water_added_mm=0.0,
@@ -128,8 +104,7 @@ class model_state_threshold:
     @staticmethod
     def _sub_basin_labels(mask_path, box_crop, res=0.5):
         """2-D integer field on the regional box: k for cells of sub_basin_k, 0 outside the basin (from the cached
-        load_mask result: global_2d and unit_label; reading the 772 datasets of the global mask again was a 1.6 GB
-        transient per rank until 8 Oct 2026)"""
+        load_mask result: global_2d and unit_label)"""
         _, lm = load_mask(mask_path=mask_path)
         i0 = int(round((90 - res / 2 - box_crop['lat_max']) / res))
         i1 = int(round((90 - res / 2 - box_crop['lat_min']) / res)) + 1
@@ -144,11 +119,16 @@ class model_state_threshold:
         Land / continental fraction of every cell of the regional box (2-D, the member's largest value of the current
         window; None = 1). WaterGAP writes soil per continental area (soil x land fraction / continental fraction,
         fan_waterbalance_vertical_init), smax.nc is per land area: the capacity of the daily soil is smax x scale.
-        With the unscaled smax (until 8 Oct 2026) the analysis could fill the soil of lake / wetland cells above
-        capacity and WaterGAP released the excess as runoff the next day. The largest value of the window is used
+        With the unscaled smax the analysis could fill the soil of lake / wetland cells above capacity, and WaterGAP
+        would release the excess as runoff the next day. The largest value of the window is used
         because the land fraction changes daily with the lakes and wetlands: no day's own soil is then above it.
         """
         self.soil_scale = None if scale is None else np.asarray(scale, dtype=float)
+
+    def set_lake_floor(self, grids):
+        """lake storages in the DA state: per-cell (lower, upper) on the regional box from WaterGAP's maximum lake
+        storage (src_DA.bounds.lake_floor_grids): lower slightly above -max_storage, 0 / 0 where there is no lake"""
+        self.lake_floor = dict(grids or {})
 
     # ------------------------------------------------------------------ bounds per storage
     def set_snow_forecast(self, snow):
@@ -172,21 +152,22 @@ class model_state_threshold:
                 return 0.0, self.smax * self.soil_scale
             return 0.0, self.smax
         if var == 'swe':
-            hi = np.inf if self.snow_max is None else self.snow_max
             cap = None if month is None else self.snow_cap_month(month)
             if cap is not None and self.snow_forecast is not None and np.shape(self.snow_forecast) == np.shape(cap):
                 cap = np.where(np.isfinite(self.snow_forecast), np.maximum(cap, self.snow_forecast), cap)
-            return 0.0, (hi if cap is None else np.minimum(hi, cap))
+            return 0.0, (np.inf if cap is None else cap)
         if var == 'riverstor':
             if var in self.envelope:
                 lo, hi = self.envelope[var]
                 return np.maximum(lo, self.river_floor), hi
             return self.river_floor, np.inf
-        if var in self.envelope:                        # groundwater (signed storage)
-            return self.envelope[var]
         if var in self.non_negative_vars:
             return 0.0, np.inf
-        return None                                     # lakes, groundwater without envelope: unbounded
+        if var in self.lake_floor:                      # lakes in the DA state: WaterGAP's floor (set_lake_floor)
+            lo, hi = self.lake_floor[var]
+            if np.shape(lo) == np.shape(x):
+                return lo, hi
+        return None                                     # groundwater, lakes: unbounded
 
     # ------------------------------------------------------------------ application
     def threshold(self, state: dict, date=None):
@@ -221,8 +202,7 @@ class model_state_threshold:
 
     def _record_month(self, var, month, old, diff, finite):
         """per sub-basin: cells checked, raised to the lower bound, cut at the upper bound, water added, removed;
-        one bincount per quantity instead of a loop over the sub-basins (772 passes over the grid per storage and
-        day for the global case until 8 Oct 2026)"""
+        one bincount per quantity instead of a loop over the sub-basins"""
         lower = finite & (diff > 0)                      # raised to the lower bound
         upper = finite & (diff < 0)                      # cut at the upper bound
         lab = self.sub_labels if self.sub_labels.shape == old.shape else np.zeros(old.shape, dtype=int)
@@ -270,10 +250,9 @@ class model_state_threshold:
         for var, st in self.stats.items():
             frac = st['n_cells_clipped'] / st['n_cells_checked'] if st['n_cells_checked'] else 0.0
             out[var] = dict(st, fraction_clipped=frac, bound='none' if self._bounds(var, None) is None else
-                            ('envelope' if var in self.envelope else 'fixed'))   # envelope only holds ENVELOPE_VARS
+                            ('envelope' if var in self.envelope else 'fixed'))
         out['_settings'] = dict(env_low=self.env_low, env_high=self.env_high, river_floor=self.river_floor,
-                                gw_lower=self.gw_lower, gw_upper=self.gw_upper,
-                                snow_max=self.snow_max, n_threshold_calls=self.n_updates,
+                                n_threshold_calls=self.n_updates,
                                 snow_envelope=None if self.snow_cap is None else
                                 dict(factor=self.snow_cap[0], offset_mm=self.snow_cap[1],
                                      monthly_max_loaded=self.snow_env_month is not None))
@@ -300,14 +279,3 @@ class model_state_threshold:
     def save_log(self, fn):
         Path(fn).parent.mkdir(parents=True, exist_ok=True)
         json.dump(self.summary(), open(fn, 'w'), indent=1)
-
-
-def demo1():
-    configDA = config_DA.loadjson('/media/user/My Book/Fan/PyGLDA_v2/settings/demo_3/DA_setting.json').process()
-    mst = model_state_threshold(configDA=configDA)
-    mst.print_summary()
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

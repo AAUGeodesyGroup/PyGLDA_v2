@@ -16,8 +16,8 @@ class basin_shp_process:
       'area'   : (default) a cell belongs to the sub-basin that covers the largest part of it, provided the whole
                  basin covers at least `area_threshold` of the cell (default 0.4: basin area within ~1 %, the
                  per-sub-basin areas within ~4 %, for the Danube); sub-basins never overlap
-      'centre' : a cell belongs to the sub-basin whose polygon contains the cell centre (classic rule used for
-                 the Amazon/demo_3 masks; about half of the cut boundary cells are dropped)
+      'centre' : a cell belongs to the sub-basin whose polygon contains the cell centre (classic rule, used for
+                 the earlier Amazon masks; about half of the cut boundary cells are dropped)
     Both rules are vectorised with shapely 2 (_cover: one STRtree query per sub-basin, cells entirely inside a
     polygon get cover 1 without clipping); the masks are identical to the earlier cell-by-cell loops (checked for
     the Danube and the Amazon, with and without configureBox). For shapefiles with hundreds of units on the global
@@ -238,7 +238,10 @@ class basin_shp_process:
         return fig
 
     def mask_to_vec(self, external_mask=None,
-                    model_mask_global='/media/user/My Book/Fan/W3RA_data/crop_input/test/mask/mask_global.h5'):
+                    model_mask_global=None):
+        """model_mask_global: h5 file with the global model land mask (dataset 'mask', 0/1)"""
+        if model_mask_global is None:
+            raise ValueError('basin_shp_process.mask_to_vec: model_mask_global must be given')
 
         basin_name = self._basin_name
         res = self._res
@@ -268,7 +271,6 @@ class basin_shp_process:
 
         '''mask 1D inside the land'''
         mask_1D = {}
-        # mask_1D['land'] = model_mask[model_mask.astype(bool)]
         for k, v in mask_2D.items():
             mask_1D[k] = (v.astype(int))[model_mask.astype(bool)]
             mask_1D[k] = mask_1D[k].astype(bool)
@@ -276,16 +278,13 @@ class basin_shp_process:
         self.collect_mask = (mask_2D, mask_1D, lat, lon, res)
         return self
 
-    def mask_to_vec_for_WaterGap(self, external_mask):
-
-
-        pass
-
-    def mask_nan(self, sample='/media/user/My Book/Fan/W3RA_data/states_sample/state.h5'):
+    def mask_nan(self, sample=None):
         """
         this is done for masking out the NaN values in states. And to do this work, one sample state file is necessary.
         NaN likely exists because of the mismatch between forcing field and model parameters/mask.
         """
+        if sample is None:
+            raise ValueError('basin_shp_process.mask_nan: sample (a state file with dataset FreeWater) must be given')
 
         h5_fn = h5py.File(Path(sample), 'r')
         sample = h5_fn['FreeWater'][0, :]
@@ -321,9 +320,6 @@ class basin_shp_process:
         box_mask_id = [lati[0]-2, lati[1] + 3, loni[0]-2, loni[1] + 3]
 
         lon, lat = np.meshgrid(lon, lat)
-        # box_mask = np.zeros(np.shape(lon))
-        #
-        # box_mask[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]] = 1
 
         lon = lon[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]]
         lat = lat[box_mask_id[0]:box_mask_id[1], box_mask_id[2]:box_mask_id[3]]
@@ -346,7 +342,7 @@ def load_mask(mask_path: dir):
     The datasets are read one at a time (the global file has 773 full-grid int64 datasets: 1.6 GB when read at
     once), the sub-basin vectors are kept as bool (772 x 55 461 cells: 43 MB instead of 343 MB), and the result
     of the last file is cached: the DA constructs ExtractStates, the design matrices and the threshold from the
-    same file on every rank (until 8 Oct 2026 six reads of ~7 s and four copies per rank). Callers never modify
+    same file on every rank (without the cache: six reads of ~7 s and four copies per rank). Callers never modify
     the dictionary.
     """
     mask_path = str(mask_path)
@@ -509,27 +505,3 @@ def mask_05_to_1(mask05_path, out_path=None, land_05=None, verbose=True):
                  if rescued else ''))
     return out_path
 
-
-def demo_Danube():
-    """rasterise the HydroBASINS Danube shapefile with the default rule and plot the grid"""
-    base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-    shp = base / 'Basin/shp/Danube/Danube.shp'
-    bs = basin_shp_process(res=0.5, basin_name='Danube', save_dir=base / 'Basin/mask').shp_to_mask(shp_path=str(shp), issave=False)
-    bs.plot_mask(shp_path=str(shp), fn=base / 'Extra/fig/Danube_grid_0.5', title='Danube 0.5-degree model grid')
-
-
-def demo1():
-    basin_shp = basin_shp_process(save_dir='/media/user/My Book/Fan/WaterGap/Basin/mask',
-                                  basin_name='Brahmaputra', res=0.5)
-    basin_shp.shp_to_mask(shp_path='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp', issave=True)
-
-    pass
-
-def demo2():
-    box_crop, local_mask = load_mask(mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5')
-    pass
-
-if __name__ == '__main__':
-    # demo1()
-    # demo2()
-    demo_Danube()

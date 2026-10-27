@@ -22,7 +22,7 @@ statistics of a unit are the same as in the regional report (da_evaluation.windo
         DA_setting.json, logs/       copies of the configuration and the filter / clipping / inflation logs
 The figures are drawn from these files by src_postprocessing.global_visualization.
 
-Usage:  GDA.da_evaluation(tag='pilot1')   (src_FlowControl/Global_DA.py), or
+Usage:  GDA.da_evaluation(tag='global_run')   (src_FlowControl/Global_DA.py), or
         from src_postprocessing.global_evaluation import evaluate_global_run
 It reads results only and does not touch the assimilation code.
 """

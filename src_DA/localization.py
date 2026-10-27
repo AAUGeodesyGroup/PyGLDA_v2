@@ -1,6 +1,6 @@
 """
 Localization of the Kalman gain for basin-averaged observations: an independent category, combined with any filter
-variant of src_DA.EnKF_localized / src_DA.EnKF_variants.
+of src_DA.EnKF_localized / src_DA.LETKF.
 
 With a small ensemble the sample cross-covariance between the state of one sub-basin and the observation of another
 is dominated by sampling noise (Amazon, 4 members: the estuary innovation removed river storage along the whole
@@ -48,9 +48,9 @@ class Localization:
     def build(self, local_mask, nvar):
         """
         returns L_state (n_state x n_obs, cell-major: nvar rows per cell) as a scipy.sparse CSR matrix holding only
-        the non-zero taper weights, and L_obs (n_obs x n_obs, dense). The dense L_state of the global case
-        (166 383 x 772, 1 GB, 99.9 % zeros for block localization) was held on every MPI rank until 8 Oct 2026;
-        the filter, the partition and the inflation evaluate their products only on the pattern of L_state.
+        the non-zero taper weights, and L_obs (n_obs x n_obs, dense). A dense L_state of the global case
+        (166 383 x 772, 1 GB, 99.9 % zeros for block localization) would be held on every MPI rank; the filter,
+        the partition and the inflation evaluate their products only on the pattern of L_state.
         """
         M = sub_basin_membership(local_mask)
         L_cell, L_obs = self._tapers(M, local_mask)
@@ -107,19 +107,10 @@ class GaussianLocalization(Localization):
         g = local_mask['global_2d'].astype(bool)
         return lat_mesh[g], lon_mesh[g]
 
-    @staticmethod
-    def haversine_matrix(lat, lon):
-        """pairwise great-circle distances [km] between cells (n x n); only for small regions (n^2 memory)"""
-        R = 6371.0
-        la, lo = np.deg2rad(lat)[:, None], np.deg2rad(lon)[:, None]
-        dlat, dlon = la - la.T, lo - lo.T
-        a = np.sin(dlat / 2) ** 2 + np.cos(la) * np.cos(la.T) * np.sin(dlon / 2) ** 2
-        return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
     def _tapers(self, M, local_mask):
         """
-        distance of every cell to the nearest cell of every sub-basin with one KD-tree per sub-basin (the full
-        cell-to-cell matrix was n_cell^2: 25 GB for the global case); L_cell keeps only the pairs within the cutoff
+        distance of every cell to the nearest cell of every sub-basin with one KD-tree per sub-basin (a full
+        cell-to-cell matrix would be n_cell^2: 25 GB for the global case); L_cell keeps only the pairs within the cutoff
         """
         from scipy.spatial import cKDTree
         R = 6371.0

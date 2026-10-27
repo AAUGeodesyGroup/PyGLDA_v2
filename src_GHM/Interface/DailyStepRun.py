@@ -18,17 +18,13 @@ import numpy as np
 from tqdm import tqdm
 import pandas as pd
 from termcolor import colored
-# from misc.time_checker_and_ascii_image import check_time
 from controller import configuration_module as cm
-# from controller import read_forcings_and_static as rd
 from src_GHM.Extension import fan_read_forcings_and_static as rd
 from controller import wateruse_handler as wateruse
 from model import parameters as pm
 from model import land_surfacewater_fraction_init as lwf
 from model.lateralwaterbalance import waterbalance_lateral as lb
-# from model.utility import restart_watergap as restartwatergap
 from model.utility import get_upstream_basin as get_basin
-# from model.verticalwaterbalance import waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_createandwrite as cw
 from src_GHM.Extension import fan_restart_watergap as restartwatergap
@@ -218,169 +214,6 @@ class DailyModelRun:
         self.unit_converter = UnitConverter(self.initialize_forcings_static.static_data.cell_area,
                                             self.initialize_forcings_static.static_data.land_surface_water_fraction.contfrac)
 
-    def hot_run(self):
-        """
-        Perform the daily model run using initialized variables.
-        """
-
-        time_range, simulation_date, run_calib = self.time_range, self.simulation_date, cm.run_calib
-
-        restart = self.restart
-
-        for time_step, date in tqdm(zip(range(time_range), simulation_date),
-                                    total=(time_range - 1), desc="Processing",
-                                    disable=run_calib):
-
-            self.initialize_forcings_static.climate_forcing.update(date)
-
-            # =================================================================
-            #  Get Land area fraction and reservoirs respective years
-            # =================================================================
-            # Activate reservoirs for current year
-            self.lateral_waterbalance. \
-                activate_res_area_storage_capacity(date, cm.RESERVOIR_OPT_YEARS,
-                                                   restart)
-
-            # Get Land area fraction
-            self.land_water_frac. \
-                landareafrac_with_reservior(date, cm.RESERVOIR_OPT_YEARS)
-
-            # Get land and water fractions (used to calculate total PET)
-            self.land_water_frac.get_land_and_water_freq(date)
-
-            # Adapt global reservoir storage and land area fraction
-            # due to net change in land fraction
-            self.lateral_waterbalance.glores_storage = self.land_water_frac. \
-                adapt_glores_storage(self.vertical_waterbalance.canopy_storage,
-                                     self.vertical_waterbalance.snow_water_storage,
-                                     self.vertical_waterbalance.soil_water_content,
-                                     self.lateral_waterbalance.glores_area,
-                                     self.lateral_waterbalance.glores_storage)
-
-            # =================================================================
-            #  Computing vertical water balance
-            # =================================================================
-            self.vertical_waterbalance. \
-                calculate(date, self.land_water_frac.current_landareafrac,
-                          self.land_water_frac.landareafrac_ratio,
-                          self.watergap_basin.upstream_basin,
-                          self.land_water_frac.water_freq,
-                          self.land_water_frac.land_freq)
-
-            # =================================================================
-            #  Computing lateral water balance
-            # =================================================================
-            self.lateral_waterbalance. \
-                calculate(self.vertical_waterbalance.fluxes['groundwater_recharge'],
-                          self.vertical_waterbalance.fluxes['openwater_PET'],
-                          self.vertical_waterbalance.fluxes['daily_precipitation'],
-                          self.vertical_waterbalance.fluxes['surface_runoff'],
-                          self.vertical_waterbalance.fluxes['daily_storage_transfer'],
-                          self.vertical_waterbalance.fluxes['land_aet_corr'],
-                          self.land_water_frac.current_landareafrac,
-                          self.land_water_frac.previous_landareafrac,
-                          self.land_water_frac.landwaterfrac_excl_glolake_res,
-                          date, self.first_day_of_month, self.watergap_basin.upstream_basin,
-                          self.vertical_waterbalance.fluxes['sum_canopy_snow_soil_storage'],
-                          run_calib)
-
-            # =================================================================
-            #  Update Land Area Fraction
-            # =================================================================
-            land_swb_fraction = self.lateral_waterbalance.get_new_swb_fraction()
-            self.land_water_frac.update_landareafrac(land_swb_fraction)
-
-            # =============================================================
-            # Write vertical and lateralbalacne variables to file
-            # =============================================================
-            sim_month = pd.to_datetime(date).month
-            sim_day = pd.to_datetime(date).day
-            sim_year = pd.to_datetime(date).year
-            # Getting daily storages and fluxes and writing to variables
-            vb_storages_and_fluxes = \
-                self.vertical_waterbalance.get_storages_and_fluxes()
-
-            self.create_out_var. \
-                verticalbalance_write_daily_var(vb_storages_and_fluxes,
-                                                sim_year, sim_month, sim_day)
-
-            # Getting daily storages and fluxes and writing to variables
-            lb_storages_and_fluxes = \
-                self.lateral_waterbalance.get_storages_and_fluxes()
-
-            self.create_out_var. \
-                lateralbalance_write_daily_var(lb_storages_and_fluxes,
-                                               sim_year, sim_month, sim_day)
-
-            #  store data on daily basis
-            self.create_out_var.base_units(self.initialize_forcings_static.static_data.cell_area,
-                                           self.initialize_forcings_static.static_data.
-                                           land_surface_water_fraction.contfrac)
-            # create_out_var.save_netcdf_parallel(str(date))
-            self.create_out_var.save_netcdf_daily_single_file(str(date))
-
-            # =============================================================
-            #  Get restart information if restart is needed.
-            # =============================================================
-            if self.end_date == date.astype('datetime64[D]'):
-                if self.savestate_for_restart:
-                    self.restart_model. \
-                        savestate(date,
-                                  self.land_water_frac.current_landareafrac,
-                                  self.land_water_frac.previous_landareafrac,
-                                  self.land_water_frac.landareafrac_ratio,
-                                  self.land_water_frac.previous_swb_frac,
-                                  self.land_water_frac.glores_frac_prevyear,
-                                  self.land_water_frac.gloresfrac_change,
-                                  self.land_water_frac.init_landfrac_res_flag,
-                                  self.land_water_frac.landwaterfrac_excl_glolake_res,
-                                  self.land_water_frac.land_and_water_freq_flag,
-                                  self.land_water_frac.water_freq,
-                                  self.land_water_frac.land_freq,
-                                  self.land_water_frac.updated_loclake_frac,
-
-                                  self.vertical_waterbalance.lai_days,
-                                  self.vertical_waterbalance.cum_precipitation,
-                                  self.vertical_waterbalance.growth_status,
-                                  self.vertical_waterbalance.canopy_storage,
-                                  self.vertical_waterbalance.snow_water_storage,
-                                  self.vertical_waterbalance.snow_water_storage_subgrid,
-                                  self.vertical_waterbalance.soil_water_content,
-                                  self.vertical_waterbalance.daily_storage_transfer,
-
-                                  self.lateral_waterbalance.groundwater_storage,
-                                  self.lateral_waterbalance.loclake_storage,
-                                  self.lateral_waterbalance.locwet_storage,
-                                  self.lateral_waterbalance.glolake_storage,
-                                  self.lateral_waterbalance.glowet_storage,
-                                  self.lateral_waterbalance.river_storage,
-
-                                  self.lateral_waterbalance.glores_storage,
-                                  self.lateral_waterbalance.k_release,
-                                  self.lateral_waterbalance.unsatisfied_potential_netabs_riparian,
-                                  self.lateral_waterbalance.unsat_potnetabs_sw_from_demandcell,
-                                  self.lateral_waterbalance.unsat_potnetabs_sw_to_supplycell,
-                                  self.lateral_waterbalance.get_neighbouring_cells_map,
-                                  self.lateral_waterbalance. \
-                                  accumulated_unsatisfied_potential_netabs_sw,
-
-                                  self.lateral_waterbalance.daily_unsatisfied_pot_nas,
-                                  self.lateral_waterbalance. \
-                                  prev_accumulated_unsatisfied_potential_netabs_sw,
-                                  self.lateral_waterbalance.prev_potential_water_withdrawal_sw_irri,
-                                  self.lateral_waterbalance.prev_potential_consumptive_use_sw_irri,
-                                  self.lateral_waterbalance.set_res_storage_flag
-                                  )
-
-        print('Status:' + colored(' complete', 'cyan'))
-
-        # if run_calib:
-        #     sim_data_calib = {"sim_dis": get_annual_streamflow,
-        #                       "pot_cell_runoff": get_annual_pot_cell_runoff}
-        #     return sim_data_calib
-
-        pass
-
     def update(self, day, previous_states, **kwargs):
         """
 
@@ -484,7 +317,6 @@ class DailyModelRun:
         self.create_out_var.base_units(self.initialize_forcings_static.static_data.cell_area,
                                        self.initialize_forcings_static.static_data.
                                        land_surface_water_fraction.contfrac)
-        # create_out_var.save_netcdf_parallel(str(date))
         self.create_out_var.save_netcdf_daily_single_file(str(day))
 
         # =============================================================
@@ -548,8 +380,6 @@ class DailyModelRun:
         """
         time_range, simulation_date, run_calib = self.time_range, self.simulation_date, cm.run_calib
 
-        # restart = self.restart
-
         states_over_time = []
 
         state = None
@@ -558,7 +388,6 @@ class DailyModelRun:
                                     disable=run_calib):
 
             state = self.update(date, state)
-            # states_over_time.append(state)
 
         print('Status:' + colored(' complete', 'cyan'))
 
@@ -603,8 +432,7 @@ class DailyModelRun:
         Bring the 100 elevation sub-cells of the snow storage in line with a cell snow value set from outside (the
         analysis of the data assimilation). WaterGAP's snow routine works on the sub-cells only and recomputes the cell
         snow every day as their mean (ReWaterGAP/model/verticalwaterbalance/snow.py), so setting only
-        snow_water_storage was undone on the next model day and the swe increment of the analysis was lost
-        (until 8 Oct 2026). Per cell, with old = mean of the current sub-cells and new = the given snow:
+        snow_water_storage would be undone on the next model day and the swe increment of the analysis lost. Per cell, with old = mean of the current sub-cells and new = the given snow:
             old > 0            sub-cells scaled by new / old (elevation structure kept, snow-free sub-cells stay free)
             old = 0, new > 0   new on every sub-cell
             new <= 0           sub-cells set to 0
@@ -631,8 +459,3 @@ class DailyModelRun:
         cols[:, (~scaled) & (n <= 0)] = 0.0
         sub[:, ii, jj] = cols
         pass
-
-
-# if __name__ == "__main__":
-#     run_with_time_check = check_time(run)
-#     run_with_time_check()

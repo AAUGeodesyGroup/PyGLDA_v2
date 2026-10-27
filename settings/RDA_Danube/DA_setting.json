@@ -1,29 +1,22 @@
 {
     "basic": {
-        "fromdate": "2002-01-01",
-        "todate": "2006-12-31",
-        "ensemble": 30,
-        "case": "RDA_Danube",
-        "basin": "Danube",
-        "basin_shp": "/work/PyGLDA_v2_external_data/Basin/shp/Danube/Danube.shp",
-        "basin_mask": "/work/PyGLDA_v2_external_data/Basin/mask/Danube/Danube_res_0.5.h5",
-        "res_permanent": "/work/PyGLDA_v2_external_data/Res",
-        "OL_output_temp_dir": "/work/PyGLDA_v2_external_data/OL_output",
-        "DA_output_temp_dir": "/work/PyGLDA_v2_external_data/DA_output",
-        "Ensemble_ini_dir": "/work/PyGLDA_v2_external_data/Ensemble_Initialization",
-        "Ensemble_input_dir": "/work/PyGLDA_v2_external_data/Ensemble_input",
-        "Auxiliary_dir": "/work/PyGLDA_v2_external_data/Auxiliary"
+        "res_permanent": "${DATA_ROOT}/Res",
+        "OL_output_temp_dir": "${DATA_ROOT}/OL_output",
+        "DA_output_temp_dir": "${DATA_ROOT}/DA_output",
+        "Ensemble_ini_dir": "${DATA_ROOT}/Ensemble_Initialization",
+        "Ensemble_input_dir": "${DATA_ROOT}/Ensemble_input",
+        "Auxiliary_dir": "${DATA_ROOT}/Auxiliary"
     },
     "obs": {
-        "name": "src_OBS",
-        "dir": "/work/PyGLDA_v2_external_data/GRACE/obs",
+        "dir": "${DATA_ROOT}/GRACE/obs",
         "GRACE": {
-            "EWH_grid_dir": "/work/PyGLDA_v2_external_data/GRACE/SaGEA/signal_Mascon",
-            "cov_dir": "/work/PyGLDA_v2_external_data/GRACE/SaGEA/sample_DDK3",
-            "preprocess_res": "/work/PyGLDA_v2_external_data/GRACE/output",
-            "OL_mean": "/work/PyGLDA_v2_external_data/GRACE/OLmean",
-            "aux_for_time_epochs": "/work/PyGLDA_v2_external_data/GRACE/SaGEA/signal_Mascon",
-            "kind": "Mascon_monthly"
+            "kind": "Mascon_monthly",
+            "EWH_grid_dir": "${DATA_ROOT}/GRACE/SaGEA/signal_Mascon",
+            "cov_dir": "${DATA_ROOT}/GRACE/SaGEA/sample_DDK3",
+            "aux_for_time_epochs": "${DATA_ROOT}/GRACE/SaGEA/signal_Mascon",
+            "preprocess_res": "${DATA_ROOT}/GRACE/output",
+            "OL_mean": "${DATA_ROOT}/GRACE/OLmean",
+            "resample": "block_mean"
         }
     },
     "model": {
@@ -43,44 +36,44 @@
     },
     "method": {
         "fusion_method": "EnKF_localized",
-        "localization": {
-            "kind": "block"
-        },
+        "localization": {"kind": "block"},
         "inflation": {
             "kind": "adaptive_additive",
-            "split": "ol_spread",
-            "split_storages": [
-                "groundwstor",
-                "soilmoist",
-                "swe"
-            ],
-            "weight_current": 0.5,
-            "max_factor": 3.0,
-            "min_sigma": 5.0,
-            "remove_bias": true,
-            "bias_memory": 0.05,
+            "split_storages": ["groundwstor", "soilmoist"],
             "seed": 42
         },
         "increment_partition": {
             "kind": "non_negative",
             "max_weight_ratio": {
-                "groundwstor": 5
+                "groundwstor": 5,
+                "riverstor": 5,
+                "localwetlandstor": 5,
+                "globalwetlandstor": 5
             },
             "spatial_blend": {
-                "groundwstor": 0.8
+                "groundwstor": 0.8,
+                "riverstor": 0.3,
+                "localwetlandstor": 0.3,
+                "globalwetlandstor": 0.3
             },
-            "max_cell_factor": 3
+            "max_cell_factor": {
+                "groundwstor": 2,
+                "soilmoist": 2,
+                "swe": 2,
+                "localwetlandstor": 2,
+                "globalwetlandstor": 2
+            },
+            "storage_shares": {
+                "storages": ["soilmoist", "groundwstor"]
+            }
         },
-        "obs_error_inflation": {},
         "obs_error_correlation": "diagonal",
         "obs_perturbation_centering": true,
-        "soil_upper_bound": true,
-        "snow_bounds": {
-            "lower_factor": 0.5,
-            "upper_factor": 2.0,
-            "upper_offset_mm": 20.0,
-            "envelope_factor": 1.5,
-            "envelope_offset_mm": 10.0
-        }
+        "soil_daily_bounds": true,
+        "increment_release": {
+            "storages": ["riverstor"],
+            "days": 10
+        },
+        "snow_bounds": {"envelope_factor": 1.5}
     }
 }

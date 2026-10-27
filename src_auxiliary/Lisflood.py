@@ -13,7 +13,14 @@ regular N-day windows, or the exact windows of an existing observation record (e
 
 Input (folder Extra/lisfHR3a/daily_05deg): one netCDF per variable and year, daily, global 0.5 deg,
 lat -89.75 -> 89.75 (south up; PyGLDA masks are north up -> flipped here), lon -179.75 -> 179.75,
-storages in metres of water (converted to mm), discharge in m3/s. Interception ('cum') is zero in this run.
+storages in metres of water (converted to mm), discharge in m3/s. Interception ('cum') is zero in lisfHR3a.
+
+Usage:
+    lf = LISFLOOD_HR3a(basin_name='Amazon', shp_path=<shp>, mask_path=<Basin/mask/Amazon/Amazon_res_0.5.h5>,
+                       dir_in=<Extra/lisfHR3a/daily_05deg>, land_mask_path=<GRACE/global_mask/...hdf5>)
+    lf.basin_TWS(day_begin='2007-01-01', day_end='2020-12-31', windows='monthly', dir_out=<out>)
+    lf.grid_TWS(...); lf.components_TWS(...)
+    windows=list(duration) with the 'duration' strings of a TUD signal file averages over the TUD 5-daily windows.
 
 Developer: Fan Yang (fany@plan.aau.dk), Geodesy Group, Aalborg University. 2026-09.
 """
@@ -42,13 +49,16 @@ class LISFLOOD_HR3a:
     """Basin / sub-basin / gridded LISFLOOD TWS in GRACE-observation format."""
 
     def __init__(self, basin_name='Amazon', shp_path='../data/basin/shp/Amazon/Amazon.shp', mask_path=None,
-                 dir_in='/media/user/My Book/Fan/PyGLDA_v2_external_data/Extra/lisfHR3a/daily_05deg',
+                 dir_in=None,
                  land_mask_path=None, prefix='lisfHR3a_'):
         """
         mask_path: PyGLDA mask '<basin>_res_0.5.h5' (north up); land_mask_path: GlobalLandMaskForGRACE.hdf5
         (optional) - cells outside the GRACE land mask are dropped, as in the GRACE pre-processing, so that
         model and observation means are formed over the same cells.
+        dir_in: folder of the daily 0.5-degree LISFLOOD netCDF files (Extra/lisfHR3a/daily_05deg)
         """
+        if dir_in is None:
+            raise ValueError('LISFLOOD_HR3a: dir_in (folder of the LISFLOOD netCDF files) must be given')
         self.basin_name = basin_name
         self.dir_in = Path(dir_in)
         self.prefix = prefix
@@ -203,26 +213,3 @@ class LISFLOOD_HR3a:
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         pass
 
-
-def demo_Amazon():
-    base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-    lf = LISFLOOD_HR3a(basin_name='Amazon', shp_path=str(base / 'Basin/shp/Amazon/Amazon.shp'),
-                       mask_path=str(base / 'Basin/mask/Amazon/Amazon_res_0.5.h5'),
-                       dir_in=str(base / 'Extra/lisfHR3a/daily_05deg'),
-                       land_mask_path=str(base / 'GRACE/global_mask/GlobalLandMaskForGRACE.hdf5'))
-    out = str(base / 'Extra/res_file')
-    '''monthly, like the CSR mascons'''
-    lf.basin_TWS(day_begin='2007-01-01', day_end='2020-12-31', windows='daily', dir_out=out)
-    lf.grid_TWS(day_begin='2007-01-01', day_end='2020-12-31', windows='daily', dir_out=out)
-    '''daily'''
-    # lf.basin_TWS(day_begin='2007-01-01', day_end='2020-12-31', windows='daily', dir_out=out, suffix='_lisflood_daily')
-    '''on the TUD 5-daily windows: pass the 'duration' strings of the TUD signal file'''
-    # dur = h5py.File(base / 'GRACE/output_TUD/Amazon_signal.hdf5')['duration'][:].astype(str)
-    # lf.basin_TWS(day_begin='2007-01-01', day_end='2016-04-30', windows=list(dur), dir_out=out, suffix='_lisflood_TUDwindows')
-    '''all compartments, monthly'''
-    # lf.components_TWS(day_begin='2007-01-01', day_end='2020-12-31', windows='monthly', dir_out=out)
-    pass
-
-
-if __name__ == '__main__':
-    demo_Amazon()

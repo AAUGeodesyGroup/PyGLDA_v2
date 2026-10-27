@@ -1,4 +1,18 @@
+"""
+Observation preparation for the ESA-SING simulated gravity missions (GRACE-C-like, NGGM, MAGIC): basin TWS, its
+covariance and gridded TWS of the 5-daily (or monthly) simulated solutions, in the same file format as the GRACE
+preparation (prepare_GRACE.GRACE_preparation), so that they can be assimilated like GRACE.
 
+    es = ESA_SING_ESM3(basin_name='Europe', shp_path='<units.shp>')
+    es.set_extra_info(mission=ESA_SING_mission.MAGIC, aux_dir='<ESM3.0/5daily>')
+    es.generate_mask(res_05=False)
+    es.basin_TWS(day_begin='2012-03-01', day_end='2018-12-31', dir_in='<L3 files>', dir_out='<output>')
+    es.basin_COV(day_begin='2012-03-01', day_end='2018-12-31', dir_in='<L3 files>', dir_out='<output>')
+    es.grid_TWS(day_begin='2012-03-01', day_end='2018-12-31', dir_in='<L3 files>', dir_out='<output>')
+
+ESA_SING_5daily reads the ESA-SING 5-daily files per mission/filter, ESA_SING_ESM2 the L3b product of ESM 2
+(1995-2006), ESA_SING_ESM3 that of ESM 3.0 (2007-2020).
+"""
 import numpy as np
 import h5py
 import netCDF4 as nc
@@ -18,31 +32,34 @@ class ESA_SING_5daily(GRACE_preparation):
     """
 
     def __init__(self, basin_name='Brahmaputra_ExpZero',
-                 shp_path='../data/basin/shp/ESA_SING/subbasins_3/Brahmaputra_3_subbasins.shp'):
+                 shp_path=None):
         super().__init__(basin_name=basin_name, shp_path=shp_path)
         self._filter = None
         self._mission = None
         pass
 
-    def set_extra_info(self, filter='1e+16', mission='GRACE-C-like', grid_def='subbasins_3'):
+    def set_extra_info(self, aux_dir, filter='1e+16', mission='GRACE-C-like', grid_def='subbasins_3'):
+        """aux_dir: folder of the ESA-SING 5-daily files (one subfolder per year), used for the time reference"""
         self._filter = filter
         self._mission = mission
         self._grid_def = grid_def
 
         '''get a complete time list for all ESA simulation dataset'''
         self._aux = aux_ESAsing_5daily().setTimeReference(day_begin='1990-04-01', day_end='2020-05-01',
-                                                          dir_in='/media/user/My Book/Fan/ESA_SING/ESA_5daily')
+                                                          dir_in=aux_dir)
 
         return self
 
     def basin_TWS(self, day_begin='2002-04-01', day_end='2002-05-09',
-                  dir_in='/media/user/My Book/Fan/ESA_SING/Brahmaputra',
-                  dir_out='/media/user/My Book/Fan/ESA_SING/TestRes'):
+                  dir_in=None,
+                  dir_out=None):
         """
         This is unique for our dataset; Users must change for their own purpose
         The data: -89.75--->89.75, -179.75--->179.75
         The mask: lon: -180-->180, lat: 90--->-90
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
 
         print()
         print('Start to pre-process GRACE to obtain basin-wise TWS over places of interest...')
@@ -83,14 +100,16 @@ class ESA_SING_5daily(GRACE_preparation):
         pass
 
     def basin_COV(self, day_begin='2002-04-01', day_end='2002-05-09',
-                  dir_in='/media/user/My Book/Fan/ESA_SING/Brahmaputra',
-                  dir_out='/media/user/My Book/Fan/ESA_SING/TestRes', isDiagonal=False):
+                  dir_in=None,
+                  dir_out=None, isDiagonal=False):
         """
         This is unique for our dataset; Users must change for their own purpose.
 
         The data: -89.75--->89.75, -179.75--->179.75
         The mask: lon: -180-->180, lat: 90--->-90
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
         print()
         print('Start to pre-process GRACE to obtain covariance over places of interest...')
 
@@ -132,13 +151,15 @@ class ESA_SING_5daily(GRACE_preparation):
         pass
 
     def grid_TWS(self, day_begin='2002-04-01', day_end='2002-05-09',
-                 dir_in='/media/user/My Book/Fan/ESA_SING/globe',
-                 dir_out='/media/user/My Book/Fan/ESA_SING/TestRes'):
+                 dir_in=None,
+                 dir_out=None):
         """
         This is unique for our dataset; Users must change for their own purpose
         The data: -89.75--->89.75, -179.75--->179.75
         The mask: lon: -180-->180, lat: 90--->-90
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
 
         '''load mask'''
         res = 0.5
@@ -190,29 +211,32 @@ class ESA_SING_ESM2(GRACE_preparation):
     """
 
     def __init__(self, basin_name='Brahmaputra_ExpZero',
-                 shp_path='../data/basin/shp/ESA_SING/subbasins_3/Brahmaputra_3_subbasins.shp'):
+                 shp_path=None):
         super().__init__(basin_name=basin_name, shp_path=shp_path)
         self._mission = None
         pass
 
-    def set_extra_info(self, mission=ESA_SING_mission.GRACE_C_Like):
+    def set_extra_info(self, aux_dir, mission=ESA_SING_mission.GRACE_C_Like):
+        """aux_dir: folder of the ESA-SING 5-daily files (one subfolder per year), used for the time reference"""
         self._mission = mission
 
         '''get a complete time list for all ESA simulation dataset'''
         '''This specification is for ESM2 and 5daily solution'''
         self._aux = aux_ESAsing_5daily().setTimeReference(day_begin='1990-04-01', day_end='2020-05-01',
-                                                          dir_in='/media/user/My Book/Fan/ESA_SING/ESA_5daily')
+                                                          dir_in=aux_dir)
         self._file_name = 'L3b_fivedaily_product_1995_2006_V2.4.nc'
 
         return self
 
     def basin_TWS(self, day_begin='2002-04-01', day_end='2002-05-09',
-                  dir_in='/media/user/My Book/Fan/ESA_SING/ESA_SING_L3b',
-                  dir_out='/media/user/My Book/Fan/ESA_SING/TestRes'):
+                  dir_in=None,
+                  dir_out=None):
         """
         Both tws gridded data and mask data follows lon: -180-->180, lat: 90--->-90.
         The spatial resolution is 1 degree in ESA-SING's simulation.
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
 
         print()
         print('Start to pre-process GRACE to obtain basin-wise TWS over places of interest...')
@@ -272,13 +296,15 @@ class ESA_SING_ESM2(GRACE_preparation):
         pass
 
     def basin_COV(self, day_begin='2002-04-01', day_end='2002-05-09',
-                  dir_in='/media/user/My Book/Fan/ESA_SING/ESA_SING_L3b',
-                  dir_out='/media/user/My Book/Fan/ESA_SING/TestRes', isDiagonal=False):
+                  dir_in=None,
+                  dir_out=None, isDiagonal=False):
         """
         Both tws gridded data and mask data follows lon: -180-->180, lat: 90--->-90.
         The spatial resolution is 1 degree in ESA-SING's simulation.
         For ESA-SING simulation, the COV is stattic. In this function, COV is obtained from residuals.
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
         print()
         print('Start to pre-process GRACE to obtain covariance over places of interest...')
 
@@ -341,13 +367,15 @@ class ESA_SING_ESM2(GRACE_preparation):
         pass
 
     def grid_TWS(self, day_begin='2002-04-01', day_end='2002-05-09',
-                 dir_in='/media/user/My Book/Fan/ESA_SING/ESA_SING_L3b',
-                 dir_out='/media/user/My Book/Fan/ESA_SING/TestRes'):
+                 dir_in=None,
+                 dir_out=None):
         """
         Both tws gridded data and mask data follows lon: -180-->180, lat: 90--->-90.
         The spatial resolution is 1 degree in ESA-SING's simulation.
         For ESA-SING simulation, the COV is stattic. In this function, COV is obtained from residuals.
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('dir_in and dir_out must be given')
 
         '''load basin mask'''
         res = 1
@@ -390,59 +418,19 @@ class ESA_SING_ESM3(ESA_SING_ESM2):
     """
 
     def __init__(self, basin_name='Brahmaputra_ExpZero',
-                 shp_path='../data/basin/shp/ESA_SING/subbasins_3/Brahmaputra_3_subbasins.shp'):
+                 shp_path=None):
         super().__init__(basin_name=basin_name, shp_path=shp_path)
         pass
 
-    def set_extra_info(self, mission=ESA_SING_mission.GRACE_C_Like):
-
+    def set_extra_info(self, aux_dir, mission=ESA_SING_mission.GRACE_C_Like):
+        """aux_dir: folder of the ESM 3.0 5-daily files (one subfolder per year), used for the time reference"""
         self._mission = mission
 
         '''get a complete time list for all ESA simulation dataset'''
         '''This specification is for ESM2 and 5daily solution'''
         self._aux = aux_ESM3_5daily().setTimeReference(day_begin='1990-04-01', day_end='2030-05-01',
-                                                          dir_in='/media/user/My Book/Fan/ESA_SING/ESM3.0/5daily')
+                                                          dir_in=aux_dir)
 
         self._file_name = 'L3_5day_product_2007_2020_recommended.nc'
 
         return self
-
-
-def demo1():
-    es = ESA_SING_5daily(basin_name='Brahmaputra_ExpZero',
-                         shp_path='../data/basin/shp/ESA_SING/subbasins_3/Brahmaputra_3_subbasins.shp')
-
-    # es.set_extra_info(filter='1e+16', mission='GRACE-C-like')
-    # es.set_extra_info(filter='1e+16', mission='MAGIC')
-    es.set_extra_info(filter='1e+16', mission='NGGM')
-
-    es.generate_mask()
-
-    es.basin_TWS(day_begin='2003-09-01', day_end='2006-12-31')
-
-    es.basin_COV(day_begin='2003-09-01', day_end='2006-12-31')
-
-    es.grid_TWS(day_begin='2003-09-01', day_end='2006-12-31')
-    pass
-
-
-def demo2():
-    es = ESA_SING_ESM3(basin_name='Europe',
-                       shp_path='../data/basin/shp/Europe/Grid_3/Europe_subbasins.shp')
-
-    # es.set_extra_info(mission=ESA_SING_mission.GRACE_C_Like)
-    # es.set_extra_info(mission=ESA_SING_mission.NGGM)
-    es.set_extra_info(mission=ESA_SING_mission.MAGIC)
-
-    es.generate_mask(res_05=False)
-
-    es.basin_TWS(day_begin='2012-03-01', day_end='2018-12-31')
-
-    es.basin_COV(day_begin='2012-03-01', day_end='2018-12-31', isDiagonal=False)
-
-    es.grid_TWS(day_begin='2012-03-01', day_end='2018-12-31')
-    pass
-
-
-if __name__ == '__main__':
-    demo2()

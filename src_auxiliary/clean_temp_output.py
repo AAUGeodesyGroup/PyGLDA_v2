@@ -12,7 +12,7 @@ Safety rules
   * a stage whose results have not been collected yet (Res/<case>/<STAGE>/Ens_k/basin_ts_<STAGE>.h5
     missing for one of the members) is refused unless force=True
   * the open-loop scratch <OL_output_temp_dir>/Ens_k is shared between cases (a global open loop is reused by
-    other cases, e.g. demo_Global on the open loop of demo_Danube); it is refused unless force=True
+    other cases, e.g. a global case on the open loop of a regional one); it is refused unless force=True
 """
 import re
 from pathlib import Path
@@ -42,7 +42,7 @@ def clean_daily_output(temp_dir, res_dir, stage: Stage, case=None, dry_run=True,
         temp_dir = temp_dir / case
     elif stage == Stage.OL and not force:
         '''<OL_output_temp_dir>/Ens_k is not case-specific: the global open loop there is reused by other cases
-        (e.g. demo_Global assimilates on the open loop of demo_Danube), and the collection check below only looks at
+        (e.g. a global case assimilates on the open loop of a regional one), and the collection check below only looks at
         Res/<this case>. Deleting it needs force=True.'''
         out['skipped_reason'] = ('%s is shared between cases (no folder %s): the open loop there may be used by '
                                  'other cases' % (temp_dir, temp_dir / (case or '<case>')))

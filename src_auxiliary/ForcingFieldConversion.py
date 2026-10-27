@@ -4,33 +4,28 @@ import os
 import pandas as pd
 
 
-def monthly_conversion(output_dir = "/media/user/My Book/Fan/WaterGap/monthly_climate_forcing",chunksize=31):
+def monthly_conversion(input_dir=None, output_dir=None, chunksize=31):
     """
-    This function has produced the monthly output of the forcing field with a given chunk.
-    Parameters
-    ----------
-    chunksize
-    output_dir
-
-    Returns
-    -------
-
+    Monthly files of the daily GSWP3-W5E5 forcing (precipitation, temperature, short- and long-wave radiation) that
+    the model reads (<data root>/Input_data/monthly_climate_forcing).
+    input_dir  : folder with the sub-folders precipitation/, temperature/, rad_shortwave/, rad_longwave/ holding the
+                 daily ISIMIP files gswp3-w5e5_obsclim_<var>_global_daily_*.nc
+    output_dir : folder of the monthly files
+    chunksize  : time chunk of the output (days)
     """
 
     # ==== output directory ====
+    if input_dir is None or output_dir is None:
+        raise ValueError('monthly_conversion: input_dir and output_dir must be given')
     os.makedirs(output_dir, exist_ok=True)
 
     # =========================================================
     # ✅ Input file lists (one list per variable)
     # =========================================================
-    pr_files = "/media/user/My Book/Fan/WaterGap/ReWaterGAP/input_data/climate_forcing/precipitation/" \
-              "gswp3-w5e5_obsclim_pr_global_daily_*.nc"
-    tp_files = "/media/user/My Book/Fan/WaterGap/ReWaterGAP/input_data/climate_forcing/temperature/" \
-              "gswp3-w5e5_obsclim_tas_global_daily_*.nc"
-    rs_files = "/media/user/My Book/Fan/WaterGap/ReWaterGAP/input_data/climate_forcing/rad_shortwave/" \
-              "gswp3-w5e5_obsclim_rsds_global_daily_*.nc"
-    rl_files = "/media/user/My Book/Fan/WaterGap/ReWaterGAP/input_data/climate_forcing/rad_longwave/" \
-              "gswp3-w5e5_obsclim_rlds_global_daily_*.nc"
+    pr_files = os.path.join(input_dir, 'precipitation', 'gswp3-w5e5_obsclim_pr_global_daily_*.nc')
+    tp_files = os.path.join(input_dir, 'temperature', 'gswp3-w5e5_obsclim_tas_global_daily_*.nc')
+    rs_files = os.path.join(input_dir, 'rad_shortwave', 'gswp3-w5e5_obsclim_rsds_global_daily_*.nc')
+    rl_files = os.path.join(input_dir, 'rad_longwave', 'gswp3-w5e5_obsclim_rlds_global_daily_*.nc')
 
     # =========================================================
     # ✅ STEP 1: Load datasets
@@ -139,7 +134,10 @@ def monthly_conversion(output_dir = "/media/user/My Book/Fan/WaterGap/monthly_cl
     print("✅ All done!")
 
 
-def check_chunksize(fn='/media/user/My Book/Fan/WaterGap/monthly_climate_forcing/1981-01.nc'):
+def check_chunksize(fn=None):
+    """print the netCDF chunk sizes of every variable of a monthly forcing file written by monthly_conversion"""
+    if fn is None:
+        raise ValueError('check_chunksize: fn must be given')
     test_ds = xr.open_dataset(filename_or_obj=fn)
 
     print(f"Checking file: {fn}")
@@ -148,9 +146,3 @@ def check_chunksize(fn='/media/user/My Book/Fan/WaterGap/monthly_climate_forcing
         print(var, "->", test_ds[var].encoding.get("chunksizes"))
 
     print()
-
-
-
-if __name__ == '__main__':
-    # monthly_conversion(chunksize=31)
-    check_chunksize()

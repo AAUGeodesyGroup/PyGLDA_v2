@@ -36,29 +36,48 @@ class BasinAverageAnalysis:
         area-weighted (cos lat) mean of every variable over the basin and every sub-basin -> basin_ts_<stage>.h5
         (groups per variable, one dataset per key 'basin', 'sub_basin_k'). The weights of all keys are one sparse
         matrix on the grid of the loaded files (shp2mask.unit_weights), so every variable is read once, year by year,
-        and averaged for all keys in a single product - the former loop reloaded the whole field once per key.
+        and averaged for all keys in a single product.
         """
         from src_auxiliary.shp2mask import unit_weights
 
         W, keys = unit_weights(self.bm.filename, self.ds['lat'].values, self.ds['lon'].values)
-        n_time = self.ds.sizes['time']
 
+        '''reading the blocks through the multi-file dataset would grow the memory of every rank with the number
+        of yearly files (the decompressed chunks of all open files are kept). Therefore every yearly file is opened
+        on its own, read in BLOCK_DAYS blocks and closed before the next one; the period is selected per file
+        exactly as the multi-file dataset does. The unit means are the same (each day is averaged on its own).'''
+        files = getattr(self, '_files', None)
+        if files:
+            # the multi-file dataset keeps every yearly file open; a file opened a second time shares that HDF5 file
+            # object and its chunk cache stays allocated until the first handle closes - close it before reading
+            self.ds.close()
         res = {}
         for key in self.__variable_list:
-            da = self.ds[key]
-            '''fixed blocks of BLOCK_DAYS days whatever the file chunking: a global variable over 18 years would be
-            ~14 GB per rank, one block is ~32 MB (float32); the unit means are exact for any block size'''
             parts = []
-            for t0 in range(0, n_time, self.BLOCK_DAYS):
-                n = min(self.BLOCK_DAYS, n_time - t0)
-                block = da.isel(time=slice(t0, t0 + n)).values.reshape(n, -1)   # (days, lat*lon)
-                parts.append(np.asarray(W @ block.T))                           # (n_key, days)
-                del block
+            if files:
+                for fn in files:
+                    with xr.open_dataset(fn, cache=False) as dsf:
+                        da = dsf[key].sel(time=slice(self._period[0], self._period[1]))
+                        n_t = da.sizes['time']
+                        for t0 in range(0, n_t, self.BLOCK_DAYS):
+                            n = min(self.BLOCK_DAYS, n_t - t0)
+                            block = da.isel(time=slice(t0, t0 + n)).values.reshape(n, -1)   # (days, lat*lon)
+                            parts.append(np.asarray(W @ block.T))                           # (n_key, days)
+                            del block
+            else:
+                da = self.ds[key]
+                n_time = self.ds.sizes['time']
+                '''fixed blocks of BLOCK_DAYS days whatever the file chunking: a global variable over 18 years would
+                be ~14 GB per rank, one block is ~32 MB (float32); the unit means are exact for any block size'''
+                for t0 in range(0, n_time, self.BLOCK_DAYS):
+                    n = min(self.BLOCK_DAYS, n_time - t0)
+                    block = da.isel(time=slice(t0, t0 + n)).values.reshape(n, -1)   # (days, lat*lon)
+                    parts.append(np.asarray(W @ block.T))                           # (n_key, days)
+                    del block
             means = np.concatenate(parts, axis=1)
             res[key] = {k: means[r].copy() for r, k in enumerate(keys)}
 
         hf = h5py.File(str(Path(self.__state_dir) / ('basin_ts_%s.h5'%self.__stage.name)), 'w')
-        # print(str(Path(self.__state_dir) / ('basin_ts_%s.h5'%self.__stage.name)))
         for gr, bb in res.items():
             dict_group = hf.create_group(gr)
             for key, vv in bb.items():
@@ -69,7 +88,7 @@ class BasinAverageAnalysis:
         # netCDF handles in xarray's file cache until interpreter exit, where they race the
         # library teardown and print "Exception ignored in CachingFileManager.__del__ ...
         # NetCDF: Not a valid ID" on whichever rank loses the race
-        self.ds.close()
+        self.ds.close()                 # no-op if it was closed above
         del self.ds
         pass
 
@@ -89,7 +108,7 @@ class BasinAverageAnalysis:
         file_paths = []
 
         for year in years_to_process:
-            # Construct the filename matching your naming convention: daily_output_YYYY-MM-DD.nc
+            # yearly files: daily_output_YYYY.nc
             filename = f"daily_output_{year}.nc"
             full_path = os.path.join(self.__state_dir, filename)
 
@@ -105,21 +124,16 @@ class BasinAverageAnalysis:
             # parallel=False: opening the files from several dask threads calls HDF5 concurrently, which can crash a
             # non-thread-safe HDF5 build (seen as "NetCDF: HDF error" / segfaults); it gives no speed-up for ~18 files
             # chunks of one month: on the global grid a one-year chunk of one variable is ~380 MB (float32) per
-            # rank and the 31 ranks of collect_and_statistics share one node (OOM on the 96 GB node, 11 Oct 2026)
+            # rank, and all ranks of collect_and_statistics may share one node
             ds = xr.open_mfdataset(file_paths, combine="by_coords", parallel=False, chunks={"time": 31})
 
             # restrict to the requested period: the yearly files may extend beyond end_date (e.g. an OL run
             # that is longer than the DA period), and the basin time series must match the date range exactly
             ds = ds.sel(time=slice(start_date, end_date))
 
-            # print("Successfully loaded and merged dataset:")
-
             self.ds = ds
-
-            # print(ds)
-
-            # Example: Access a specific variable for further processing
-            # data_var = ds['your_variable_name']
+            self._files = list(file_paths)                  # get_basin_average reads them one by one (memory)
+            self._period = (start_date, end_date)
         else:
             raise FileNotFoundError("No matching files found for the specified date range.")
 
@@ -159,8 +173,6 @@ class BasinAverageAnalysis_post:
                 state_dict = {}
                 for state, item2 in item.items():
                     state_dict[state] = item2[:]
-
-                # state_dict['TWS'] = np.sum(np.array(list(state_dict.values())), axis=0)
 
                 ens_dict[basin] = state_dict
 
@@ -210,7 +222,6 @@ class BasinAverageAnalysis_post:
         for dd in gr.keys():
             if 'ens_' in dd:
                 ens_num += 1
-        # print(ens_num)
         try:
             basin_num = np.shape(gr['cov'][0])[0]
         except Exception:
@@ -225,9 +236,6 @@ class BasinAverageAnalysis_post:
         for basin in range(1, 1 + basin_num):
             kk['original']['basin_%s' % basin] = original[:, basin - 1]
             kk['ens_mean']['basin_%s' % basin] = ens_mean[:, basin - 1]
-
-        # kk['original']['basin_0'] = np.mean(original, axis=1)
-        # kk['ens_mean']['basin_0'] = np.mean(ens_mean, axis=1)
 
         '''Area-weighted'''
         sub_basin_area = gr['sub_basin_area'][:]
@@ -338,18 +346,18 @@ class HarmonicMapAnalysis:
                                                            average an amplitude/phase)
         <var>_<quantity>_ensspread  dims (lat, lon)        std across members 1..N (circular
                                                            std for phases)                    [per_member only]
-    per_member : False = (default, Fan 11 Oct 2026) the daily ENSEMBLE-MEAN fields of members 1..N are written first
+    per_member : False = (default) the daily ENSEMBLE-MEAN fields of members 1..N are written first
                          (ensemble_mean_files -> Res/<case>/<stage>/Ens_mean/daily_output_YYYY.nc, a product of its
                          own) and the harmonic fit is done ONCE on that series by the root rank: only the
                          <var>_<quantity>_ensmean maps, no (ens) maps and no spread; memory is one yearly block per
                          rank for the mean and one series on the root for the fit, whatever the number of members
-                 True  = fit every member (Ens_0..N) as well (per-member maps + spread; the old path, ~4 GB per
+                 True  = fit every member (Ens_0..N) as well (per-member maps + spread; ~4 GB per
                          rank on the global grid)
     cell_mask_path : DA basin mask (Basin/mask/<basin>_res_0.5.h5, dataset 'basin' on the global 0.5-degree grid):
                  only the cells of the mask are fitted, every other cell of the yearly files is NaN in the maps
-                 (Fan, 19 Oct 2026: the analysis domain is the set of assimilated cells - Greenland, the glaciated
-                 and the big-lake units are outside the global unit mask and must not appear in any product or
-                 figure; WaterGAP simulates them but cannot do so meaningfully). None: every cell with data.
+                 (the analysis domain is the set of assimilated cells - Greenland, the glaciated and the big-lake
+                 units are outside the global unit mask and must not appear in any product or figure; WaterGAP
+                 simulates them but cannot do so meaningfully). None: every cell with data.
     Parallel (run): comm = an MPI communicator -> members are spread over its ranks (rank r takes members
                  r, r+size, ...), the maps are gathered and the ensemble sum reduced on `root`, which writes the
                  file; every rank of comm must call run(). Without comm, n_workers > 1 uses a process pool
@@ -412,8 +420,8 @@ class HarmonicMapAnalysis:
         """
         Like _load_member, but only the grid cells that hold data: per variable an array (time, n_col) in the file
         dtype and the flat indices of its columns on the (lat, lon) grid. Read one yearly file at a time and
-        reduced at once, so neither the ocean cells nor a full-grid copy of the period are held (the full-grid
-        cube of a global case was ~5 GB per rank with the fit, until 8 Oct 2026).
+        reduced at once, so neither the ocean cells nor a full-grid copy of the period are held (a full-grid
+        cube of a global case would be ~5 GB per rank with the fit).
         Returns lat, lon, time, {var: (cols, data)}
         """
         import pandas as pd
@@ -466,7 +474,7 @@ class HarmonicMapAnalysis:
         """
         cube : (time, lat, lon) of one variable. Every grid cell is one series. Returns a dict quantity -> 2-D array
         (lat, lon). Only the cells with data are fitted (_fit_columns); cells without any value get what the fit
-        gives an all-NaN series (NaN, n_valid 0), exactly as when they were fitted.
+        gives an all-NaN series (NaN, n_valid 0), exactly as if they were fitted.
         """
         a = np.asarray(cube.values if hasattr(cube, 'values') else cube)
         n_t, n_lat, n_lon = a.shape
@@ -917,35 +925,3 @@ class HarmonicMapAnalysis:
             out.to_netcdf(out_fn, encoding={k: {'zlib': True, 'complevel': 4} for k in out.data_vars})
             print(f"  -> {out_fn}")
         return out
-
-
-
-def demo1():
-    # basin_shp = basin_shp_process(save_dir='/media/user/My Book/Fan/WaterGap/Basin/mask',
-    #                               basin_name='Brahmaputra', res=0.5)
-    # basin_shp.shp_to_mask(shp_path='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp', issave=True)
-
-    # analysis = BasinAverageAnalysis_realtime(basin_mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra_res_0.5.h5',
-    #                                          state_dir='/media/user/My Book/Fan/WaterGap/Res/test', stage=Stage.OL, ens_id=0)
-    #
-    # analysis.load_nc_files(start_date="2002-01-01", end_date="2005-04-30").select_variables(variable_list=['tws']).get_basin_average()
-    pass
-
-
-def demo2():
-    from mpi4py import MPI
-    """Parallel execution using MPI. Each rank will have its own log file."""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-
-    analysis = BasinAverageAnalysis(
-        basin_mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra_res_0.5.h5',
-        state_dir='/media/user/My Book/Fan/WaterGap/Res/test', stage=Stage.OL, ens_id=rank)
-
-    analysis.load_nc_files(start_date="2002-01-01", end_date="2005-04-30").select_variables(
-        variable_list=['tws']).get_basin_average()
-
-
-if __name__ == '__main__':
-    demo2()

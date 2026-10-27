@@ -10,7 +10,8 @@ from termcolor import colored
 
 class SingleModel:
 
-    def __init__(self, setting_dir='/media/user/My Book/Fan/WaterGap/Extensions'):
+    def __init__(self, setting_dir=None):
+        """setting_dir: directory that holds Config_ReWaterGAP.json (must be given)."""
         self.setting_json = Path(setting_dir)/'Config_ReWaterGAP.json'
         cm.init_config(config_input=self.setting_json)
         from model import land_surfacewater_fraction as lsf
@@ -41,8 +42,6 @@ class SingleModel:
         cm.config_file['RuntimeOptions'][2]['SimulationPeriod']['spinup_years']= spinup_years
         cm.init_config(config_input=cm.config_file)
         import sys
-        # print('controller cm id:', id(sys.modules.get('controller.configuration_module')))
-        # print('full path cm id:', id(sys.modules.get('src_GHM.ReWaterGAP.controller.configuration_module')))
         sp_run()
         pass
 
@@ -79,45 +78,6 @@ class SingleModel:
         """
         cm.start = self.period[0].strftime('%Y-%m-%d')
         cm.end = self.period[1].strftime('%Y-%m-%d')
-        # china_box = {
-        #     'lon_min': 73.0,
-        #     'lon_max': 136.0,
-        #     'lat_min': 18.0,
-        #     'lat_max': 54.0
-        # }
-        # daily_run = DailyModelRun(is_crop_save=True,**china_box)
         daily_run = DailyModelRun()
         daily_run.hot_run_with_daily_timestep()
-        # daily_run.hot_run()
-        # hot_run()
         pass
-
-    def visualize_map_day(self, day=None, extent_global=True):
-        """
-        TWS is preferably visualized.
-        Parameters
-        ----------
-        extent_global
-        day
-
-        Returns
-        -------
-
-        """
-        if day is None:
-            '''last day is visualized'''
-            day = self.period[-1]
-
-
-
-
-if __name__ == '__main__':
-    import os
-    import sys
-
-    from misc.time_checker_and_ascii_image import check_time
-
-    SR = SingleModel(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
-    SR.configure_time(begin_time='2002-01-01', end_time='2002-01-31')
-    SR.model_spinup(spinup_years=5)
-    # SR.configure_ini_for_resume().model_resume()

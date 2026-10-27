@@ -42,7 +42,6 @@ def load_nc_range(data_dir, start_str, end_str):
 
             date = datetime(year, month, 1)
 
-            # if start <= date <= end:
             filename = f"{data_dir}/{year}-{month:02d}.nc"
 
             if os.path.exists(filename):
@@ -71,25 +70,10 @@ class fan_ClimateForcing(ClimateForcing):
 
         """
         # ==============================================================
-        # path to climate forcing netcdf data
-        # ==============================================================
-
-        # forcing_path = str(Path(cm.climate_forcing_path +
-        #                         r'/*.nc'))
-
-        # forcing_path = str(Path(cm.climate_forcing_path +
-        #                         r'/1981-01.nc'))
-
-        # forcing_path = str(Path('/media/user/My Book/Fan/WaterGap/monthly_climate_forcing' +
-        #                         r'/1981-01.nc'))
-
-        # ==============================================================
-        # Loading in climate forcing
+        # Loading in climate forcing (monthly files YYYY-MM.nc in the
+        # climate forcing directory, restricted to the simulation period)
         # ==============================================================
         try:
-
-            # fd = xr.open_mfdataset(glob.glob(forcing_path), chunks={'time': 365})
-
             fd = load_nc_range(data_dir=cm.climate_forcing_path, start_str=cm.start, end_str=cm.end)
 
             #  Actual name: Precipitation, Unit:  kg m-2 s-1
@@ -149,27 +133,18 @@ class fan_ClimateForcing(ClimateForcing):
             log.config_logger(logging.ERROR, modname, 'Cf convention file for'
                                                       ' variable and unit check not found', args.debug)
 
-        # print('++++++++++++++++++++++' + '\n' + 'Checking variable name'
-        #       + '\n' + '++++++++++++++++++++++')
-
         # Note!!! underscore means I am not interested in the index(numbers)
         for _, var_name in enumerate(self.var_name):
             if var_name in cf_info['variables']['shortname']:
-                # print(var_name + ' follows cf convention')
                 pass
             else:
                 log.config_logger(logging.WARNING, modname, var_name +
                                   ' does not follow cf convention', args.debug)
 
-        # print('\n' + '+++++++++++++++' + '\n' + 'Checking units' + '\n' +
-        #       '+++++++++++++++')
-
         extra_units = ["mm/day", " mm day-1", "°C", "C", "degree celcius",
                        "celcius"]
         for index, units in enumerate(self.units):
             if units in cf_info['variables']['units'] or units in extra_units:
-                # print('*' + self.var_name[index] + '*' + ' required in ' +
-                #       units + ' found')
                 pass
             else:
                 log.config_logger(logging.ERROR, modname, units +
@@ -185,7 +160,6 @@ class fan_ClimateForcing(ClimateForcing):
             pass
         else:
             '''load file'''
-            # print(self.date, date.astype('datetime64[M]'))
             self.fd.close()
             self.fd = xr.open_mfdataset(glob.glob(forcing_path))
             self.date = date.astype('datetime64[M]')
@@ -203,11 +177,3 @@ class fan_ClimateForcing(ClimateForcing):
             self.temperature = self.fd['tas']
 
         pass
-        # return self.fd.sel(time=str(date))
-
-
-if __name__ == '__main__':
-    ff = fan_ClimateForcing(run_calib=False)
-    ff.check_unitandvarname()
-    ff.update(np.datetime64("1995-06-01"))
-    ff.update(np.datetime64("1995-02-02"))

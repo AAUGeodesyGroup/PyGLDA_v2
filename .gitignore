@@ -46,3 +46,9 @@ temp/
 # MPI output
 *.out
 *.err
+
+# internal notes and run folders
+doc/ucloud_notes.md
+doc/cowork_review_*.md
+parallel_logs/
+installation/env_setup.log

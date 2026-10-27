@@ -40,43 +40,11 @@ class EnsStates:
                 # Safety check: verify if the target variable exists in the dataset
                 if var in ds.data_vars:
                     # Store as pure NumPy array
-                    # If your EnKF matrix calculations only require raw numeric values,
                     result_dict[var] = ds[var].values.copy()
 
                 else:
                     raise KeyError(f"Target variable '{var}' is not found in the dataset '{nc_file_path}'!")
         return result_dict
-
-    def get_states_by_transfer(self, states_ens: list):
-        """
-        This is for the ensemble
-        Parameters
-        ----------
-        states_ens
-
-        Returns
-        -------
-
-        """
-        mk = self.__local_mask['basin_2d'].astype(bool)
-        states_assemble = []
-        for i in range(len(states_ens)):
-
-            states = states_ens[i]
-
-            ss = None
-            for key in self.DM.statesnn:
-                vv = states[key][mk]  # it is converted to a 1d vector
-                if ss is None:
-                    ss = vv
-                else:
-                    ss = np.vstack((ss, vv))  # 2D matrix
-
-            states_assemble.append(ss.T.flatten())
-
-        states_assemble = np.array(states_assemble)
-
-        return states_assemble.T
 
     def get_states_by_transfer_single(self, states: dict):
         """
@@ -185,47 +153,6 @@ class EnsStates:
             else:
                 print(f"Warning: TWS variable '{tws_var_name}' not found. Cannot update TWS.")
 
-    def map_state_internal_to_enum(self, internal_state_dict: dict) -> dict:
-        """
-        Map the internal model storage keys to standardized Enum-based keys.
-
-        Parameters:
-        -----------
-        state_dict : dict
-            The original state dictionary using internal model names
-            (e.g., 'canopy_storage', 'groundwater_storage').
-
-        Returns:
-        -----------
-        dict
-            A new dictionary with keys converted to WaterGap_storage_variables Enum names
-            (e.g., 'canopystor', 'groundwstor').
-        """
-        # Define the mapping bridge between internal names and Enum names
-        name_mapping = {
-            'canopy_storage': WaterGap_storage_variables.canopystor.name,
-            'snow_water_storage': WaterGap_storage_variables.swe.name,
-            'soil_water_content': WaterGap_storage_variables.soilmoist.name,
-            'groundwater_storage': WaterGap_storage_variables.groundwstor.name,
-            'loclake_storage': WaterGap_storage_variables.locallakestor.name,
-            'locwet_storage': WaterGap_storage_variables.localwetlandstor.name,
-            'glolake_storage': WaterGap_storage_variables.globallakestor.name,
-            'glowet_storage': WaterGap_storage_variables.globalwetlandstor.name,
-            'river_storage': WaterGap_storage_variables.riverstor.name,
-            'glores_storage': WaterGap_storage_variables.reservoirstor.name,
-        }
-
-        # Convert keys using a dictionary comprehension, with a safety check
-        mapped_state = {}
-        for old_key, value in internal_state_dict.items():
-            if old_key in name_mapping:
-                new_key = name_mapping[old_key]
-                mapped_state[new_key] = value.copy()
-            else:
-                raise KeyError(f"ERROR: Internal state key '{old_key}' has no matching Enum mapping and was skipped.")
-
-        return mapped_state
-
     def map_state_enum_to_internal(self, enum_state_dict: dict) -> dict:
         """
         Map the standardized Enum-based keys back to the internal model storage keys.
@@ -269,8 +196,6 @@ class EnsStates:
 
     def box2global_transfer(self, box_data, global_data):
 
-        # print(np.max(global_data[self.__local_mask['global_2d'].astype(bool)] - box_data[self.__local_mask['basin_2d'].astype(bool)]))
-
         global_data[self.__local_mask['global_2d'].astype(bool)] = box_data[self.__local_mask['basin_2d'].astype(bool)]
 
         pass
@@ -289,37 +214,5 @@ class EnsStates:
         """
         rs_internal=self.map_state_enum_to_internal(enum_state_dict=rs)
         for key, vv in rs_internal.items():
-            # if key in ['glores_storage', 'river_storage', 'loclake_storage']:
-            #     print('%s do not update'%key)
-            #     pass
-            # else:
-            #     self.box2global_transfer(box_data=vv, global_data=gs[key])
-            #     pass
-            # print(key)
             self.box2global_transfer(box_data=vv, global_data=gs[key])
         pass
-
-
-def demo1():
-    configDA = config_DA.loadjson('/media/user/My Book/Fan/WaterGap/Extensions/DA_settings/DA_setting.json').process()
-
-    dm = DM_basin_average(layer=configDA.model.layer, is_residual=True)
-    dm.configure_mask(mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5')
-    dm.vertical_aggregation().horizontal_aggregation()
-
-    rs = EnsStates(DM=dm, configDA=configDA, ensemble_id=0)
-
-    states = rs.load_state_dict(date='2002-01-15')
-
-    a = rs.get_states_by_transfer_single(states=states)
-    b = dm.getDM()
-    # tws = dm.getDM() @ states
-
-    # rs.save_to_nc(state=states, date='2002-01-15')
-    '''verified!'''
-
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

@@ -4,7 +4,7 @@ src_postprocessing.global_evaluation (Res/<case>/evaluation_global/<tag>/), the 
 maps Res/<case>/Harmonic_{OL,DA,GRACE}.nc. Written into the same report folder:
 
     gfig1_unit_maps.png        unit maps (each unit filled with its value), every quantity side by side on ONE
-                               shared colour scale (Fan, 11 Oct 2026: no difference maps, no reduction ratios):
+                               shared colour scale (no difference maps):
                                RMS vs GRACE OL | DA + RMS ratio DA / OL [%], correlation with GRACE OL | DA,
                                trend GRACE | OL | DA, filter median chi^2 | gain
     gfig2_group_series.png     area-weighted window series GRACE / OL / DA: global land and the HydroBASINS regions
@@ -14,7 +14,7 @@ maps Res/<case>/Harmonic_{OL,DA,GRACE}.nc. Written into the same report folder:
                                spread by region
     gfig5_rms_vs_snr_area.png  RMS vs GRACE of the units (OL and DA) against their GRACE SNR and their area
 
-Usage:  GDA.visualization(tag='pilot1')   (src_FlowControl/Global_DA.py), or
+Usage:  GDA.visualization(tag='global_run')   (src_FlowControl/Global_DA.py), or
         from src_postprocessing.global_visualization import plot_global_run
 Rendering only: no result file is changed. The unit polygons are handed to GMT as a multi-segment text file
 (one segment per ring, -Z<value>), so GMT does not need GDAL for the shapefile.
@@ -268,8 +268,8 @@ def _pixel_grid(g):
 def _fig_harmonic_maps(pygmt, res_dir, out, width, dpi):
     """
     as Visualization.harmonic_maps(style='pixel'): one row per quantity, columns OL | DA | GRACE with one shared
-    colour scale (2-98 %, symmetric for the trend) and one colour bar centred under the row. (The former gfig3b with
-    the DA - OL differences was dropped on 11 Oct 2026: Fan wants OL, DA and GRACE side by side, no differences.)
+    colour scale (2-98 %, symmetric for the trend) and one colour bar centred under the row. OL, DA and GRACE are
+    shown side by side; no difference maps are drawn.
     """
     presentation = {'trend': ('trend [mm/yr]', 'vik', True, None),
                     'annual_amp': ('annual amplitude [mm]', 'batlow', False, None),
@@ -286,7 +286,7 @@ def _fig_harmonic_maps(pygmt, res_dir, out, width, dpi):
         fig.grdimage(grid=_pixel_grid(g), cmap=True, nan_transparent=True, interpolation='n')
         fig.coast(shorelines='0.4p,gray30', borders='1/0.25p,gray60', resolution='c')
 
-    '''step-1: OL | DA | GRACE'''
+    '''one row per quantity: OL | DA | GRACE'''
     fig = pygmt.Figure()
     for i, q in enumerate(presentation):
         label, cmap, diverging, fixed = presentation[q]

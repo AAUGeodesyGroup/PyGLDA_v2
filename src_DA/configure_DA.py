@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import numpy as np
 from src_DA.EnumDA import HydroModel, FusionMethod, WaterGap_storage_variables
 
 
@@ -13,18 +12,6 @@ class config_DA:
         self.method = self.config_method().__dict__
 
         pass
-
-    @staticmethod
-    def save_default(default_path = None):
-        obj1 = config_DA()
-        tc_dic = obj1.__dict__
-        if default_path is None:
-            default_path = Path.cwd().parent / 'settings' / 'DA_setting.json'
-        else:
-            default_path = Path(default_path)/'DA_setting.json'
-        with open(default_path, 'w') as f:
-            json.dump(tc_dic, f, indent=4)
-        return default_path
 
     @staticmethod
     def loadjson(js):
@@ -96,21 +83,21 @@ class config_DA:
         return save_path
 
     class config_basic:
+        """period, ensemble, case and the folders of a run; the paths are set by the drivers (src_FlowControl)"""
         def __init__(self):
-            self.fromdate = '2000-01-02'
-            self.todate = '2000-01-31'
+            self.fromdate = '2002-01-01'
+            self.todate = '2002-12-31'
             self.ensemble = 30
-            self.case = 'test'
-            self.basin = 'Brahmaputra'
-            self.basin_shp = '/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp'
-            self.basin_mask = '/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5'
-            self.res_permanent = '/media/user/My Book/Fan/WaterGap/Res'
-            self.OL_output_temp_dir = '/media/user/My Book/Fan/WaterGap/OL_output'
-            self.DA_output_temp_dir = '/media/user/My Book/Fan/WaterGap/DA_output'
-            self.Ensemble_ini_dir = '/media/user/My Book/Fan/WaterGap/Ensemble_Initialization'
-            self.Ensemble_input_dir = '/media/user/My Book/Fan/WaterGap/Ensemble_input'
-            self.Auxiliary_dir = '/media/user/My Book/Fan/WaterGap/Auxiliary'
-            pass
+            self.case = None
+            self.basin = None
+            self.basin_shp = None
+            self.basin_mask = None
+            self.res_permanent = None
+            self.OL_output_temp_dir = None
+            self.DA_output_temp_dir = None
+            self.Ensemble_ini_dir = None
+            self.Ensemble_input_dir = None
+            self.Auxiliary_dir = None
 
     class config_model:
 
@@ -130,62 +117,45 @@ class config_DA:
             }
 
     class config_obs:
-
+        """GRACE input; "GRACE" holds the folders and the product options (src_FlowControl.Regional_DA.get_GRACE_obs)"""
         def __init__(self):
-            self.name = 'src_OBS'
-            self.dir = '/media/user/My Book/Fan/WaterGap/GRACE/obs'
-            self.GRACE = {
-                'EWH_grid_dir': '/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon',
-                'cov_dir': '/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/sample_DDK3',
-                'preprocess_res': '/media/user/My Book/Fan/WaterGap/GRACE/output',
-                'OL_mean': '/media/user/My Book/Fan/WaterGap/GRACE/OLmean',
-                'aux_for_time_epochs':'/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon',
-                'kind': 'Mascon_monthly'
-            }
+            self.dir = None
+            self.GRACE = {'kind': 'Mascon_monthly'}
 
     class config_method:
 
         def __init__(self):
-            self.fusion_method = FusionMethod.EnKF_v0.name
-            '''EnKF_localized: the filter is assembled from independent components (src_DA.filter_factory),
-            each chosen with its own block; see doc/configuration.md for all options. LETKF: the deterministic
-            ensemble-transform analysis (src_DA.LETKF) with the same components and blocks, plus
-              letkf               {"min_taper": 0.0}  observations with a taper weight below min_taper are dropped
-                                  from a cell's local set (Gaussian localization only)
+            '''The filter is assembled from independent components (src_DA.filter_factory), each chosen with its own
+            block; doc/configuration.md lists all options and their defaults.
+              fusion_method       "EnKF_localized" (stochastic EnKF) | "LETKF" (deterministic ensemble transform)
+              letkf               {"min_taper": 0.0}  LETKF only: observations with a taper weight below min_taper are
+                                  dropped from a cell's local set (Gaussian localization)
               localization        {"kind": "none" | "block" | "gaussian", "length_km": 300, "cutoff": 2.0}
               inflation           {"kind": "none" | "multiplicative" | "rtps" | "additive" | "adaptive_additive", ...}
-                                  e.g. {"kind": "rtps", "alpha": 0.7, "space": "state"}
-                                       {"kind": "additive", "sigma": {"groundwstor": 15, "swe": 5}, "seed": 42}
-                                       {"kind": "adaptive_additive", "split": {"groundwstor": 0.9, "swe": 0.1}}
-              increment_partition {"kind": "enkf" | "non_negative"}
-              obs_error_inflation {sub_basin_id (1-based, as string): factor on the error variance}, {} = off
-              obs_error_correlation "full" (as delivered) | "diagonal" (no error correlation between sub-basins;
-                                  the member observations are re-perturbed consistently)
+              increment_partition {"kind": "enkf" | "non_negative", ...}
+              obs_error_inflation factor on the error variance of every sub-basin, e.g. 0.5; 1 = off
+              obs_error_correlation "full" (as delivered) | "diagonal" (no error correlation between sub-basins; the
+                                  member observations are re-perturbed consistently)
               obs_perturbation_centering  true: member GRACE perturbations shifted to zero mean
-              soil_upper_bound    true: soil <= smax (Auxiliary/smax.nc) inside the bound-aware partition, the water
-                                  soil cannot hold goes to the other storages; false: only the post-update threshold
-                                  clips soil at smax (the water is then lost)
-              snow_bounds         all limits of the analysed snow in one block (read with snow_bounds() below):
-                                  {"lower_factor": 0.5,                          snow >= f x forecast
-                                   "upper_factor": 2.0, "upper_offset_mm": 20,   snow <= f x forecast + o (per window)
-                                   "envelope_factor": 1.5, "envelope_offset_mm": 10}
-                                                 snow <= f x the largest open-loop snow of the calendar month + o
-                                                 (per cell; stops the growth of packs that never melt)
-                                  a missing lower / upper entry takes the default above, null / false switches it off;
-                                  without envelope_factor the envelope cap is off
-            Old flat keys (inflation as a number, rtps_alpha, rtps_space, additive_inflation) are still read and
-            translated by src_DA.filter_factory; the old snow keys (snow_upper_bound, snow_lower_bound,
-            snow_envelope) by snow_bounds().'''
-            self.localization = {'kind': 'block', 'length_km': 300, 'cutoff': 2.0}
+              soil_upper_bound    true: soil <= smax inside the bound-aware partition (the water soil cannot hold
+                                  goes to the other storages); false: only the post-update threshold clips soil
+              soil_daily_bounds   true: the soil increment of each day is shaped so that every day of the window
+                                  stays within [0, smax] (src_DA.EnKF._soil_cap_config)
+              increment_release   {"storages": ["riverstor"], "days": 10}: the increment of fast storages enters the
+                                  next window over its first days (src_DA.EnKF._release_config)
+              snow_bounds         limits of the analysed snow (read with snow_bounds() below)'''
+            self.fusion_method = FusionMethod.EnKF_localized.name
+            self.localization = {'kind': 'block'}
             self.inflation = {'kind': 'none'}
             self.increment_partition = {'kind': 'enkf'}
-            self.obs_error_inflation = {}
-            self.obs_error_correlation = 'full'     # 'diagonal': R without correlations between sub-basins (test)
-            self.obs_perturbation_centering = False  # True: member GRACE perturbations shifted to zero mean
-            self.soil_upper_bound = True              # soil <= smax inside the non-negative partition
-            self.snow_bounds = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0}  # envelope off
-            self.letkf = {'min_taper': 0.0}           # LETKF only
-
+            self.obs_error_inflation = 1.0
+            self.obs_error_correlation = 'full'
+            self.obs_perturbation_centering = False
+            self.soil_upper_bound = True
+            self.soil_daily_bounds = False
+            self.increment_release = None
+            self.snow_bounds = {}
+            self.letkf = {}
 
 
 SNOW_BOUNDS_DEFAULT = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0,
@@ -198,12 +168,7 @@ def snow_bounds(method):
         lower_factor                       snow >= f x forecast                                 (None = off)
         upper_factor, upper_offset_mm      snow <= f x forecast + o, per window                  (None = off)
         envelope_factor, envelope_offset_mm  snow <= f x max_OL(cell, calendar month) + o        (None = off)
-    New block "snow_bounds" (10 Oct 2026); missing entries take the defaults (envelope off), null / false switches a
-    limit off. The old keys of earlier settings are translated and replace the corresponding entries:
-        "snow_lower_bound": {"factor": f} | false
-        "snow_upper_bound": {"factor": f, "offset_mm": o} | false
-        "snow_envelope":    {"factor": f, "offset_mm": o} | false
-    Results are identical to the old keys.
+    Missing entries take the defaults (envelope off); null / false switches a limit off.
     """
     get = method.get if isinstance(method, dict) else (lambda k, d=None: getattr(method, k, d))
     sb = dict(SNOW_BOUNDS_DEFAULT)
@@ -214,19 +179,6 @@ def snow_bounds(method):
             raise ValueError('snow_bounds: unknown entries %s (allowed: %s)' % (unknown, list(SNOW_BOUNDS_DEFAULT)))
         sb.update(new)
 
-    '''old keys (settings before 10 Oct 2026): true / null = default, false / {} = off'''
-    old = get('snow_lower_bound', None)
-    if isinstance(old, dict) or old is False:
-        sb['lower_factor'] = float(old.get('factor', 0.5)) if old else None
-    old = get('snow_upper_bound', None)
-    if isinstance(old, dict) or old is False:
-        sb['upper_factor'] = float(old.get('factor', 2.0)) if old else None
-        sb['upper_offset_mm'] = float(old.get('offset_mm', 20.0)) if old else sb['upper_offset_mm']
-    old = get('snow_envelope', None)
-    if isinstance(old, dict) or old is False:
-        sb['envelope_factor'] = float(old.get('factor', 1.5)) if old else None
-        sb['envelope_offset_mm'] = float(old.get('offset_mm', 10.0)) if old else sb['envelope_offset_mm']
-
     '''false / 0 -> off, numbers as float'''
     for k in ('lower_factor', 'upper_factor', 'envelope_factor'):
         sb[k] = float(sb[k]) if sb[k] not in (None, False) else None
@@ -236,14 +188,3 @@ def snow_bounds(method):
         raise ValueError('snow_bounds: envelope_factor must be >= 1 and envelope_offset_mm >= 0, got %s, %s'
                          % (sb['envelope_factor'], sb['envelope_offset_mm']))
     return sb
-
-
-def demo1():
-    dp = config_DA.save_default(default_path='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
-    a = config_DA.loadjson(dp).process()
-
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

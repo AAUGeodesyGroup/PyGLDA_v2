@@ -46,9 +46,6 @@ def print_pyglda_banner(version="2.0.0", model='ReWaterGap 2.2.e'):
     Colour is used only when stdout is the real terminal stream; when stdout has
     been swapped for a log file the banner is written as plain text.
     """
-    # if env() != 0 and env() != -1:
-    #     return
-
     mpi_size = 1
     try:
         from mpi4py import MPI
@@ -150,7 +147,7 @@ def print_pyglda_banner(version="2.0.0", model='ReWaterGap 2.2.e'):
     print(c(divider, CYAN))
     print(c(empty_line, CYAN))
 
-    # Updated to 100% standard double-width emojis to guarantee flawless left alignment
+    # standard double-width emojis keep the labels left-aligned
     print_meta_line("📦", "Version", version, GREEN)
     print_meta_line("🌊", "GHM Model", model, GREEN)
     print_meta_line("🔬", "Institution", "Aalborg University – Geodesy Group", GREEN)
@@ -177,6 +174,3 @@ def print_pyglda_banner(version="2.0.0", model='ReWaterGap 2.2.e'):
     print(c(bottom_box, CYAN))
     print()
 
-
-if __name__ == "__main__":
-    print_pyglda_banner()

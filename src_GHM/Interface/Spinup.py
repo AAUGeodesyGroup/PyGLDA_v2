@@ -2,17 +2,13 @@ import numpy as np
 from tqdm import tqdm
 import pandas as pd
 from termcolor import colored
-# from misc.time_checker_and_ascii_image import check_time
 from controller import configuration_module as cm
-# from controller import read_forcings_and_static as rd
 from src_GHM.Extension import fan_read_forcings_and_static as rd
 from controller import wateruse_handler as wateruse
 from model import parameters as pm
 from model import land_surfacewater_fraction_init as lwf
 from model.lateralwaterbalance import waterbalance_lateral as lb
-# from model.utility import restart_watergap as restartwatergap
 from model.utility import get_upstream_basin as get_basin
-# from model.verticalwaterbalance import waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_waterbalance_vertical_init as vb
 from src_GHM.Extension import fan_createandwrite as cw
 from src_GHM.Extension import fan_restart_watergap as restartwatergap
@@ -83,9 +79,7 @@ def run():
     # Initialize Restart module for possible restart of WaterGAP
     # =====================================================================
     restart_model = restartwatergap.RestartState(read_states_path=cm.read_state_path, save_states_path=cm.save_state_path)
-    # savestate_for_restart = cm.save_states
     savestate_for_restart = True # This must be true for spin-up
-    # restart = cm.restart
     restart = False # This must be false for spin-up
     # =====================================================================
     # Initialize static data, climate forcings , wateruse data
@@ -348,8 +342,3 @@ def run():
         sim_data_calib = {"sim_dis": get_annual_streamflow,
                           "pot_cell_runoff": get_annual_pot_cell_runoff}
         return sim_data_calib
-
-
-# if __name__ == "__main__":
-#     run_with_time_check = check_time(run)
-#     run_with_time_check()

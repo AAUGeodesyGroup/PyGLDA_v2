@@ -60,7 +60,7 @@ class visualization:
         bp = BasinAverageAnalysis_post(ens=ens_size, case=cg.basic.case, basin=cg.basic.basin,
                                        date_begin='2000-01-01', date_end='2000-01-31')
         states = bp.load_states(load_dir=Path(cg.basic.res_permanent) / cg.basic.case, prefix=stage.name)
-        fan_time = states['time']
+        time_axis = states['time']
         series_of = states[basin_id]
 
         if variables is None:
@@ -73,7 +73,7 @@ class visualization:
             members = [np.asarray(series_of[var][e], dtype=float) for e in range(1, ens_size + 1)]
             mean = np.mean(members, axis=0)
             drawn = members + [mean] + ([np.asarray(series_of[var][0], dtype=float)] if show_unperturbed else [])
-            k0 = min(skip_start_days, len(fan_time) - 1)
+            k0 = min(skip_start_days, len(time_axis) - 1)
             vmin = min(np.nanmin(d[k0:]) for d in drawn)
             vmax = max(np.nanmax(d[k0:]) for d in drawn)
             if (vmax - vmin) < min_range:
@@ -93,7 +93,7 @@ class visualization:
         fig = pygmt.Figure()
         pygmt.config(FONT_TITLE="19p,5", MAP_TITLE_OFFSET="-0.2p", MAP_FRAME_TYPE="plain",
                      FONT_ANNOT_PRIMARY='11p,5', FONT_LABEL='11p,5', MAP_TICK_LENGTH='7p')
-        x_frame = "xa2f1" if len(fan_time) > 720 else "xa1f0.5"
+        x_frame = "xa2f1" if len(time_axis) > 720 else "xa1f0.5"
 
         for j, p in enumerate(panels):
             col, row = j // nrow, j % nrow
@@ -106,16 +106,16 @@ class visualization:
             dmin, dmax = p['vmin'] - 0.10 * span, p['vmax'] + 0.10 * span
             sp_2 = self._nice_step((dmax - dmin) / 4.0)
             sp_1 = sp_2 / 2.0
-            fig.basemap(region=[fan_time[0] - 0.2, fan_time[-1] + 0.2, dmin, dmax],
+            fig.basemap(region=[time_axis[0] - 0.2, time_axis[-1] + 0.2, dmin, dmax],
                         projection='X%gc/%gc' % (panel_width, panel_height),
                         frame=["WSne+t%s" % p['var'], x_frame, 'ya%gf%g+lwater [mm]' % (sp_2, sp_1)])
             first = (j == 0)
             n_items = 3 if show_unperturbed else 2
             for k, vv in enumerate(p['members']):
-                fig.plot(x=fan_time, y=vv, pen="0.8p,grey", label='members+N%d' % n_items if (first and k == 0) else None)
+                fig.plot(x=time_axis, y=vv, pen="0.8p,grey", label='members+N%d' % n_items if (first and k == 0) else None)
             if show_unperturbed:
-                fig.plot(x=fan_time, y=series_of[p['var']][0], pen="1p,black,-", label='unperturbed' if first else None)
-            fig.plot(x=fan_time, y=p['mean'], pen="1.5p,blue", label='ensemble mean' if first else None, transparency=30)
+                fig.plot(x=time_axis, y=series_of[p['var']][0], pen="1p,black,-", label='unperturbed' if first else None)
+            fig.plot(x=time_axis, y=p['mean'], pen="1.5p,blue", label='ensemble mean' if first else None, transparency=30)
 
         '''one shared legend above the whole figure (anchored to the top-left panel, spanning all columns)'''
         self._shared_legend(fig, cur_x, cur_y, width=ncol * x_step - col_gap)
@@ -341,7 +341,7 @@ class visualization:
             if show_unperturbed:
                 drawn.append(np.asarray(states_OL[key][signal][0])[k0:])
             vmin = min(np.nanmin(d) for d in drawn)
-            vmax = max(np.nanmax(d) for d in drawn)                # (the previous version used min() here)
+            vmax = max(np.nanmax(d) for d in drawn)
             panels.append(dict(bid=bid, key=key, OL=OL_m, DA=DA_m, obs=obs, vmin=vmin, vmax=vmax))
 
         n = len(panels)

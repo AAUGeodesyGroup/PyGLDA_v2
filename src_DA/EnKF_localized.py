@@ -39,7 +39,7 @@ class EnKF_localized(EnKF):
 
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
                  sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
-                 partition: Partition = None, obs_error_inflation: dict = None, obs_error_correlation: str = 'full',
+                 partition: Partition = None, obs_error_inflation=None, obs_error_correlation: str = 'full',
                  obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_bounds: dict = None):
         super().__init__(DA_setting, model, obs, sv, sv_excluded)
         self.localization = localization or BlockLocalization()
@@ -82,7 +82,24 @@ class EnKF_localized(EnKF):
             rel['swe'] = (sb['upper_factor'], sb['upper_offset_mm'])
         if 'swe' in names and sb['lower_factor'] is not None:
             rel_lo['swe'] = sb['lower_factor']
-        self.bounds = StateBounds(names, n_cell, upper=upper, relative_upper=rel, relative_lower=rel_lo)
+        '''lakes in the DA state: WaterGAP's floor -max_storage as the lower bound, no lake increment where the cell has
+        no lake (a lake written back below its floor stops the lake balance of WaterGAP)'''
+        lower = {}
+        if any(v in names for v in ('locallakestor', 'globallakestor')):
+            from src_DA.bounds import lake_floor_fields
+            lw = getattr(self._model, 'lateral_waterbalance', None)
+            if lw is None:
+                raise ValueError('%s: lakes are in the DA state but the model has no lateral_waterbalance for their '
+                                 'maximum storages' % self.METHOD)
+            lower, up_l = lake_floor_fields(lw, self._model.unit_converter, sv.DM.local_mask['basin_2d'], names)
+            upper.update(up_l)
+            from src_DA.bounds import lake_floor_grids
+            box = np.shape(sv.DM.local_mask['basin_2d'])
+            self._thresholder.set_lake_floor(lake_floor_grids(lw, self._model.unit_converter, box, names))
+            print('%s: lake bounds - %s' % (self.METHOD, {v: dict(cells_with_lake=int((lo < 0).sum()),
+                                                                   no_lake_cells=int((lo == 0).sum()))
+                                                          for v, lo in lower.items()}))
+        self.bounds = StateBounds(names, n_cell, upper=upper, relative_upper=rel, relative_lower=rel_lo, lower=lower)
         '''snow: absolute cap per window from the monthly open-loop maximum, factor x max_OL(cell, month) + offset
         (envelope_factor / envelope_offset_mm of "snow_bounds"; None = off). The same cap as Threshold
         (snow_cap_month), on the state cells; the month of the window is set by EnKF.run_mpi (_window_months, the
@@ -102,11 +119,9 @@ class EnKF_localized(EnKF):
                                      % (env.shape[1:], mk.shape))
                 self._snow_env = env[:, mk]                                       # (12, n_cell)
 
-        '''observation-error inflation per sub-basin (1-based keys): R' = D R D keeps the error correlations'''
-        self._oei = dict(obs_error_inflation or {})
-        d = np.ones(n_obs)
-        for k, fac in self._oei.items():
-            d[int(k) - 1] = np.sqrt(float(fac))
+        '''observation-error inflation: one factor on the error variance of every sub-basin, R' = factor x R (1 = off)'''
+        self._oei = float(1.0 if obs_error_inflation is None else obs_error_inflation)
+        d = np.full(n_obs, np.sqrt(self._oei))
         self._R_scale = np.outer(d, d)
 
         '''observation-error correlation between sub-basins: "full" (as delivered with the GRACE product) or "diagonal"
@@ -131,7 +146,7 @@ class EnKF_localized(EnKF):
               'centring: %s; soil upper bound (smax) in the partition: %s; snow upper bound: %s; snow lower bound: %s'
               % (self.METHOD, n_state, n_obs, self.localization.describe(),
                  self._L_state.sum() / (n_state * n_obs),
-                 self.inflation.describe(), self.partition.KIND, self._oei if self._oei else 'none', self._obs_corr,
+                 self.inflation.describe(), self.partition.KIND, self._oei if self._oei != 1.0 else 'none', self._obs_corr,
                  self._obs_centering, self._soil_upper_bound,
                  ('%.1f x forecast + %.0f mm' % rel['swe']) if 'swe' in rel else 'none',
                  ('%.2f x forecast' % rel_lo['swe']) if 'swe' in rel_lo else 'none')
@@ -163,7 +178,19 @@ class EnKF_localized(EnKF):
                                                                    ens_states.shape[1])) else None
         '''snow cap of this window (None = off), also used by the inflation to weight the snow noise'''
         self._snow_cap_now = self._snow_cap_window()
-        self.bounds.set_window(ens_states, getattr(self, '_ens_min', None), getattr(self, '_ens_max', None),
+        ens_max = getattr(self, '_ens_max', None)
+        ens_min = getattr(self, '_ens_min', None)
+        if getattr(self, '_soil_cap', None) is not None and 'soilmoist' in self.bounds.names:
+            '''"soil_daily_bounds" (EnKF._soil_cap_config): the soil bounds act on the window mean (x_min = x_max := x_mean
+            for soil); the daily soil increments are then shaped so that every day stays within its bounds'''
+            r = np.arange(self.bounds.names.index('soilmoist'), ens_states.shape[0], len(self.bounds.names))
+            if ens_max is not None and np.shape(ens_max) == np.shape(ens_states):
+                ens_max = np.array(ens_max, dtype=float, copy=True)
+                ens_max[r] = ens_states[r]
+            if ens_min is not None and np.shape(ens_min) == np.shape(ens_states):
+                ens_min = np.array(ens_min, dtype=float, copy=True)
+                ens_min[r] = ens_states[r]
+        self.bounds.set_window(ens_states, ens_min, ens_max,
                                upper_scale=upper_scale, upper_window=self._snow_cap_now)
 
         xm = np.mean(ens_states, 1)[:, None]
@@ -249,10 +276,8 @@ class EnKF_localized(EnKF):
         replaced by independent draws eps_i' ~ N(0, diag(R)) from a generator seeded with OBS_PERTURBATION_SEED
         (one draw per update, the same sequence in every run), so that the spread of the member observations is
         exactly the R used in the gain.
-        Until 7 Oct 2026 eps_i was whitened with a factor of C (eps_i' = diag(sqrt R_jj) L^-1 eps_i, C = L L^T),
-        which is exact only for a well-conditioned C: the sample covariance of 772 global units is rank-deficient
-        (fewer samples than units) or ill-conditioned, the eigenvalue floor then shrank most components of L^-1 eps,
-        and the member observations had a fraction of the spread sqrt(R_jj) (over-confident analyses).
+        (Whitening eps_i with a factor of C is exact only for a well-conditioned C; the sample covariance of many
+        units is rank-deficient, and the whitened perturbations would then have less spread than sqrt(R_jj).)
         """
         Rd = np.diag(np.diag(R))
         raw, ref = getattr(self, '_obs_raw', None), getattr(self, '_obs_unperturbed', None)

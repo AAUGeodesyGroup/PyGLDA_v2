@@ -13,32 +13,9 @@
 # =============================================================================
 # This module creates and writes daily ouputs to  storage and flux varibales
 # =============================================================================
-import concurrent.futures
-import platform
 import numpy as np
 from controller import configuration_module as cm
 from src_GHM.Extension import fan_data_output_handler as doh
-# from view import data_output_handler as doh
-
-#  write_to_netcdf (used together with save_netcdf_parallel function
-# in CreateandWritetoVariables class)
-def write_to_netcdf(args):
-    """
-    Write variables to NetCDF.
-
-    Parameters
-    ----------
-    args : list of xrray variable, encoding and path to save data
-
-    """
-    var, encoding, path = args
-    try:
-        var.to_netcdf(path, format='NETCDF4_CLASSIC', encoding=encoding)
-        del var
-        return None  # Successful execution
-    except FileNotFoundError as exc:
-        return exc
-
 
 
 class CreateandWritetoVariables:
@@ -177,9 +154,7 @@ class CreateandWritetoVariables:
         # Execute spatial subsetting if all four parameters are provided
         if all(v is not None for v in [lon_min, lon_max, lat_min, lat_max]):
 
-            # Smartly check coordinate order to prevent empty slices
-            # (Descending latitudes are very common in global models)
-            # Note: Change 'lat'/'lon' to 'latitude'/'longitude' if your model uses full names
+            # WaterGAP latitudes are stored in descending order
             self.lat_slice = slice(lat_max, lat_min)  # Descending order
             self.lon_slice = slice(lon_min, lon_max)
             self.is_crop_save = True
@@ -321,47 +296,6 @@ class CreateandWritetoVariables:
                 # converted and aggreagated data
                 value.data[key][:] = converted_data
 
-    def save_netcdf_parallel(self, end_date):
-        """
-        Save variables to netcdf.
-
-        end_date: datetime
-            Date for end of simulation
-
-        Returns
-        -------
-        None.
-
-        """
-        # Create a list of tuples with arguments for writing
-        write_args = []
-        for var in [self.vb_storages, self.vb_fluxes,
-                    self.lb_storages, self.lb_fluxes]:
-            for key, value in var.items():
-                path = self.path + f'{key}_{end_date}.nc'
-
-                if key == "get_neighbouring_cells_map":
-                    encoding = {key: {"zlib": True,
-                                      "complevel": 5}}
-                elif key == 'smax':
-                    path = self.path + f'{key}.nc'
-                    encoding = {key: {'_FillValue': 1e+20,
-                                      "zlib": True,
-                                      "complevel": 5}}
-                else:
-                    encoding = {key: {'_FillValue': 1e+20,
-                                      "zlib": True, "complevel": 5}}
-                write_args.append((value.data, encoding, path))
-
-        # For saving output in parallel, Threading is used for macOS but
-        # multiprocessing is used of Linux, windows, etc
-        if platform.system() != 'Darwin':  # not macOS
-            with concurrent.futures.ProcessPoolExecutor() as executor:
-                executor.map(write_to_netcdf, write_args)
-        else:
-            for i in write_args:
-                write_to_netcdf(i)
-
     def save_netcdf_daily_single_file(self, end_date):
         """
         Save variables to one single netcdf file.
@@ -392,7 +326,6 @@ class CreateandWritetoVariables:
                 else:
                     encoding[key] = {
                         "_FillValue": 1e+20,
-                        # "dtype": "float64",
                         "zlib": True,
                         "complevel": self.COMPLEVEL
                     }

@@ -5,7 +5,6 @@ import numpy as np
 from pathlib import Path
 
 import os
-import numpy as np
 import pandas as pd
 import xarray as xr
 import h5py
@@ -49,7 +48,6 @@ class yearly_merge:
         dp2.mkdir(exist_ok=True)
         self.__output_dir = dp2
         self.__stage = stage
-        # self.__case = case_name
 
         pass
 
@@ -92,8 +90,8 @@ class yearly_merge:
         """
         Shared implementation for both stages.
 
-        Memory design (this replaced an open_mfdataset version that kept up to 128 global
-        files open at once and, across several MPI ranks, ran the machine out of memory):
+        Memory design (an open_mfdataset approach would keep up to 128 global files open at
+        once and, across several MPI ranks, run the machine out of memory):
           * daily files are opened ONE AT A TIME
           * each is cropped to the bounding box while still lazy, so only the box is read
           * only then is it loaded, closed, and given its time coordinate
@@ -181,7 +179,7 @@ class yearly_merge:
         Global unit mask (attribute extent = 'global' in the mask file, see global_shp2mask / shp2mask.load_mask):
         the yearly files keep the FULL grid and the model values outside the units, with the unit mask embedded as
         region_mask (1 = cell updated by the DA, 0 = model only), because the global product uses WaterGAP where no
-        assimilation is done. A year of global fields (~13 GB) cannot be held in memory on 31 ranks, so the days are
+        assimilation is done. A year of global fields (~13 GB) cannot be held in memory on every rank, so the days are
         written one at a time into a NETCDF4 file with an unlimited time axis (zlib `complevel`, lat/lon `tile` as
         the daily writer). The file layout (time, lat, lon; time as days since 1900-01-01; region_mask) is that of the
         regional yearly files, so that every reader (statistical_analysis, state_envelope, export_product) is unchanged.
@@ -239,33 +237,3 @@ class yearly_merge:
                                 f"{os.path.getsize(output_filename) / 1e6:.1f} MB")
             bar.close()
             gc.collect()
-
-
-def demo1():
-    ps = yearly_merge(basin_mask_dir='/media/user/My Book/Fan/WaterGap/Basin/mask', basin_name='Brahmaputra',
-                      state_dir='/media/user/My Book/Fan/WaterGap/OL_output',
-                      output_dir='/media/user/My Book/Fan/WaterGap/Res/', stage=Stage.OL)
-
-    ps.configure_ensID(ens_id=0).configure_date(begin_date='2002-01-01', end_date='2005-04-30')
-
-    ps.merge_and_crop_by_year_with_mask()
-    pass
-
-def demo2():
-    from mpi4py import MPI
-    """Parallel execution using MPI. Each rank will have its own log file."""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-
-    ps = yearly_merge(basin_mask_dir='/media/user/My Book/Fan/WaterGap/Basin/mask', basin_name='Brahmaputra',
-                      state_dir='/media/user/My Book/Fan/WaterGap/OL_output',
-                      output_dir='/media/user/My Book/Fan/WaterGap/Res/', stage=Stage.OL)
-
-    ps.configure_ensID(ens_id=rank).configure_date(begin_date='2002-01-01', end_date='2005-04-30')
-
-    ps.merge_and_crop_by_year_with_mask()
-
-
-if __name__ == '__main__':
-    demo2()

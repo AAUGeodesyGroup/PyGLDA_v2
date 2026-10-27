@@ -207,14 +207,6 @@ class UnitConverter:
                 result[k] = self.to_internal(k, v)
         return result
 
-    def state_dict_to_disk(self, state: dict) -> dict:
-        """
-        Convert an entire state dict (enum-named keys, internal units)
-        to on-disk units.  Mirrors what base_units() does to the output
-        variables before saving.
-        """
-        return {k: self.to_disk(k, v) for k, v in state.items()}
-
     # ------------------------------------------------------------------ #
     #  Internal helper                                                    #
     # ------------------------------------------------------------------ #

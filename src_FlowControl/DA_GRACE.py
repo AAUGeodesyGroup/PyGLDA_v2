@@ -1,16 +1,11 @@
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-# from OpenLoop import OpenLoop
-# from src_OBS.prepare_GRACE import GRACE_preparation
 from src_DA.configure_DA import config_DA
-# from src_OBS.GRACE_perturbation_old import GRACE_perturbed_obs
 from src_DA.ObsDesignMatrix import DM_basin_average
 import h5py
 import numpy as np
 import sys
-import json
-import xarray as xr
 from src_FlowControl.OpenLoop import OpenLoop
 from src_GHM.Interface.DailyStepRun import DailyModelRun
 from src_auxiliary.shp2mask import load_mask
@@ -23,8 +18,7 @@ class ensemble_model_daily_step(OpenLoop):
     This can only be used for model resume mode
     """
 
-    def __init__(self, configDA: config_DA, setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/',
-                 ensemble_id: int = 3):
+    def __init__(self, configDA: config_DA, setting_dir, ensemble_id: int = 3):
         case = configDA.basic.case
         super().__init__(setting_dir=setting_dir, case=case, ensemble_id=ensemble_id)
 
@@ -59,7 +53,7 @@ class ensemble_model_daily_step(OpenLoop):
 
 class DA_GRACE:
 
-    def __init__(self, case='test', setting_dir='../settings/DA_local', ens_size=3):
+    def __init__(self, setting_dir, case='test', ens_size=3):
         self.ens_size = ens_size
         self.case = case
         self.setting_dir = Path(setting_dir)
@@ -112,9 +106,8 @@ class DA_GRACE:
         (GRACE_perturbed_obs.remove_temporal_mean / add_temporal_mean): the GRACE mean is taken over the GRACE epochs
         present in the assimilation period, so the open-loop mean is taken over exactly the same epochs, each one
         averaged over its observation window (the mean of the daily OL TWS over the days of the GRACE month, as the
-        filter compares the window mean of the model with the observation). Until 7 Oct 2026 the open loop was
-        averaged over every day of fromdate..todate, i.e. also over months without GRACE (gaps, 2002-01..03), which
-        left a constant offset per sub-basin between the two means.
+        filter compares the window mean of the model with the observation); averaging over every day of the period
+        would include months without GRACE and leave a constant offset per sub-basin between the two means.
         Output: <OL_mean>/<case>_<basin>.hdf5 with mean_unperturbed, mean_ensemble (over members 1..N), time_epoch
         and duration of the epochs used.
         """
@@ -174,24 +167,12 @@ class DA_GRACE:
     def _obs_aux(self):
         """time reference (epochs and observation windows) of the observation kind in DA_setting.json for the
         assimilation period; used by gather_OLmean and generate_perturbed_GRACE_obs"""
-        from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_GRACE_SH_monthly, aux_GRACE_mascon_monthly, \
-            aux_ESM3_5daily, aux_TUD_5daily
+        from src_OBS.obs_auxiliary import aux_GRACE_mascon_monthly, aux_TUD_5daily
 
         configDA = self.configDA
         begin_day = configDA.basic.fromdate
         end_day = configDA.basic.todate
         kind = configDA.obs.GRACE['kind']
-        if kind == 'SH_monthly':
-            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
-            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
-            return aux_GRACE_SH_monthly().setTimeReference(month_begin=t1, month_end=t2,
-                                                           dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-        if kind == 'ESA_SING':
-            return aux_ESAsing_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
-                                                         dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
-        if kind == 'ESA_SING_ESM3':
-            return aux_ESM3_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
-                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
         if kind == 'Mascon_monthly':
             t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
             t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
@@ -203,20 +184,17 @@ class DA_GRACE:
                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
                                                      filename=configDA.obs.GRACE.get(
                                                          'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
-        raise ValueError('unknown observation kind: %s' % kind)
+        raise ValueError('unknown observation kind %s (Mascon_monthly | TUD_5daily)' % kind)
 
     def make_state_envelope(self, variables=None, force=False, comm=None):
         """
         Per-cell min/max of selected storages over the collected open loop (Res/<case>/OL/Ens_1..N), written to
-        <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage (and, only with
-        gw_lower / gw_upper, groundwater) in the analysis within an envelope of what the model produced. Like
+        <Auxiliary_dir>/state_envelope_<basin>.nc. src_DA.Threshold uses it to keep river storage in the analysis
+        within an envelope of what the model produced. Like
         gather_OLmean it needs the OL to be collected; it is skipped when the file exists and holds all variables,
         unless force=True (recompute after a new open loop).
         variables=None: only the storages the threshold of this run actually bounds with the envelope, i.e.
-        riverstor when it is part of the DA state; nothing to do (and no file read) otherwise. Until 8 Oct 2026
-        the envelope of river storage and groundwater was rebuilt at every DA start, reading two full-grid
-        variables of every member and year on rank 0 while the other ranks waited, even when no storage used it.
-        With the snow envelope cap on ("envelope_factor" in "snow_bounds") and swe in the state the monthly snow maximum swe_max_month is
+        riverstor when it is part of the DA state; nothing to do (and no file read) otherwise. With the snow envelope cap on ("envelope_factor" in "snow_bounds") and swe in the state the monthly snow maximum swe_max_month is
         added in the same pass (snow cap, src_DA.Threshold / EnKF_localized).
         comm: all ranks of the communicator call it and each reads its own member (src_DA.state_envelope);
         the file is reused while the open-loop files are unchanged (fingerprint), force=True rebuilds it.
@@ -240,14 +218,12 @@ class DA_GRACE:
         dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)
         dm.configure_mask(mask_path=self.configDA.basic.basin_mask)
         dm.vertical_aggregation().horizontal_aggregation()
-        # dm.saveDM(out_path=)
         self.dm_included = dm
 
         dm2 = DM_basin_average(layer=self.configDA.model.layer, is_residual=True)
 
         dm2.configure_mask(mask_path=self.configDA.basic.basin_mask)
         dm2.vertical_aggregation().horizontal_aggregation()
-        # dm.saveDM(out_path=)
         self.dm_excluded = dm2
         pass
 
@@ -267,25 +243,19 @@ class DA_GRACE:
 
     def run_DA(self, rank: int):
         """The main entrance to the data assimilation experiment"""
-        import json
         from src_DA.observations import GRACE_obs
-        from src_DA.EnKF import EnKF
-        # earlier variants (EnKF_localization_v1/v2, EnKF_domain_localization): src_DA.legacy.EnKF_legacy
-        # from src_DA.EnSQRA import EnSQRA, EnSQRA_V2
+        from src_DA.filter_factory import build_filter
 
         if rank != 1:
             log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'DA')
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, f"rank_{rank}.log")
             sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            # sys.stdout = TqdmLogFilter(log_path)
             sys.stderr = sys.stdout
 
         # banner AFTER the redirect: rank 1 -> terminal (colour), every other rank -> top of its own log (plain)
         print_pyglda_banner()
-        from misc.time_checker_and_ascii_image import check_time
-
-        # print('\n================ Configure DA experiment ===================')
+        from misc.time_checker_and_ascii_image import check_time      # prints the WaterGAP logo
 
         '''configure DA'''
         configDA = self.configDA
@@ -301,26 +271,9 @@ class DA_GRACE:
         sv_included = EnsStates(DM=self.dm_included, configDA=configDA, ensemble_id=rank)
         sv_excluded = EnsStates(DM=self.dm_excluded, configDA=configDA, ensemble_id=rank)
 
-        '''DA experiment'''
-        # # da = DataAssimilation(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = DataAssimilation_monthly(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        '''choice of the filter: configDA.method.fusion_method (EnKF_v0 = plain EnKF; EnKF_localized = EnKF assembled
-        from localization, inflation and increment-partition components; LETKF = the deterministic ensemble-transform
-        analysis with the same components, see src_DA.filter_factory)'''
-        from src_DA.EnumDA import FusionMethod
-        if configDA.method.fusion_method in (FusionMethod.EnKF_localized, FusionMethod.LETKF):
-            from src_DA.filter_factory import build_filter
-            da = build_filter(configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
-        else:
-            da = EnKF(DA_setting=configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
-        # # da = EnSQRA(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = EnSQRA_V2(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = EnKF_localization_v1(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = EnKF_domain_localization(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = EnKF_localization_v2(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
-        # # da = DataAssimilation_monthlymean_dailyupdate(DA_setting=configDA, model=model_instance, obs=gr, sv=sv)
+        '''the filter chosen by configDA.method.fusion_method, assembled from its components (src_DA.filter_factory)'''
+        da = build_filter(configDA, model=model_instance, obs=gr, sv=sv_included, sv_excluded=sv_excluded)
         da.configure_design_matrix(DM=self.dm_included)
-        #
         '''running with MPI parallelization'''
         print('User case: %s' % self.case)
         print()
@@ -328,66 +281,3 @@ class DA_GRACE:
         print('\nDA finished (rank %s)!\n' % rank)
 
         pass
-
-
-def demo1():
-    da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
-    da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',
-                         basin_dir='/media/user/My Book/Fan/WaterGap/Basin')
-    da.configure_date(begin_date='2002-01-01', end_date='2005-04-30')
-    da.save_configuration()
-    da.reload_setting()
-
-    da.prepare_design_matrix()
-
-    da.gather_OLmean()
-
-    da.generate_perturbed_GRACE_obs()
-    pass
-
-
-def demo2():
-    from mpi4py import MPI
-    """Parallel execution using MPI. Each rank will have its own log file."""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-
-    # if rank != 0:
-    #     log_dir = "./parallel_logs"
-    #     os.makedirs(log_dir, exist_ok=True)
-    #
-    #     log_path = os.path.join(log_dir, f"rank_{rank}.log")
-    #
-    #     sys.stdout = open(log_path, 'w', encoding='utf-8')
-    #     # sys.stdout = TqdmLogFilter(log_path)
-    #     sys.stderr = sys.stdout
-
-    if rank == 0:
-        print_pyglda_banner()
-        from misc.time_checker_and_ascii_image import check_time
-        pass
-    # rank=1
-
-    da = DA_GRACE(setting_dir='/media/user/My Book/Fan/WaterGap/Extensions/DA_settings')
-    da.configure_setting(ens_size=4, case_name='test', basin_name='Brahmaputra',
-                         basin_dir='/media/user/My Book/Fan/WaterGap/Basin')
-    da.configure_date(begin_date='2002-01-01', end_date='2005-04-30')
-    # da.configure_date(begin_date='2002-01-01', end_date='2002-03-31')
-    if rank == 0:
-        da.save_configuration()
-    comm.barrier()
-
-    da.reload_setting()
-
-    if rank == 0:
-        da.gather_OLmean()
-    comm.barrier()
-
-    da.prepare_design_matrix()
-
-    da.run_DA(rank=rank)
-
-
-if __name__ == '__main__':
-    demo2()

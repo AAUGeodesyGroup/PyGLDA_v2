@@ -7,7 +7,7 @@ HydroBASINS carries Pfafstetter codes: all polygons of one river basin share the
 allowed); the polygons of a group are merged, and the result is written with the columns that shp2mask /
 the DA need: ID (1..N, in dictionary order), NAME, PFAF (the codes), SUB_AREA [km2], geometry.
 
-    from src_auxiliary.Hydroshed import HydroBASINS_subbasins, AMAZON_SUBBASINS, DANUBE_SUBBASINS
+    from src_auxiliary.HydroShed import HydroBASINS_subbasins, AMAZON_SUBBASINS, DANUBE_SUBBASINS
     hb = HydroBASINS_subbasins(hybas_dir='.../hybas_eu_lev01-12_v1c', continent='eu')
     gdf = hb.build(DANUBE_SUBBASINS, out_shp='.../Basin/shp/Danube/Danube.shp')
     hb.check_figure(gdf, basin_pfaf='227', fn='.../Extra/fig/Danube_subbasins.png')
@@ -234,25 +234,3 @@ class HydroBASINS_subbasins:
         if allow_pop_up:
             fig.show()
 
-
-# ------------------------------------------------------------------ demos
-EXT = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-
-
-def demo_Danube():
-    hb = HydroBASINS_subbasins(hybas_dir=EXT / 'Extra/hybas_eu_lev01-12_v1c', continent='eu')
-    gdf = hb.build(DANUBE_SUBBASINS, out_shp=EXT / 'Basin/shp/Danube/Danube.shp')
-    hb.check_completeness(gdf, basin_pfaf='227')
-    hb.check_figure(gdf, basin_pfaf='227', fn=EXT / 'Extra/fig/Danube_subbasins.png',
-                    title='Danube sub-basins from HydroBASINS')
-
-
-def demo_Amazon():
-    hb = HydroBASINS_subbasins(hybas_dir=EXT / 'Extra/hybas_sa_lev01-12_v1c', continent='sa')
-    gdf = hb.build(AMAZON_SUBBASINS, out_shp=EXT / 'Basin/shp/Amazon/Amazon.shp')
-    hb.check_figure(gdf, basin_pfaf='62', fn=EXT / 'Extra/fig/Amazon_subbasins.png', ref_level=4,
-                    title='Amazon sub-basins from HydroBASINS')
-
-
-if __name__ == '__main__':
-    demo_Danube()

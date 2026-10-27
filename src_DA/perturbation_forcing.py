@@ -27,8 +27,7 @@ class perturbation_forcing(perturbation_base):
     """
     Forcing perturbation of the monthly climate forcing files (dir.in/monthly_climate_forcing ->
     dir.out/Ens_k/monthly_climate_forcing, Ens_0 = unperturbed copy).
-    #TODO: A sensitivity test is necessary for further analysis!
-    Notice: Take care of the unit of the perturbation! see ext_forcing.py
+    Notice: additive perturbations are in the units of the forcing files.
     """
 
     '''zlib level of the perturbed forcing files: 1 is ~2.5x faster to write than 4 for ~8% larger files
@@ -44,57 +43,6 @@ class perturbation_forcing(perturbation_base):
             pass
         pass
 
-    @staticmethod
-    def save_default_json():
-
-        forcing = ('pr', 'tas', 'rsds', 'rlds')
-
-        perturbation_dict = {
-            'ensemble': 30,
-            'seed': None,
-            'dir': {
-                'in': '/media/user/My Book/Fan/WaterGap/Input_data',
-                'out': '/media/user/My Book/Fan/WaterGap/Ensemble_input'
-            },
-            "correlation": {
-                "forcing": {
-                    "isSpatialCorrelated": True,
-                    "isTemporalCorrelated": False,
-                    "customize": False,
-                    "length_km": 300,
-                    "time_scale_days": 1.0
-                },
-                "par": {
-                    "isSpatialCorrelated": True,
-                    "customize": False
-                }
-            },
-            'forcing': {},
-            'par': {}
-        }
-
-        template1 = {
-            'is_perturbed': False,
-            'perturb_method': perturb_method.additive.name,
-            'error_distribution': error_distribution.triangle.name,
-            'coefficients': [0.3]
-        }
-
-        for key in forcing:
-            perturbation_dict['forcing'][key] = template1
-
-        '''par: only the parameters of Döll et al. (2024, HESS 28, 2259, Table 1) with their ranges, uniform, not
-        perturbed (switch on in the json); all other WaterGAP parameters stay at their standard values'''
-        for key, (ptype, coeff) in DOELL2024.items():
-            perturbation_dict['par'][key] = {'is_perturbed': False, 'type': ptype,
-                                             'error_distribution': error_distribution.uniform.name,
-                                             'coefficients': coeff}
-
-        default_path = Path.cwd() / 'DA_settings' / 'perturbation.json'
-        with open(default_path, 'w') as f:
-            json.dump(perturbation_dict, f, indent=4)
-
-        return str(default_path)
 
     def perturb_forcing(self, comm=None):
         forcing = self.setting['correlation']['forcing']
@@ -119,7 +67,6 @@ class perturbation_forcing(perturbation_base):
         """
         This has to be customized by user
         """
-        # todo: considering partial spatial-temporal correlation
         pass
 
     def _forcing_spatial_correlated_temporal_noncorrelated(self, comm=None):
@@ -175,11 +122,11 @@ class perturbation_forcing(perturbation_base):
                         hh = data + samples[key][ens - 1][:, None, None]
                     '''make sure that the perturbed data is not negative'''
                     hh[hh < 0] = 0
-                    ds_2[key].values = hh                       # same sequence as before: keeps attrs/encoding
+                    ds_2[key].values = hh                       # assigning .values keeps attrs/encoding
                     if ds_2[key].dtype != 'float32':
                         ds_2[key] = ds_2[key].astype('float32')
 
-                '''# monthly chunking for each variable'''
+                '''one chunk per variable and month'''
                 ds_2.to_netcdf(fn_2, format="NETCDF4", engine="netcdf4", encoding={
                     var: {"chunksizes": ds_2[var].shape, "zlib": True,
                           "complevel": self.FORCING_COMPLEVEL}
@@ -194,10 +141,7 @@ class perturbation_forcing(perturbation_base):
 
     def _forcing_spatial_noncorrelated_temporal_correlated(self):
         """
-        TOdo: implement the function for spatial non-correlated and temporal correlated perturbation
-        Returns
-        -------
-
+        Spatially non-correlated, temporally correlated perturbation: not implemented.
         """
         pass
 
@@ -212,7 +156,7 @@ class perturbation_forcing(perturbation_base):
             continuous over all months of one call of perturb_forcing;
           - z is standard normal in every cell and day; per variable ("coefficients": [std]):
               multiplicative + lognormal : factor = exp(s z - s^2 / 2), s^2 = ln(1 + std^2)  (mean 1, std = std, > 0)
-              multiplicative + gaussian  : factor = 1 + std z (negative values set to 0 as before)
+              multiplicative + gaussian  : factor = 1 + std z (negative values set to 0)
               additive + gaussian        : value + std z
         Precipitation lognormal 0.5 and AR(1) 24 h as in Kumar et al. (2016, JHM 17, 1951).
         Random numbers: each member and variable has its own generator from (base seed, member, variable), so the

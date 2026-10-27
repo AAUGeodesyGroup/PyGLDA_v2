@@ -220,7 +220,6 @@ class VerticalWaterBalance:
 
         precipitation = self.forcings_static.climate_forcing.precipitation.sel(
             time=str(date))
-        '''A change is made here @fan'''
         #  Checking negative precipittaion
         check_or_convert.check_neg_precipitation(precipitation)
 

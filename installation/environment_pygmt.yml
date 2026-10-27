@@ -1,4 +1,4 @@
-# Visualization env for PyGLDA_v2 (src_postprocessing/Visualization.py, src_auxiliary/HydroShed.py, Shape.py).
+# Visualization env for PyGLDA_v2 (src_postprocessing/Visualization.py, src_auxiliary/HydroShed.py).
 # Separate from pyglda_v2 because pygmt does not solve against WaterGAP's numpy 1.23.5 pin.
 # Not for running the model. Mirrors the desktop "pygmt-2" env (python 3.13, pygmt 0.16, gmt 6.6).
 #   desktop:  mamba env create -f environment_pygmt.yml

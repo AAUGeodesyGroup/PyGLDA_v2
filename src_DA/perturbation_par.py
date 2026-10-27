@@ -78,7 +78,7 @@ class perturbation_base:
     number of ranks. Without comm everything runs serially.
     Random numbers: a fixed "seed" in the json gives each of the two classes its own generator
     (np.random.default_rng(seed)); null / missing = the global numpy generator, shared by both in the order they are
-    called (parameters first, then forcing), which reproduces the ensembles made with the single Perturbation.py.
+    called (parameters first, then forcing).
     """
 
     def __init__(self, dp='./DA_settings/perturbation.json', ens_size=None):
@@ -187,7 +187,6 @@ class perturbation_par(perturbation_base):
         """
         This has to be customized by user
         """
-        # todo: considering partial spatial-temporal correlation
         pass
 
     def _par_spatial_correlated(self, comm=None):

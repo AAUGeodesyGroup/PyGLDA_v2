@@ -1,3 +1,13 @@
+"""
+Shapefile helpers for building assimilation units:
+  box2shp          a one-polygon shapefile from a lat/lon box
+  basin2grid_shp   cut a basin into regular grid cells (e.g. 2 x 2 degree), drop tiny or ocean cells, merge cells
+  plot_units       quick look of a unit shapefile with the unit IDs (pygmt)
+
+    bg = basin2grid_shp(grid=(2, 2)).load_original_shp('<basin>.shp').create_shp()
+    bg.delete_tiny_grids().merge_grids([1, 2]).save2file(new_basin_name='<name>', out_dir='<folder>')
+    plot_units(bg.new_shp)
+"""
 import numpy as np
 import geopandas as gpd
 from shapely import box
@@ -18,22 +28,6 @@ def box2shp(box_area=(70.1, 33.9, -11.1, 45.1)):
     poly = box(xmin=box_area[2], ymin=box_area[0], xmax=box_area[3], ymax=box_area[1])
     d = {'ID': [0], 'geometry': [poly]}
     gdf = gpd.GeoDataFrame(d, crs='epsg:4326')
-
-    # '''visualization'''
-    # import pygmt
-    # import geopandas as gpd
-    # fig = pygmt.Figure()
-    # pygmt.config(MAP_HEADING_OFFSET=0, MAP_TITLE_OFFSET=-0.2)
-    # pygmt.config(FONT_ANNOT='10p', COLOR_NAN='white')
-    # pygmt.makecpt(cmap='wysiwyg', series=[0, 56], background='o')
-    # region = 'g'
-    # pj = "Q30/-20/12c"
-    # fig.basemap(region=region, projection=pj,
-    #             frame=['WSne', 'xa10f5+lLongitude (\\260 E)', 'ya5f5+lLatitude (\\260 N)'])
-    #
-    # fig.coast(shorelines="1/0.2p", region=region, projection=pj, water="skyblue")
-    # fig.plot(data=gdf.boundary, pen="0.5p,red", projection=pj)
-    # fig.show()
 
     return gdf
 
@@ -91,10 +85,10 @@ class basin2grid_shp:
     def create_shp(self):
         basin_shp = self.__old_shp
 
-        if basin_shp.unary_union.geom_type == 'MultiPolygon':
-            bb = max(basin_shp.unary_union.geoms, key=lambda a: a.area)
+        if basin_shp.union_all().geom_type == 'MultiPolygon':
+            bb = max(basin_shp.union_all().geoms, key=lambda a: a.area)
         else:
-            bb = basin_shp.unary_union
+            bb = basin_shp.union_all()
 
         basin_all = gpd.GeoDataFrame({'geometry': gpd.GeoSeries(bb)}, crs='epsg:4326')
 
@@ -121,10 +115,10 @@ class basin2grid_shp:
 
         return self
 
-    def save2file(self, new_basin_name='new', out_dir='../temp'):
+    def save2file(self, new_basin_name, out_dir):
+        """writes <out_dir>/<new_basin_name>/<new_basin_name>.shp"""
         dp = Path(out_dir) / new_basin_name
-        if not dp.exists():
-            dp.mkdir()
+        dp.mkdir(parents=True, exist_ok=True)
         self.new_shp.to_file(dp / ('%s.shp' % new_basin_name))
         pass
 
@@ -136,7 +130,7 @@ class basin2grid_shp:
 
         '''requirement of minimal area'''
         propotion = 8  # This is totally empirical
-        gdf = gdf[gdf.area >= (gdf.area.values.max()) / propotion]
+        gdf = gdf[gdf.area >= (gdf.area.values.max()) / propotion].copy()
 
         '''must not be a multiPolygon'''
         # gdf = gdf[gdf.type == 'Polygon']
@@ -156,38 +150,38 @@ class basin2grid_shp:
 
         return self
 
-    def delete_ocean_grid(self):
+    def delete_ocean_grid(self, land_mask_fn, min_land_fraction=0.16):
         """
-        Only keep the land grid. This calculation is based on the high-resolution (0.1-degree) land mask data (coming from
-        the W3RA model). #todo: to inspect and likely improve this land mask in future
-        :return:
+        Keep only the grid cells with at least min_land_fraction land, from a 0.1-degree global land mask
+        (land_mask_fn: h5 file with dataset 'mask', north-up, 1801 x 3600 as the W3RA land mask; the last row is
+        dropped).
         """
-        model_land_mask = '../../data/land_mask/land_mask_res0.1.h5'
-        mask = h5py.File(model_land_mask, 'r')['mask'][:-1, :]
+        with h5py.File(land_mask_fn, 'r') as h:
+            mask = h['mask'][:-1, :]
         gdf = self.new_shp
 
         invalids = []
 
         for id in range(1, gdf.ID.size + 1):
             tt = gdf[gdf.ID == id]
-            minx = int(float(tt.bounds.minx) / 0.1) + 1800
-            maxx = int(float(tt.bounds.maxx) / 0.1) + 1800
-            maxy = 900 - int(float(tt.bounds.miny) / 0.1)
-            miny = 900 - int(float(tt.bounds.maxy) / 0.1)
+            minx = int(float(tt.bounds.minx.iloc[0]) / 0.1) + 1800
+            maxx = int(float(tt.bounds.maxx.iloc[0]) / 0.1) + 1800
+            maxy = 900 - int(float(tt.bounds.miny.iloc[0]) / 0.1)
+            miny = 900 - int(float(tt.bounds.maxy.iloc[0]) / 0.1)
             vv = np.sum(mask[miny:maxy + 1, minx:maxx + 1])
             tg = mask[miny:maxy + 1, minx:maxx + 1].size
 
             flag = True
 
             '''in case the land area is too small'''
-            if vv / tg < 0.16:
+            if vv / tg < min_land_fraction:
                 flag = False
 
             invalids.append(flag)
 
             pass
 
-        n = gdf[invalids]
+        n = gdf[invalids].copy()
         n.loc[:, 'ID'] = np.arange(np.sum(np.array(invalids))) + 1
         self.new_shp = n
         return self
@@ -202,7 +196,7 @@ class basin2grid_shp:
         grids_to_merge = gdf[gdf['ID'].isin(grid_ids)]
 
         if not grids_to_merge.empty:
-            merged_geometry = grids_to_merge.unary_union
+            merged_geometry = grids_to_merge.union_all()
             new_id = min(grid_ids)
 
             # Create a new GeoDataFrame for the merged grid
@@ -214,76 +208,43 @@ class basin2grid_shp:
 
             '''sort the ID and rename ID from 1 to n'''
             gdf = gdf.sort_values(by='ID').reset_index(drop=True)
-            gdf['ID'] = np.arange(1, len(gdf) + 1)  # 重新生成连续的 ID
+            gdf['ID'] = np.arange(1, len(gdf) + 1)  # renumber the IDs consecutively
 
         self.new_shp = gdf
 
         return self
 
 
-def demo_shap2grid():
-    bg = basin2grid_shp(grid=(2, 2))
-    gdf = bg.load_original_shp(
-        original_shp='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp').create_shp()
-    # bg.save2file(new_basin_name='Brahmaputra2Grid', out_dir='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra')
-    gdf.merge_grids(grid_ids=[1, 2]).merge_grids(grid_ids=[11, 15]).merge_grids(grid_ids=[9, 14]). \
-        merge_grids([14, 15]).merge_grids([5, 10]).merge_grids([2, 3])
-    gdf = gdf.new_shp
-    import pygmt
-    fig = pygmt.Figure()
-    pygmt.config(MAP_HEADING_OFFSET=0, MAP_TITLE_OFFSET=-0.2)
-    pygmt.config(FONT_ANNOT='10p', COLOR_NAN='white')
-    pygmt.makecpt(cmap='wysiwyg', series=[0, 56], background='o')
-
-    box_area = gdf.unary_union.bounds
-    # Correct order: [xmin, xmax, ymin, ymax] with a 5-degree buffer
-    region = [box_area[0] - 5, box_area[2] + 5, box_area[1] - 5, box_area[3] + 5]
-    pj = "Q30/-20/12c"
-    fig.basemap(region=region, projection=pj,
-                frame=['WSne', 'xa10f5+lLongitude (\\260 E)', 'ya5f5+lLatitude (\\260 N)'])
-
-    fig.coast(shorelines="1/0.2p", region=region, projection=pj, water='lightblue')
-
-    for i in range(1, gdf.shape[0] + 1):
-        xy = gdf[gdf.ID == i].centroid
-        fig.text(x=xy.x, y=xy.y, text="%s" % i, font='7p,black')
-
-    fig.plot(data=gdf.boundary, pen="0.5p,blue", projection=pj)
-
-    fig.show()
-    pass
-
-
-def demo_visualization():
+def plot_units(units, region=None, projection="Q30/-20/12c", show=True, fig_out=None):
+    """
+    Quick look of a unit shapefile (path or GeoDataFrame with column ID): unit boundaries with their IDs.
+    region [lon_min, lon_max, lat_min, lat_max]; default: the bounds of the units plus 5 degrees.
+    """
     import pygmt
 
-    gdf = gpd.read_file('/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp')
+    gdf = gpd.read_file(units) if isinstance(units, (str, Path)) else units
+    if region is None:
+        b = gdf.union_all().bounds
+        region = [b[0] - 5, b[2] + 5, b[1] - 5, b[3] + 5]
 
     fig = pygmt.Figure()
-    pygmt.config(MAP_HEADING_OFFSET=0, MAP_TITLE_OFFSET=-0.2)
-    pygmt.config(FONT_ANNOT='10p', COLOR_NAN='white')
-    pygmt.makecpt(cmap='wysiwyg', series=[0, 56], background='o')
-
-    box_area = gdf.unary_union.bounds
-    # Correct order: [xmin, xmax, ymin, ymax] with a 5-degree buffer
-    region = [box_area[0] - 5, box_area[2] + 5, box_area[1] - 5, box_area[3] + 5]
-    pj = "Q30/-20/12c"
-    fig.basemap(region=region, projection=pj,
+    pygmt.config(MAP_HEADING_OFFSET=0, MAP_TITLE_OFFSET=-0.2, FONT_ANNOT='10p', COLOR_NAN='white')
+    fig.basemap(region=region, projection=projection,
                 frame=['WSne', 'xa10f5+lLongitude (\\260 E)', 'ya5f5+lLatitude (\\260 N)'])
-
-    fig.coast(shorelines="1/0.2p", region=region, projection=pj, water='lightblue')
-
-    for i in range(1, gdf.shape[0] + 1):
-        xy = gdf[gdf.ID == i].centroid
-        fig.text(x=xy.x, y=xy.y, text="%s" % i, font='7p,black')
-
-    fig.plot(data=gdf.boundary, pen="0.5p,blue", projection=pj)
-
-    fig.show()
-    pass
+    fig.coast(shorelines="1/0.2p", region=region, projection=projection, water='lightblue')
+    for uid in gdf.ID:
+        xy = gdf[gdf.ID == uid].geometry.representative_point()
+        fig.text(x=float(xy.x.iloc[0]), y=float(xy.y.iloc[0]), text="%s" % uid, font='7p,black')
+    fig.plot(data=gdf.boundary, pen="0.5p,blue", projection=projection)
+    if fig_out is not None:
+        fig.savefig(str(fig_out))
+    if show:
+        fig.show()
+    return fig
 
 
 if __name__ == '__main__':
-    # demo2()
-    demo_visualization()
-    # demo_shap2grid()
+    import sys
+    if len(sys.argv) != 2:
+        sys.exit('usage: python -m src_auxiliary.Shape <units.shp>   (plots the units with their IDs)')
+    plot_units(sys.argv[1])

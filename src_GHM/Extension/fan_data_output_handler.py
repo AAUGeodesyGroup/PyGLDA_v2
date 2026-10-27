@@ -47,7 +47,6 @@ class OutputVariable:
             # Geting length of time,lat,lon from grid coordinates (grid_coords)
             lat_length = len(self.grid_coords['lat'].values)
             lon_length = len(self.grid_coords['lon'].values)
-            # time_length = len(self.grid_coords['time'][:365].values)
 
             # Create dummy data for variable
             if self.variable_name == "get_neighbouring_cells_map":
@@ -121,7 +120,7 @@ class OutputVariable:
 
     def write_daily_output(self, array, year, month, day):
         """
-        Write results to output variable  per time step.
+        Write results to output variable  per time step (overwrites the previous day).
 
         Parameters
         ----------
@@ -140,25 +139,5 @@ class OutputVariable:
 
         """
         if self.create:
-            # # Check if it's a new year (time to update the dataset time values)
-            # if month == 1 and day == 1:
-            #     # Get right dates  for data
-            #     next_year_time = \
-            #         self.grid_coords['time'].sel(time=str(year))
-            #
-            #     # Update the time coordinate in self.data except for
-            #     # maximum soil moisture
-            #     if self.variable_name == "smax":
-            #         self.data[self.variable_name][:, :] = array
-            #     else:
-            #         self.data = self.data.reindex(time=next_year_time)
-
-            # reset counter to zero after each year
-            # if self.variable_name == "smax":
-            #     pass
-            # else:
-            #     # date = pd.Timestamp(year=year, month=month, day=day)
-            #     # self.data[self.variable_name].loc[dict(time=date)] = array
-            #     self.data[self.variable_name].values = array.copy()
-
+            # only the current day is kept in memory (no time dimension)
             self.data[self.variable_name].values = array.copy()

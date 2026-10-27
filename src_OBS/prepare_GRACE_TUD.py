@@ -1,6 +1,6 @@
 """
 GRACE observations from the TU Delft 5-daily (to weekly) hybrid L3 product
-(provided by Miguel, TU Delft; files 'TUD-L3-5dayEWH-GRACEv2-Hybrid-*.nc' and
+(provided by TU Delft; files 'TUD-L3-5dayEWH-GRACEv2-Hybrid-*.nc' and
 'TUD-L3Uncorr-5dayEWH_UNC-GRACEv2-Hybrid-*.nc').
 
 Product layout (both files): dims (time, lat, lon) = (910, 360, 720); lat -89.75 -> 89.75 (south up),
@@ -232,21 +232,3 @@ class GRACE_TUD_5daily(GRACE_preparation):
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         pass
 
-
-def demo_Amazon():
-    """stand-alone check: units, then the three products for the Amazon"""
-    base = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-    GR = GRACE_TUD_5daily(basin_name='Amazon', shp_path=str(base / 'Basin/shp/Amazon/Amazon.shp'))
-    GR.configure_global_land_ocean_mask(fn=str(base / 'GRACE/global_mask/WaterGAPLandMask.hdf5'))
-    GR.generate_mask(save_dir=str(base / 'Basin/mask'))
-    GR.set_extra_info(dir_in=str(base / 'GRACE/Miguel_Tudelft'), unit='cm', corr_length_km=300.0)
-    GR.inspect(day_begin='2002-04-01', day_end='2002-12-31')
-    out = str(base / 'GRACE/output_TUD')
-    GR.basin_TWS(day_begin='2002-01-01', day_end='2016-04-30', dir_out=out)
-    GR.grid_TWS(day_begin='2002-01-01', day_end='2016-04-30', dir_out=out)
-    GR.basin_COV(day_begin='2002-01-01', day_end='2016-04-30', dir_out=out, is_diagonal=False)
-    pass
-
-
-if __name__ == '__main__':
-    demo_Amazon()

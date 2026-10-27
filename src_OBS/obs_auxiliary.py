@@ -5,7 +5,6 @@ import netCDF4 as nc
 from src_auxiliary.GeoMathKit import GeoMathKit
 from pathlib import Path
 from datetime import datetime, timedelta
-# from src_GHM.EnumType import states_var
 import calendar
 import os
 
@@ -47,8 +46,10 @@ class obs_auxiliary:
         x['duration'] = timeRef['duration'][a:b].copy()
         return x, a, b
 
-    def save_H5(self, basin_name: str, dir_out='/media/user/Backup Plus/GRACE/Mascon/CSR/test'):
+    def save_H5(self, basin_name: str, dir_out=None):
         """save it into h5"""
+        if dir_out is None:
+            raise ValueError('save_H5: dir_out (output directory) must be given')
         out_dir = Path(dir_out)
         hm = h5py.File(out_dir / ('%s_aux.hdf5' % basin_name), 'w')
         dt = h5py.special_dtype(vlen=str)
@@ -66,7 +67,10 @@ class aux_GRACE_mascon_monthly(obs_auxiliary):
         pass
 
     def setTimeReference(self, month_begin='2002-04', month_end='2023-05',
-                         dir_in='/media/user/Backup Plus/GRACE/Mascon/CSR'):
+                         dir_in=None):
+        """dir_in: directory holding CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc"""
+        if dir_in is None:
+            raise ValueError('aux_GRACE_mascon_monthly.setTimeReference: dir_in must be given')
 
         filename = 'CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc'
         csr = nc.Dataset(Path(dir_in) / filename)
@@ -78,7 +82,6 @@ class aux_GRACE_mascon_monthly(obs_auxiliary):
         index = 0
         for dd in timelist:
             this_month = initial_day + timedelta(days=int(dd))
-            # print(this_month.strftime('%Y-%m'))
             available_month[this_month.strftime('%Y-%m')] = index
             index += 1
 
@@ -86,7 +89,6 @@ class aux_GRACE_mascon_monthly(obs_auxiliary):
         available_month['2011-10'] -= 1
         available_month['2011-11'] = available_month['2011-10'] + 1
         available_month['2015-04'] -= 1
-        # available_month['2015-05'] = available_month['2015-04'] + 1
 
         monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
 
@@ -94,8 +96,6 @@ class aux_GRACE_mascon_monthly(obs_auxiliary):
         duration = []
         for month in monthlist:
             this_month_shortname = month.strftime('%Y-%m')
-            # print(this_month_shortname)
-            #
             if this_month_shortname not in available_month.keys():
                 continue
 
@@ -118,7 +118,10 @@ class aux_GRACE_SH_monthly(obs_auxiliary):
         pass
 
     def setTimeReference(self, month_begin='2002-04', month_end='2022-04',
-                         dir_in='/media/user/My Book/Fan/GRACE/ewh'):
+                         dir_in=None):
+        """dir_in: directory holding the monthly gridded EWH files (one file per month, 'YYYY-MM' in the name)"""
+        if dir_in is None:
+            raise ValueError('aux_GRACE_SH_monthly.setTimeReference: dir_in must be given')
 
         directory = Path(dir_in)
         fns = os.listdir(directory)
@@ -138,13 +141,12 @@ class aux_GRACE_SH_monthly(obs_auxiliary):
             if tn is None:
                 continue
 
-            # print(tn)
             fn = directory / tn
 
             date = tn.split('.')[0]
             if len(date.split('-')) == 2:
                 time_epoch.append(
-                    date + '-15')  # TODO: assumed to be the mid day of the month but should be checked later
+                    date + '-15')  # assumed to be the mid day of the month
             else:
                 time_epoch.append(date)
 
@@ -166,7 +168,10 @@ class aux_ESAsing_5daily(obs_auxiliary):
         pass
 
     def setTimeReference(self, day_begin='1990-04-01', day_end='2008-05-01',
-                         dir_in='/media/user/My Book/Fan/ESA_SING/ESA_5daily'):
+                         dir_in=None):
+        """dir_in: folder of the ESA SING 5-daily files, one subfolder per year (1995-2006)"""
+        if dir_in is None:
+            raise ValueError('aux_ESAsing_5daily.setTimeReference: dir_in must be given')
 
         day_begin = datetime.strptime(day_begin, '%Y-%m-%d')
         day_end = datetime.strptime(day_end, '%Y-%m-%d')
@@ -197,6 +202,7 @@ class aux_ESAsing_5daily(obs_auxiliary):
 
         return self
 
+
 class aux_ESM3_5daily(obs_auxiliary):
 
     def __init__(self):
@@ -204,7 +210,10 @@ class aux_ESM3_5daily(obs_auxiliary):
         pass
 
     def setTimeReference(self, day_begin='1990-04-01', day_end='2008-05-01',
-                         dir_in='/media/user/My Book/Fan/ESA_SING/ESM3.0/5daily'):
+                         dir_in=None):
+        """dir_in: folder of the ESM 3.0 5-daily files, one subfolder per year (2007-2020)"""
+        if dir_in is None:
+            raise ValueError('aux_ESM3_5daily.setTimeReference: dir_in must be given')
 
         day_begin = datetime.strptime(day_begin, '%Y-%m-%d')
         day_end = datetime.strptime(day_end, '%Y-%m-%d')
@@ -256,8 +265,10 @@ class aux_TUD_5daily(obs_auxiliary):
         pass
 
     def setTimeReference(self, day_begin='2002-01-01', day_end='2030-01-01',
-                         dir_in='/media/user/My Book/Fan/PyGLDA_v2_external_data/GRACE/Miguel_Tudelft',
+                         dir_in=None,
                          filename='TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc', max_half_window_days=3):
+        if dir_in is None:
+            raise ValueError('aux_TUD_5daily.setTimeReference: dir_in (folder of the TUD netCDF files) must be given')
         day_begin = datetime.strptime(day_begin, '%Y-%m-%d')
         day_end = datetime.strptime(day_end, '%Y-%m-%d')
 
@@ -300,18 +311,3 @@ class aux_TUD_5daily(obs_auxiliary):
         x, a, b = super().selectSubTimePeriod(day_begin=day_begin, day_end=day_end)
         return x, a, b
 
-
-def demo1():
-    # aux = aux_ESAsing_5daily()
-    # aux = aux_GRACE_SH_monthly()
-    # aux = aux_GRACE_mascon_monthly()
-    # aux.setTimeReference(dir_in='/media/user/My Book/Fan/SummerSchool/External Data/GRACE/SaGEA/signal_Mascon')
-
-    aux = aux_ESM3_5daily()
-    aux.setTimeReference(day_begin='1990-01-01', day_end='2030-01-01')
-
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

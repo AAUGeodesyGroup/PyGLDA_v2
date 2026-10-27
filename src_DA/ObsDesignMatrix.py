@@ -5,7 +5,6 @@ from scipy import sparse
 from scipy.linalg import block_diag
 import h5py
 from pathlib import Path
-from datetime import datetime
 import xarray as xr
 
 
@@ -44,7 +43,6 @@ class DM_basin_average:
                 WaterGap_storage_variables.canopystor.name: True
             }
 
-        # self.layer = layer
         states_nn = []
         vertical_dim = 0
         for k, v in layer.items():
@@ -55,7 +53,7 @@ class DM_basin_average:
         self.statesnn = sorted(states_nn, key=lambda x: WaterGap_storage_variables[x].value)
         self.vertical_dim = vertical_dim
 
-        '''load DM from pre-saved matrix (saveDM)'''
+        '''load DM from a pre-saved matrix: <dir>/DM.hdf5 with the CSR components data / indices / indptr / shape'''
         if 'LoadfromDisk' in kwargs:
             if kwargs['LoadfromDisk'] is True:
                 with h5py.File(Path(kwargs['dir']) / 'DM.hdf5', 'r') as f:
@@ -63,7 +61,7 @@ class DM_basin_average:
                         self._A = sparse.csr_matrix((f['data'][:], f['indices'][:], f['indptr'][:]),
                                                     shape=tuple(f['shape'][:]))
                     else:
-                        self._A = sparse.csr_matrix(f['data'][:])            # dense file of an earlier version
+                        self._A = sparse.csr_matrix(f['data'][:])            # file holding a dense matrix
                 return
 
     def vertical_aggregation(self):
@@ -79,9 +77,9 @@ class DM_basin_average:
         design matrix H [n_sub_basin x n_cell * vertical_dim] of the sub-basin means: row i holds, for every cell of
         sub-basin i and every vertical layer, the cos(lat) weight of the cell normalised over the sub-basin (the
         state vector is cell-major: element c * vertical_dim + k is layer k of cell c, see ExtractStates). H has one
-        non-zero per state element of the sub-basins and is stored as scipy.sparse CSR: the dense matrix of the
-        global case (772 x 166 383 for 3 layers, 772 x 388 227 for the 7 excluded layers) was 1 + 2.4 GB on every
-        MPI rank and was copied at every operator call (until 8 Oct 2026); the sparse one is a few MB.
+        non-zero per state element of the sub-basins and is stored as scipy.sparse CSR: a dense matrix of the
+        global case (772 x 166 383 for 3 layers, 772 x 388 227 for the 7 excluded layers) would take 1 + 2.4 GB on
+        every MPI rank; the sparse one is a few MB.
         """
         sub_basin_num = self.local_mask['basin_num']
         N = self.vertical_dim
@@ -107,13 +105,6 @@ class DM_basin_average:
 
         return self
 
-
-    def upscaling(self):
-        return self
-
-    def filtering(self):
-        return self
-
     def getDM(self):
         """the design matrix as scipy.sparse CSR (no copy; use .toarray() for a dense array)"""
         return self._A
@@ -121,42 +112,3 @@ class DM_basin_average:
     def operator(self, states):
         """H @ states: sub-basin means of the states [n_state] or [n_state x N]"""
         return self._A @ states
-
-    def saveDM(self, out_path: str):
-        """save the sparse design matrix (CSR components) to <out_path>/DM.hdf5; read back with LoadfromDisk"""
-        A = sparse.csr_matrix(self._A)
-        with h5py.File(Path(out_path) / 'DM.hdf5', 'w') as fn:
-            fn.create_dataset('data', data=A.data)
-            fn.create_dataset('indices', data=A.indices)
-            fn.create_dataset('indptr', data=A.indptr)
-            fn.create_dataset('shape', data=np.array(A.shape))
-        print('Finished and save the design matrix: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        pass
-
-
-def demo2():
-    layer = {
-        WaterGap_storage_variables.groundwstor.name: True,
-        WaterGap_storage_variables.soilmoist.name: True,
-        WaterGap_storage_variables.swe.name: True,
-        WaterGap_storage_variables.locallakestor.name: True,
-        WaterGap_storage_variables.localwetlandstor.name: True,
-        WaterGap_storage_variables.globallakestor.name: True,
-        WaterGap_storage_variables.globalwetlandstor.name: True,
-        WaterGap_storage_variables.riverstor.name: True,
-        WaterGap_storage_variables.reservoirstor.name: True,
-        WaterGap_storage_variables.canopystor.name: True
-    }
-    dm = DM_basin_average(layer=layer, is_residual=False)
-    dm.configure_mask(mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5')
-    dm.vertical_aggregation().horizontal_aggregation()
-
-    dm2 = DM_basin_average(layer=layer, is_residual=True)
-    dm2.configure_mask(mask_path='/media/user/My Book/Fan/WaterGap/Basin/mask/Brahmaputra/Brahmaputra_res_0.5.h5')
-    dm2.vertical_aggregation().horizontal_aggregation()
-    pass
-
-
-if __name__ == '__main__':
-    # demo1()
-    demo2()

@@ -8,10 +8,10 @@ reader) with the options a global run needs:
                   basin covers at least area_threshold of the cell (default 0.4, as shp2mask)
   rule 'centre' : a cell belongs to the sub-basin whose polygon contains (or touches) the cell centre
   output        : <save_dir>/<basin_name>/<basin_name>_res_<res>.h5 with 'basin' and 'sub_basin_<ID>' (int), attrs
-                  (+ <basin_name>_res_1.h5 for the GRACE covariance, derived from it by shp2mask.mask_05_to_1 in demo2)
+                  (+ <basin_name>_res_1.h5 for the GRACE covariance, derived from it by shp2mask.mask_05_to_1)
                   'rule'; gzip-compressed (600+ layers of mostly zeros); read with shp2mask.load_mask
   mask_to_vec   : inherited from shp2mask
-demo1 checks that both codes give identical masks for the Danube.
+For a regional shapefile both codes give identical masks (checked for the Danube with both rules).
 
 Global options (both off by default, so the result equals shp2mask):
   configure_model_mask : keep only the cells of the model land (WaterGAP: finite continental area)
@@ -19,6 +19,14 @@ Global options (both off by default, so the result equals shp2mask):
                          lakes) stays outside every sub-basin, instead of going to the neighbouring unit
   write_label          : also write 'unit_id' [lat, lon] (sub-basin ID, 0 = none); off by default because readers that
                          loop over all keys of the file expect only 'basin' and 'sub_basin_<ID>'
+
+Global DA mask (GlobalBasins.shp on the WaterGAP land, removed units excluded):
+    gp = global_shp_process(res=0.5, basin_name='GlobalBasins', save_dir=<external_data>/Basin/mask)
+    gp.configure_threshold(0.4)
+    gp.configure_model_mask(continental_area_nc=<external_data>/Input_data/static_input/watergap_22e_continentalarea.nc)
+    gp.configure_exclude(<external_data>/Basin/shp/Global/GlobalBasins_removed.shp)
+    gp.shp_to_mask(shp_path=<external_data>/Basin/shp/Global/GlobalBasins.shp, issave=True)
+    mask_05_to_1(mask05_path=<external_data>/Basin/mask/GlobalBasins/GlobalBasins_res_0.5.h5)   # 1 deg, GRACE cov
 """
 import sys
 from pathlib import Path
@@ -210,40 +218,3 @@ class global_shp_process(basin_shp_process):
             plt.show()
         return fig
 
-
-# ------------------------------------------------------------------ demos
-EXT = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-
-
-def demo1():
-    """consistency check: the Danube mask of global_shp2mask must equal the one of shp2mask (both rules)"""
-    shp = EXT / 'Basin/shp/Danube/Danube.shp'
-    tmp = EXT / 'Extra/test_global_shp2mask'                  # scratch (nothing is saved), delete afterwards
-    tmp.mkdir(parents=True, exist_ok=True)
-    for rule in ('area', 'centre'):
-        a = basin_shp_process(res=0.5, basin_name='Danube_ref', save_dir=tmp).shp_to_mask(str(shp), rule=rule)
-        b = global_shp_process(res=0.5, basin_name='Danube_new', save_dir=tmp).shp_to_mask(str(shp), rule=rule)
-        same = all(np.array_equal(a.mask[k], b.mask[k]) for k in a.mask)
-        print('Danube, rule %-6s: %d cells, identical: %s' % (rule, a.mask[0].sum(), same))
-    pass
-
-
-def demo2():
-    """global DA mask: GlobalBasins.shp on the WaterGAP land, removed units excluded -> Basin/mask/GlobalBasins/"""
-    gp = global_shp_process(res=0.5, basin_name='GlobalBasins', save_dir=EXT / 'Basin/mask')
-    gp.configure_threshold(0.4)
-    gp.configure_model_mask(continental_area_nc=EXT / 'Input_data/static_input/watergap_22e_continentalarea.nc')
-    gp.configure_exclude(EXT / 'Basin/shp/Global/GlobalBasins_removed.shp')
-    gp.shp_to_mask(shp_path=EXT / 'Basin/shp/Global/GlobalBasins.shp', issave=True)
-    '''1-degree mask for the GRACE covariance, derived from the 0.5-degree mask (all its cells are model land)'''
-    mask_05_to_1(mask05_path=EXT / 'Basin/mask/GlobalBasins/GlobalBasins_res_0.5.h5')
-    gp.plot_mask(shp_path=EXT / 'Basin/shp/Global/GlobalBasins.shp', fn=EXT / 'Basin/mask/GlobalBasins/GlobalBasins_mask',
-                 allow_pop_up=False)
-    box_crop, local_mask = load_mask(EXT / 'Basin/mask/GlobalBasins/GlobalBasins_res_0.5.h5')
-    print('load_mask: %d sub-basins, %d cells' % (local_mask['basin_num'], local_mask['basin'].sum()))
-    pass
-
-
-if __name__ == '__main__':
-    demo1()
-    demo2()

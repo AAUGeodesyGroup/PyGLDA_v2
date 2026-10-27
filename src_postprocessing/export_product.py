@@ -1,6 +1,8 @@
 """
 Export a finished PyGLDA v2 case as a public data product. This is not part of the normal workflow: it is called by
-hand, only when the results are distributed to others (see demo1 / demo2 below).
+hand, only when the results are distributed to others:
+    from src_postprocessing.export_product import product_export
+    product_export(setting_dir='settings/<case>', version='v1.0').configure_output(out_dir=None).run()
 
 Everything is read from what the pipeline has already written (paths from <setting_dir>/DA_setting.json):
     Res/<case>/<OL|DA>/Ens_k/daily_output_<year>.nc   yearly basin-box files of every member (collect step)
@@ -515,24 +517,3 @@ class product_export:
               'Created %s with `src_postprocessing/export_product.py`.' % dt.datetime.now().strftime('%Y-%m-%d')]
         (self.__root / 'README.md').write_text('\n'.join(L) + '\n')
         pass
-
-
-def demo1():
-    """local workstation: the 4-member Danube case"""
-    pe = product_export(setting_dir=str(Path(__file__).resolve().parent.parent / 'settings' / 'demo_2'), version='v0.1')
-    pe.run()
-    pass
-
-
-def demo2():
-    """UCloud: the 30-member Danube case"""
-    pe = product_export(setting_dir=str(Path(__file__).resolve().parent.parent / 'settings' / 'demo_Danube'),
-                        version='v1.0')
-    pe.configure_output(out_dir=None)
-    pe.configure_baseline(begin='2004-01-01', end='2009-12-31')
-    pe.run()
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

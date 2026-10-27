@@ -1,32 +1,23 @@
 """
-Global data assimilation: GRACE TWS of the global basin units (GlobalBasins v1.0, 772 units) into WaterGAP 2.2e.
+Global data assimilation: GRACE TWS of the global basin units (e.g. GlobalBasins v2.0, 737 units) into WaterGAP 2.2e.
 
 The workflow is the regional one (src_FlowControl.Regional_DA.RDA), which GDA inherits; only the steps that differ
 for the globe are overridden:
 
     check_units()               frozen unit set: mask, shapefile and IDs consistent (replaces config_basin_mask)
-    get_GRACE_obs()             unit TWS, 772 x 772 GRACE covariance and gridded TWS with the regional GRACE
+    get_GRACE_obs()             unit TWS, unit x unit GRACE covariance and gridded TWS with the regional GRACE
                                 processing on the frozen unit mask (no second rasterisation of the shapefile)
     da_evaluation()             per-unit and grouped evaluation report (src_postprocessing.global_evaluation)
     visualization()             PyGMT figures of that report (src_postprocessing.global_visualization)
 
-All other steps are the inherited regional ones: collect_and_statistics (the yearly merge writes the full grid for a
-global unit mask, see merge_standardize.yearly_merge), DA_run with the open-loop envelope, harmonic maps,
-post-processing, export. OL yearly files come from the global open loop of the source case (OL_output), DA yearly
-files from DA_output/<case>.
+All other steps are the inherited regional ones (perturbation, spin-up, open loop, collect_and_statistics, DA_run,
+harmonic maps, post-processing, export); the yearly merge writes the full grid for a global unit mask
+(merge_standardize.yearly_merge).
 
-Not used: model_perturbation, spin_up, OL_run - the open loop of the source case (e.g. demo_Danube) is global and
-is reused (same Ensemble_input, Ensemble_Initialization and OL_output folders in settings/<case>/DA_setting.json).
+RDA's methods are static and read RDA.<attribute>. Every case attribute assigned to GDA (GDA.case = ...) is therefore
+also assigned to RDA (metaclass _CaseToRDA), so that the inherited steps run the global case.
 
-Note: RDA's methods are static and read RDA.<attribute>. Every case attribute assigned to GDA (GDA.case = ...) is
-therefore also assigned to RDA (metaclass _CaseToRDA), so that the inherited steps (DA_run, post_processing, ...) run
-the global case.
-
-Order (driver: src_demo/demo_global.py)
-    serial:  GDA.config_external_data(), GDA.check_units(), GDA.get_GRACE_obs()
-    MPI:     GDA.collect_and_statistics(Stage.OL) -> GDA.DA_run() -> GDA.collect_and_statistics(Stage.DA)  (inherited)
-
-First version (7 Oct 2026).
+Driver: src_demo/global_run.py.
 """
 from pathlib import Path
 from datetime import datetime
@@ -53,7 +44,7 @@ class _CaseToRDA(type):
 class GDA(RDA, metaclass=_CaseToRDA):
     """
     The case (case, basin, ens, setting_dir, external_data_path, shp_path, spin-up and simulation period) is set in
-    the driver (src_demo/demo_global.py), e.g. GDA.case = 'demo_Global'. GDA keeps no defaults of its own: reading
+    the driver (src_demo/global_run.py), e.g. GDA.case = 'GDA_Global'. GDA keeps no defaults of its own: reading
     GDA.case gives RDA.case, and assigning GDA.case assigns RDA.case, so the two can never differ.
     """
 
@@ -133,7 +124,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         GRACE observations of the units -> configDA.obs.GRACE['preprocess_res'], with the regional GRACE processing
         (src_OBS.prepare_GRACE_mascon.GRACE_CSR_mascon) on the frozen unit mask:
           <basin>_signal.hdf5           unit TWS per GRACE month (0.5-degree mask, WaterGAP land)
-          <basin>_cov.hdf5              772 x 772 covariance per month from the DDK3 samples (1-degree mask derived
+          <basin>_cov.hdf5              unit x unit covariance per month from the DDK3 samples (1-degree mask derived
                                         from the 0.5-degree one, shp2mask.mask_05_to_1)
           <basin>_gridded_signal.hdf5   gridded TWS of the unit cells
         The frozen mask is used as it is (GRACE_preparation.use_mask), not rasterised again from the shapefile, which
@@ -151,6 +142,8 @@ class GDA(RDA, metaclass=_CaseToRDA):
         dir_out = configDA.obs.GRACE['preprocess_res']
 
         GR = GRACE_CSR_mascon(basin_name=GDA.basin, shp_path=GDA.shp_path)
+        GR.set_options(resample=configDA.obs.GRACE.get('resample', 'subsample'),
+                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'))
         GR.configure_global_land_ocean_mask(fn=RDA._land_mask())
         GR.use_mask(mask_dir=Path(configDA.basic.basin_mask).parent)
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['EWH_grid_dir'], dir_out=dir_out)
@@ -206,18 +199,3 @@ class GDA(RDA, metaclass=_CaseToRDA):
         res_dir = Path(configDA.basic.res_permanent) / GDA.case
         return plot_global_run(report_dir=res_dir / 'evaluation_global' / tag, shp_path=GDA.shp_path,
                                res_dir=res_dir, dpi=dpi)
-
-
-def demo1():
-    '''serial checks of the global case (paths of the workstation)'''
-    GDA.case = 'demo_Global'
-    GDA.basin = 'GlobalBasins_v1.0'
-    GDA.setting_dir = str(Path(__file__).resolve().parent.parent / 'settings' / GDA.case)
-    GDA.external_data_path = '/media/user/My Book/Fan/PyGLDA_v2_external_data'
-    GDA.shp_path = GDA.external_data_path + '/Basin/shp/Global_v1.0/GlobalBasins_v1.0.shp'
-    GDA.check_units()
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

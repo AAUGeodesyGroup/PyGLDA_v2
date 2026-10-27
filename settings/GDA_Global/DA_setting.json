@@ -1,0 +1,87 @@
+{
+    "basic": {
+        "res_permanent": "${DATA_ROOT}/Res",
+        "OL_output_temp_dir": "${DATA_ROOT}/OL_output",
+        "DA_output_temp_dir": "${DATA_ROOT}/DA_output",
+        "Ensemble_ini_dir": "${DATA_ROOT}/Ensemble_Initialization",
+        "Ensemble_input_dir": "${DATA_ROOT}/Ensemble_input",
+        "Auxiliary_dir": "${DATA_ROOT}/Auxiliary"
+    },
+    "obs": {
+        "dir": "${DATA_ROOT}/GRACE/obs",
+        "GRACE": {
+            "kind": "Mascon_monthly",
+            "EWH_grid_dir": "${DATA_ROOT}/GRACE/SaGEA/signal_Mascon",
+            "cov_dir": "${DATA_ROOT}/GRACE/SaGEA/sample_DDK3",
+            "aux_for_time_epochs": "${DATA_ROOT}/GRACE/SaGEA/signal_Mascon",
+            "preprocess_res": "${DATA_ROOT}/GRACE/output",
+            "OL_mean": "${DATA_ROOT}/GRACE/OLmean",
+            "resample": "block_mean",
+            "earthquake_correction": {
+                "significance": {"n_placebo": 16, "z_lo": 3.0, "z_hi": 5.0}
+            }
+        }
+    },
+    "model": {
+        "name": "WaterGap",
+        "layer": {
+            "groundwstor": true,
+            "soilmoist": true,
+            "swe": true,
+            "locallakestor": false,
+            "localwetlandstor": true,
+            "globallakestor": false,
+            "globalwetlandstor": true,
+            "riverstor": true,
+            "reservoirstor": false,
+            "canopystor": false
+        }
+    },
+    "method": {
+        "fusion_method": "EnKF_localized",
+        "localization": {"kind": "block"},
+        "inflation": {
+            "kind": "adaptive_additive",
+            "split_storages": ["groundwstor", "soilmoist"],
+            "seed": 42
+        },
+        "increment_partition": {
+            "kind": "non_negative",
+            "max_weight_ratio": {
+                "groundwstor": 5,
+                "riverstor": 5,
+                "localwetlandstor": 5,
+                "globalwetlandstor": 5
+            },
+            "spatial_blend": {
+                "groundwstor": 0.8,
+                "riverstor": 0.3,
+                "localwetlandstor": 0.3,
+                "globalwetlandstor": 0.3
+            },
+            "max_cell_factor": {
+                "groundwstor": 2,
+                "soilmoist": 2,
+                "swe": 2,
+                "localwetlandstor": 2,
+                "globalwetlandstor": 2
+            },
+            "storage_shares": {
+                "storages": ["soilmoist", "groundwstor"]
+            },
+            "boundary_smoothing": {
+                "storages": ["groundwstor"],
+                "length_km": 50
+            }
+        },
+        "obs_error_inflation": 0.5,
+        "obs_error_correlation": "diagonal",
+        "obs_perturbation_centering": true,
+        "soil_daily_bounds": true,
+        "increment_release": {
+            "storages": ["riverstor"],
+            "days": 10
+        },
+        "snow_bounds": {"envelope_factor": 1.5}
+    }
+}

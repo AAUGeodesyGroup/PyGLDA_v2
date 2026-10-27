@@ -15,12 +15,72 @@ class GRACE_CSR_mascon(GRACE_preparation):
 
     def __init__(self, basin_name='MDB', shp_path='../data/basin/shp/MDB_4_shapefiles/MDB_4_subbasins.shp'):
         super().__init__(basin_name=basin_name, shp_path=shp_path)
+        self.resample = 'subsample'
+        self.earthquake_correction = None
+        self._half_degree_cache = None
         pass
 
-    def basin_TWS(self, month_begin='2002-04', month_end='2002-04',
-                  dir_in='/media/user/Backup Plus/GRACE/Mascon/CSR',
-                  dir_out='/media/user/Backup Plus/GRACE/Mascon/CSR/test'):
+    def set_options(self, resample='subsample', earthquake_correction=None):
+        """
+        resample : how the 0.25-degree mascon grid is brought to the 0.5-degree mask grid.
+            "subsample"  every second row / column ([0::2, 0::2]; default): the 0.5-degree
+                         value is ONE 0.25-degree cell, offset by 0.125 degree from the 0.5-degree cell centre;
+            "block_mean" mean of the four 0.25-degree cells of every 0.5-degree cell (centres aligned with the mask grid).
+        earthquake_correction : None (off) or the settings of src_OBS.earthquake_correction.fit_and_correct, e.g.
+            {"cap_km": 1000, "taper_km": 200, "events": [...], "significance": {"n_placebo": 16, "z_lo": 3, "z_hi": 5}}:
+            co- and post-seismic signals of great earthquakes are removed from the gridded mascons (fitted on the whole
+            record of the file) before the unit averaging.
+        Both are read from DA_setting.json -> obs.GRACE ("resample", "earthquake_correction") by GDA / RDA.get_GRACE_obs.
+        """
+        r = str(resample or 'subsample').lower()
+        if r not in ('subsample', 'block_mean'):
+            raise ValueError('GRACE mascon resample must be "subsample" or "block_mean", got %s' % resample)
+        self.resample = r
+        self.earthquake_correction = dict(earthquake_correction) if earthquake_correction else None
+        self._half_degree_cache = None
+        return self
 
+    def _mascon_half_degree(self, csr):
+        """mascon lwe_thickness [cm] on the 0.5-degree grid in the file's orientation (latitude ascending from the
+        south, longitude 0..360), resampled and optionally earthquake-corrected (see set_options); cached"""
+        if self._half_degree_cache is not None:
+            return self._half_degree_cache
+        raw = np.array(csr['lwe_thickness'])
+        resample = getattr(self, 'resample', 'subsample')
+        if resample == 'block_mean':
+            n, ny, nx = raw.shape
+            data = raw.reshape(n, ny // 2, 2, nx // 2, 2).mean(axis=(2, 4))
+            lat = np.asarray(csr['lat'][:], dtype=float).reshape(-1, 2).mean(1)
+            lon = np.asarray(csr['lon'][:], dtype=float).reshape(-1, 2).mean(1)
+        else:
+            data = raw[:, 0::2, 0::2]
+            lat = np.asarray(csr['lat'][:], dtype=float)[0::2]
+            lon = np.asarray(csr['lon'][:], dtype=float)[0::2]
+        eq = getattr(self, 'earthquake_correction', None)
+        if eq:
+            from src_OBS.earthquake_correction import fit_and_correct
+            day0 = datetime.strptime(csr.time_epoch.split('T')[0], '%Y-%m-%d')
+            t = []
+            for dd in np.asarray(csr['time'][:], dtype=float):
+                d = day0 + timedelta(days=float(dd))
+                y0, y1 = datetime(d.year, 1, 1), datetime(d.year + 1, 1, 1)
+                t.append(d.year + (d - y0).total_seconds() / (y1 - y0).total_seconds())
+            LAT, LON = np.meshgrid(lat, np.where(lon > 180, lon - 360, lon), indexing='ij')
+            kw = {k: eq[k] for k in ('cap_km', 'taper_km', 'events', 'significance') if k in eq}
+            data, corr, info = fit_and_correct(data, np.array(t), LAT, LON, **kw)
+            self.earthquake_info = info
+        self._half_degree_cache = data
+        return data
+
+    def basin_TWS(self, month_begin='2002-04', month_end='2002-04',
+                  dir_in=None,
+                  dir_out=None):
+        """
+        basin averaged TWS [mm] per mascon month: dir_in holds CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc,
+        dir_out receives <basin>_signal.hdf5
+        """
+        if dir_in is None or dir_out is None:
+            raise ValueError('GRACE_CSR_mascon.basin_TWS: dir_in and dir_out must be given')
 
         '''get a complete time list for all dataset'''
         self._aux = aux_GRACE_mascon_monthly().setTimeReference(month_begin=month_begin, month_end=month_end,
@@ -55,7 +115,6 @@ class GRACE_CSR_mascon(GRACE_preparation):
         index = 0
         for dd in timelist:
             this_month = initial_day + timedelta(days=int(dd))
-            # print(this_month.strftime('%Y-%m'))
             available_month[this_month.strftime('%Y-%m')] = index
             index += 1
 
@@ -63,9 +122,8 @@ class GRACE_CSR_mascon(GRACE_preparation):
         available_month['2011-10'] -= 1
         available_month['2011-11'] = available_month['2011-10'] + 1
         available_month['2015-04'] -= 1
-        # available_month['2015-05'] = available_month['2015-04'] + 1
 
-        mascon_data = np.array(csr['lwe_thickness'])[:, 0::2, 0::2]  # the unit is centimeter
+        mascon_data = self._mascon_half_degree(csr)  # the unit is centimeter (resample / earthquake: set_options)
 
         '''===============computation========================'''
         monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
@@ -75,16 +133,10 @@ class GRACE_CSR_mascon(GRACE_preparation):
             TWS['sub_basin_%d' % i] = []
             pass
 
-        # time_epoch = []
         for month in tqdm(monthlist, desc="Processing months"):
             this_month_shortname = month.strftime('%Y-%m')
-            # print(this_month_shortname)
-            #
             if this_month_shortname not in available_month.keys():
                 continue
-
-            # print(this_month_shortname)
-            # time_epoch.append(this_month_shortname + '-15')  # TODO: assumed to be the mid day of the month but should be checked later
 
             data = mascon_data[available_month[this_month_shortname]].copy()
             '''convert to be compatible with the mask grid definition'''
@@ -98,7 +150,6 @@ class GRACE_CSR_mascon(GRACE_preparation):
                 b = np.cos(np.deg2rad(b))
                 '''convert unit from cm to mm'''
                 TWS[key].append(np.sum(a * b) / np.sum(b) * 10)
-                # TWS[key].append(np.mean(a))
                 pass
 
         '''save it into h5'''
@@ -117,11 +168,14 @@ class GRACE_CSR_mascon(GRACE_preparation):
         pass
 
     def grid_TWS(self, month_begin='2002-04', month_end='2002-04',
-                 dir_in='/media/user/Backup Plus/GRACE/Mascon/CSR',
-                 dir_out='/media/user/Backup Plus/GRACE/Mascon/CSR/test'):
+                 dir_in=None,
+                 dir_out=None):
         """
-
+        gridded TWS [mm] of the basin cells per mascon month: dir_in holds the CSR mascon netCDF,
+        dir_out receives <basin>_gridded_signal.hdf5
         """
+        if dir_in is None or dir_out is None:
+            raise ValueError('GRACE_CSR_mascon.grid_TWS: dir_in and dir_out must be given')
         '''get a complete time list for all dataset'''
         self._aux = aux_GRACE_mascon_monthly().setTimeReference(month_begin=month_begin, month_end=month_end,
                                                                 dir_in=dir_in)
@@ -151,7 +205,6 @@ class GRACE_CSR_mascon(GRACE_preparation):
         index = 0
         for dd in timelist:
             this_month = initial_day + timedelta(days=int(dd))
-            # print(this_month.strftime('%Y-%m'))
             available_month[this_month.strftime('%Y-%m')] = index
             index += 1
 
@@ -159,25 +212,17 @@ class GRACE_CSR_mascon(GRACE_preparation):
         available_month['2011-10'] -= 1
         available_month['2011-11'] = available_month['2011-10'] + 1
         available_month['2015-04'] -= 1
-        # available_month['2015-05'] = available_month['2015-04'] + 1
 
-        mascon_data = np.array(csr['lwe_thickness'])[:, 0::2, 0::2]  # the unit is centimeter
+        mascon_data = self._mascon_half_degree(csr)  # the unit is centimeter (resample / earthquake: set_options)
 
         '''===============computation========================'''
         monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
         TWS = []
         tqdm.write('\nStart to pre-process GRACE to obtain grid-wise TWS over places of interest...')
-        # time_epoch = []
         for month in tqdm(monthlist, desc="Processing months"):
             this_month_shortname = month.strftime('%Y-%m')
-            # print(this_month_shortname)
-            #
             if this_month_shortname not in available_month.keys():
                 continue
-
-            # print(this_month_shortname)
-            # time_epoch.append(
-            #     this_month_shortname + '-15')  # TODO: assumed to be the mid day of the month but should be checked later
 
             data = mascon_data[available_month[this_month_shortname]].copy()
             '''convert to be compatible with the mask grid definition, convert unit from cm to mm'''
@@ -201,40 +246,3 @@ class GRACE_CSR_mascon(GRACE_preparation):
 
         pass
 
-
-def demo1():
-    dp = GRACE_CSR_mascon()
-    # dp.basin_TWS(month_end='2012-04')
-    # dp.grid_TWS(month_end='2012-04')
-    # dp.basin_COV()
-    pass
-
-
-def demo2():
-    # GR = GRACE_CSR_mascon(basin_name='US',
-    #                        shp_path='/media/user/Backup Plus/GRACE/shapefiles/USgrid/UnitedStatesGrid.shp')
-
-    GR = GRACE_CSR_mascon(basin_name='Brahmaputra',
-                          shp_path='/media/user/My Book/Fan/WaterGap/Basin/shp/Brahmaputra/Brahmaputra.shp')
-
-    GR.configure_global_land_ocean_mask(fn='/media/user/My Book/Fan/WaterGap/GRACE/global_mask/WaterGAPLandMask.hdf5')
-
-    GR.generate_mask(save_dir='/media/user/My Book/Fan/WaterGap/Basin/mask')
-
-    GR.basin_TWS(month_begin='2002-04', month_end='2023-05',
-                 dir_in='/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon',
-                 dir_out='/media/user/My Book/Fan/WaterGap/GRACE/output')
-
-    GR.grid_TWS(month_begin='2002-04', month_end='2023-05',
-                dir_in='/media/user/My Book/Fan/WaterGap/GRACE/SaGEA/signal_Mascon',
-                dir_out='/media/user/My Book/Fan/WaterGap/GRACE/output')
-
-    GR.basin_COV(month_begin='2002-04', month_end='2023-05',
-                 dir_in='/media/user/My Book/Fan/GRACE_spatial_resolution_study/degree_60/sample/DDK3/',
-                 dir_out='/media/user/My Book/Fan/WaterGap/GRACE/output')
-
-    pass
-
-
-if __name__ == '__main__':
-    demo2()

@@ -10,8 +10,7 @@ Relative upper bounds (StateBounds(..., relative_upper={var: (factor, offset_mm)
                                                               (default 2 x forecast + 20 mm, "upper_factor" /
                                                               "upper_offset_mm" of "snow_bounds"): the analysis may at most double a
                                                               snow pack and add a few cm where there is little snow.
-    Snow errors are mostly relative (precipitation under-catch, melt timing), so a fixed number is not meaningful:
-    the earlier 1000 mm (cell mean) let one Alpine cell jump from 172 to 993 mm in one window (Danube run 11a).
+    Snow errors are mostly relative (precipitation under-catch, melt timing), so a fixed number is not meaningful.
     WaterGAP itself has no cell-mean limit; it only stops accumulating in a 100-band sub-grid level once that level
     holds 1000 mm.
 Relative lower bounds (StateBounds(..., relative_lower={var: factor})), per member and window:
@@ -19,8 +18,7 @@ Relative lower bounds (StateBounds(..., relative_lower={var: factor})), per memb
                                                               (default 0.5, "lower_factor" of "snow_bounds"):
                                                               one update removes at most half of a snow pack. GRACE
                                                               has no information below the sub-basin scale, and the
-                                                              partition otherwise empties single cells (Danube run12:
-                                                              496 mm removed from one cell in one window, 2019-02).
+                                                              partition would otherwise empty single cells.
                                                               The removal the bound refuses goes to the other cells
                                                               and storages of the sub-basin (bound-aware partition).
 Per-cell upper bounds from fields (StateBounds(..., upper={var: values per cell})):
@@ -29,13 +27,20 @@ Per-cell upper bounds from fields (StateBounds(..., upper={var: values per cell}
                                                               by EnKF_localized when soil_upper_bound is on.
     With it the bound-aware partition moves the water that soil cannot hold to the other storages of the
     sub-basin instead of Threshold deleting it after the update.
+Per-cell lower bounds from fields (StateBounds(..., lower={var: values per cell})):
+    local / global lakes                                   >= -max_storage (WaterGAP's lake floor; the lake balance
+                                                              divides by zero for a storage below it),
+                                                              and lb = ub = 0 where the cell has no lake
+                                                              (max_storage = 0), passed by EnKF_localized when lakes
+                                                              are in the DA state (lake_floor_fields).
+    For these rows the window-aware LB is never above the forecast (a storage already below its floor is not forced
+    to gain water by the bound).
 Absolute upper bounds per window (set_window(..., upper_window={var: values per cell})):
     snow                                                   <= f x max_OL(cell, month of the window) + offset
                                                               ("envelope_*" of "snow_bounds", EnKF_localized): the
                                                               open loop's largest snow of that calendar month over
                                                               all years and members. Stops the ratchet of the relative
-                                                              bound in cells whose pack never melts (Danube run13: one
-                                                              Hohe Tauern cell 139 -> 694 mm). Window-aware like the
+                                                              bound in cells whose pack never melts. Window-aware like the
                                                               others: every day of the window stays below it.
 Window-aware bounds: the increment of a window is added equally to every day of the window and the threshold
 (src_DA.Threshold) is then applied day by day. With the daily minimum / maximum of each member over the window
@@ -57,7 +62,7 @@ UPPER = {}
 
 class StateBounds:
 
-    def __init__(self, names, n_cell, upper=None, relative_upper=None, relative_lower=None):
+    def __init__(self, names, n_cell, upper=None, relative_upper=None, relative_lower=None, lower=None):
         """
         names  : storages of the state vector (cell-major layout: element i = cell * len(names) + storage)
         n_cell : number of cells
@@ -88,6 +93,23 @@ class StateBounds:
                                           min_mm=float(a[fin].min()) if fin.any() else None,
                                           median_mm=float(np.median(a[fin])) if fin.any() else None,
                                           max_mm=float(a[fin].max()) if fin.any() else None)
+        self.lower_fields = {}
+        self._lower_rows = []
+        for var, values in (lower or {}).items():
+            if var not in self.names:
+                continue
+            a = np.asarray(values, dtype=float).ravel()
+            if a.size != n_cell:
+                raise ValueError('StateBounds: lower bound of %s has %d values for %d cells' % (var, a.size, n_cell))
+            a = np.where(np.isfinite(a), a, -np.inf)
+            i = self.names.index(var)
+            self.lb[i::nv] = np.maximum(self.lb[i::nv], a)
+            self._lower_rows.append(np.arange(i, nv * n_cell, nv))
+            fin = np.isfinite(a)
+            self.lower_fields[var] = dict(n_cells_bounded=int(fin.sum()), n_cells_zero=int((a[fin] == 0).sum()),
+                                          min_mm=float(a[fin].min()) if fin.any() else None,
+                                          median_mm=float(np.median(a[fin])) if fin.any() else None)
+        self._lower_rows = np.concatenate(self._lower_rows) if self._lower_rows else None
         self.relative_upper = {}
         for var, (fac, off) in (relative_upper or {}).items():
             if var in self.names:
@@ -177,9 +199,61 @@ class StateBounds:
             self.LB[r] = np.maximum(self.LB[r], rel)
         fin = np.isfinite(self.UB)
         self.UB[fin] = np.maximum(self.UB[fin], np.asarray(ens_states, dtype=float)[fin])   # never force a removal
+        if self._lower_rows is not None:                                   # field lower bounds: never force an addition
+            r = self._lower_rows
+            self.LB[r] = np.minimum(self.LB[r], xs[r])
 
     def summary(self):
-        return dict(n_window_bounds=self.n_window_bounds, upper_fields=self.upper_fields,
+        return dict(n_window_bounds=self.n_window_bounds, upper_fields=self.upper_fields, lower_fields=self.lower_fields,
                     windows_with_absolute_cap=dict(self.n_window_caps),
                     relative_upper={v: dict(factor=f, offset_mm=o) for v, (f, o) in self.relative_upper.items()},
                     relative_lower={v: dict(factor=f) for v, f in self.relative_lower.items()})
+
+
+LAKE_FLOOR_ATTRS = {'locallakestor': 'max_loclake_storage', 'globallakestor': 'max_glolake_storage'}
+'''the floor is set a little ABOVE WaterGAP's -max_storage: the state goes mm -> km3 when it is written back, and a
+value at exactly -max can come out a few 1e-16 below it; WaterGAP's lake balance then has
+petgwr_netabs_sw_max = S + max + inflow < 0 with petgwr_netabs_sw = 0 (lake area 0 at the floor) and divides by
+zero'''
+LAKE_FLOOR_MARGIN = 1e-6
+
+
+def lake_max_mm(lateral, converter, shape, var):
+    """WaterGAP's maximum storage of a lake storage in mm on the DA box (2-D, shape = the box)"""
+    km3 = np.asarray(getattr(lateral, LAKE_FLOOR_ATTRS[var]), dtype=float)
+    if km3.shape != tuple(shape):
+        r0, r1, c0, c1 = converter._r0, converter._r1, converter._c0, converter._c1
+        km3 = km3[r0:r1, c0:c1]
+    mm = np.asarray(converter.to_disk(var, km3), dtype=float)
+    return np.where(np.isfinite(mm), np.maximum(mm, 0.0), 0.0)
+
+
+def lake_floor_fields(lateral, converter, mask_2d, names):
+    """
+    Per-cell bounds of the lake storages in the DA state (mm, state-cell order) from WaterGAP's static maximum lake
+    storages (km3): lower = -max_storage (WaterGAP's floor), and lower = upper = 0 where max_storage = 0 (no lake).
+    lateral   : the member's lateral water balance (attributes max_loclake_storage / max_glolake_storage, km3, grid)
+    converter : src_GHM UnitConverter of the DA box (to_disk: km3 -> mm; _r0.._c1 = box in the model grid)
+    mask_2d   : basin_2d of the DA box (bool), selects the state cells
+    Returns (lower, upper): dicts {storage: (n_cell,)}; empty when no lake storage is in the state.
+    """
+    lower, upper = {}, {}
+    mk = np.asarray(mask_2d).astype(bool)
+    for v in LAKE_FLOOR_ATTRS:
+        if v not in names:
+            continue
+        mm = lake_max_mm(lateral, converter, mk.shape, v)[mk]
+        lower[v] = -mm * (1.0 - LAKE_FLOOR_MARGIN)
+        upper[v] = np.where(mm > 0, np.inf, 0.0)
+    return lower, upper
+
+
+def lake_floor_grids(lateral, converter, shape, names):
+    """the same lake bounds as 2-D boxes for src_DA.Threshold (applied to every day written back):
+    {storage: (lower, upper)}, lower = -max (1 - margin), lower = upper = 0 where the cell has no lake"""
+    out = {}
+    for v in LAKE_FLOOR_ATTRS:
+        if v in names:
+            mm = lake_max_mm(lateral, converter, shape, v)
+            out[v] = (-mm * (1.0 - LAKE_FLOOR_MARGIN), np.where(mm > 0, np.inf, 0.0))
+    return out

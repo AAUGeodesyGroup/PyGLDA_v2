@@ -12,7 +12,9 @@ land, not the GRACE land mask (which contains Greenland/Antarctica and a differe
 Output: <out_dir>/WaterGAPLandMask.hdf5 with the layout of GlobalLandMaskForGRACE.hdf5 (groups 'resolution_05' and
 'resolution_1', datasets lat (-90 -> 90), lon (-180 -> 180), mask (float 0/1, lat ascending)), so that
 GRACE_preparation.configure_global_land_ocean_mask(fn=...) reads it unchanged. Attributes record the source and rule.
-Written once and kept permanently under GRACE/global_mask of the external data.
+Written once and kept permanently under GRACE/global_mask of the external data:
+    watergap_land_mask(continental_area_nc=<external_data>/Input_data/static_input/watergap_22e_continentalarea.nc,
+                       out_dir=<external_data>/GRACE/global_mask)
 """
 import sys
 from pathlib import Path
@@ -56,14 +58,3 @@ def watergap_land_mask(continental_area_nc, out_dir, n_min=1):
     print('%s: %d land cells at 0.5 deg, %d at 1 deg (rule: >= %d of 4)' % (fn, land05.sum(), land1.sum(), n_min))
     return fn
 
-
-def demo1():
-    """write the permanent WaterGAP land mask into GRACE/global_mask of the external data"""
-    EXT = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-    watergap_land_mask(continental_area_nc=EXT / 'Input_data/static_input/watergap_22e_continentalarea.nc',
-                       out_dir=EXT / 'GRACE/global_mask')
-    pass
-
-
-if __name__ == '__main__':
-    demo1()

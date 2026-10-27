@@ -2,8 +2,8 @@
     "ensemble": 30,
     "seed": 2026,
     "dir": {
-        "in": "/work/PyGLDA_v2_external_data/Input_data",
-        "out": "/work/PyGLDA_v2_external_data/Ensemble_input"
+        "in": "${DATA_ROOT}/Input_data",
+        "out": "${DATA_ROOT}/Ensemble_input"
     },
     "correlation": {
         "forcing": {
@@ -13,43 +13,32 @@
             "length_km": 300,
             "time_scale_days": 1.0
         },
-        "par": {
-            "isSpatialCorrelated": true,
-            "customize": false
-        }
+        "par": {"isSpatialCorrelated": true, "customize": false}
     },
     "forcing": {
         "pr": {
             "is_perturbed": true,
             "perturb_method": "multiplicative",
             "error_distribution": "lognormal",
-            "coefficients": [
-                1.0
-            ]
+            "coefficients": [1.0]
         },
         "tas": {
             "is_perturbed": true,
             "perturb_method": "additive",
             "error_distribution": "gaussian",
-            "coefficients": [
-                1.0
-            ]
+            "coefficients": [1.0]
         },
         "rsds": {
             "is_perturbed": false,
             "perturb_method": "additive",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.3
-            ]
+            "coefficients": [0.3]
         },
         "rlds": {
             "is_perturbed": false,
             "perturb_method": "additive",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.3
-            ]
+            "coefficients": [0.3]
         }
     },
     "par": {
@@ -57,246 +46,124 @@
             "is_perturbed": true,
             "error_distribution": "triangle",
             "coefficients": {
-                "humid": [
-                    1.073,
-                    1.26,
-                    1.48
-                ],
-                "arid": [
-                    1.365,
-                    1.74,
-                    2.115
-                ]
+                "humid": [1.073, 1.26, 1.48],
+                "arid": [1.365, 1.74, 2.115]
             },
-            "type": "value",
-            "range_doell2024": {
-                "humid": [
-                    0.885,
-                    1.65
-                ],
-                "arid": [
-                    1.365,
-                    2.115
-                ]
-            }
+            "type": "value"
         },
         "snow_freeze_temp": {
             "is_perturbed": false,
             "type": "value",
             "error_distribution": "uniform",
-            "coefficients": [
-                272.15,
-                273.15,
-                276.15
-            ]
+            "coefficients": [272.15, 273.15, 276.15]
         },
         "snow_melt_temp": {
             "is_perturbed": true,
             "type": "value",
             "error_distribution": "triangle",
-            "coefficients": [
-                272.2,
-                273.15,
-                274.1
-            ]
+            "coefficients": [272.2, 273.15, 274.1]
         },
         "adiabatic_lapse_rate": {
             "is_perturbed": false,
             "error_distribution": "triangle",
-            "coefficients": [
-                0.004,
-                0.006,
-                0.01
-            ],
-            "type": "value",
-            "range_doell2024": [
-                0.001,
-                0.01
-            ]
+            "coefficients": [0.004, 0.006, 0.01],
+            "type": "value"
         },
         "gamma": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.5,
-                1.0,
-                2.0
-            ]
+            "coefficients": [0.5, 1.0, 2.0]
         },
         "max_daily_pet": {
             "is_perturbed": true,
             "error_distribution": "triangle",
-            "coefficients": [
-                6.0,
-                15,
-                22.0
-            ],
-            "type": "value",
-            "range_doell2024": [
-                6.0,
-                22.0
-            ]
+            "coefficients": [6.0, 15, 22.0],
+            "type": "value"
         },
         "critcal_gw_precipitation": {
             "is_perturbed": true,
             "error_distribution": "triangle",
-            "coefficients": [
-                2.5,
-                12.5,
-                20.0
-            ],
-            "type": "value",
-            "range_doell2024": [
-                2.5,
-                20.0
-            ]
+            "coefficients": [2.5, 12.5, 20.0],
+            "type": "value"
         },
         "gw_dis_coeff": {
             "is_perturbed": true,
             "type": "value",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.005,
-                0.01,
-                0.02
-            ]
+            "coefficients": [0.005, 0.01, 0.02]
         },
         "swb_outflow_coeff": {
             "is_perturbed": false,
             "error_distribution": "triangle",
-            "coefficients": [
-                0.001,
-                0.01,
-                0.1
-            ],
-            "type": "value",
-            "range_doell2024": [
-                0.001,
-                0.1
-            ]
+            "coefficients": [0.001, 0.01, 0.1],
+            "type": "value"
         },
         "activelake_depth": {
             "is_perturbed": false,
             "error_distribution": "triangle",
-            "coefficients": [
-                1.0,
-                5,
-                20.0
-            ],
-            "type": "value",
-            "range_doell2024": [
-                1.0,
-                20.0
-            ]
+            "coefficients": [1.0, 5, 20.0],
+            "type": "value"
         },
         "activewetland_depth": {
             "is_perturbed": true,
             "error_distribution": "triangle",
-            "coefficients": [
-                1.0,
-                2,
-                4.0
-            ],
-            "type": "value",
-            "range_doell2024": [
-                1.0,
-                20.0
-            ]
+            "coefficients": [1.0, 2, 4.0],
+            "type": "value"
         },
         "river_roughness_coeff_mult": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.3333333333333333,
-                1.0,
-                1.6666666666666667
-            ]
+            "coefficients": [0.3333333333333333, 1.0, 1.6666666666666667]
         },
         "max_canopy_storage_coefficient": {
             "is_perturbed": false,
             "error_distribution": "triangle",
-            "coefficients": [
-                0.1,
-                0.3,
-                1.4
-            ],
-            "type": "value",
-            "range_doell2024": [
-                0.1,
-                1.4
-            ]
+            "coefficients": [0.1, 0.3, 1.4],
+            "type": "value"
         },
         "lai_multiplier": {
             "is_perturbed": false,
             "type": "multiplier",
             "error_distribution": "uniform",
-            "coefficients": [
-                0.2,
-                1.0,
-                2.5
-            ]
+            "coefficients": [0.2, 1.0, 2.5]
         },
         "degreeday_multiplier": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.5,
-                1.0,
-                2.0
-            ]
+            "coefficients": [0.5, 1.0, 2.0]
         },
         "smax_multiplier": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.707,
-                1.0,
-                1.414
-            ]
+            "coefficients": [0.707, 1.0, 1.414]
         },
         "gw_recharge_factor_multiplier": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.5,
-                1.0,
-                2.0
-            ]
+            "coefficients": [0.5, 1.0, 2.0]
         },
         "max_gw_recharge_multiplier": {
             "is_perturbed": false,
             "type": "multiplier",
             "error_distribution": "uniform",
-            "coefficients": [
-                0.3,
-                1.0,
-                3.0
-            ]
+            "coefficients": [0.3, 1.0, 3.0]
         },
         "netabs_gw_multiplier": {
             "is_perturbed": true,
             "type": "multiplier",
             "error_distribution": "triangle",
-            "coefficients": [
-                0.5,
-                1.0,
-                1.5
-            ]
+            "coefficients": [0.5, 1.0, 1.5]
         },
         "netabs_sw_multiplier": {
             "is_perturbed": false,
             "type": "multiplier",
             "error_distribution": "uniform",
-            "coefficients": [
-                -2.0,
-                1.0,
-                2.0
-            ]
+            "coefficients": [-2.0, 1.0, 2.0]
         }
     }
 }

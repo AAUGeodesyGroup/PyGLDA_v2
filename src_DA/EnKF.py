@@ -1,4 +1,3 @@
-# from src_GHM.hotrun import model_run_daily
 from src_GHM.Interface.DailyStepRun import DailyModelRun as model_run_daily
 from src_DA.configure_DA import config_DA
 from src_auxiliary.GeoMathKit import GeoMathKit
@@ -9,21 +8,17 @@ import numpy as np
 from mpi4py import MPI
 from datetime import datetime
 
-# from src_DA.CovRegularization import CovRegu, DomainLocalization
-
 from src_DA.Threshold import model_state_threshold
 from src_DA.EnumDA import WaterGap_storage_variables
 
 
 class EnKF:
     """
-    Monthly mean update: each day has the same update;
-    This is a version to allow one to set observation at any time interval.
-
-    Driver of the data assimilation (daily loop, MPI, window means and daily extremes, post-update thresholds) with
-    the plain EnKF analysis in update(). The localized filter with its components (localization, inflation,
-    increment partition, bounds) is src_DA.EnKF_localized, built by src_DA.filter_factory.build_filter.
-    Earlier experimental variants are in src_DA/legacy/EnKF_legacy.py.
+    Driver of the data assimilation: the daily model loop over MPI ranks (rank 0 = unperturbed open loop, ranks 1..N =
+    members), the window means and daily extremes of the states, the analysis at the end of each observation window
+    (any window length), the daily write-back of the increments and the post-update thresholds.
+    The analysis itself (update) is implemented by src_DA.EnKF_localized.EnKF_localized and src_DA.LETKF, built from
+    the settings by src_DA.filter_factory.build_filter.
     """
 
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
@@ -41,6 +36,17 @@ class EnKF:
         self._thresholder = model_state_threshold(configDA=DA_setting)
         self.threshold = self._thresholder.threshold
 
+        '''time-released increment (method block "increment_release", default off): see _release_config'''
+        self._release = self._release_config()
+        self._release_pending = None        # per-day share of the withheld increment (state vector of this member)
+        self._release_left = 0              # days still to release
+        self._release_windows = 0
+
+        '''daily soil increments within the soil bounds (method key "soil_daily_bounds", default off): see
+        _soil_cap_config'''
+        self._soil_cap = self._soil_cap_config()
+        self._soil_cap_stats = dict(n_windows=0, n_cells_shifted=0, excess_mm=0.0, max_excess_mm=0.0)
+
         '''soil capacity multiplier of this member (ensemble perturbation "smax_multiplier", see src_DA.perturbation_par and
         ReWaterGAP model/parameters.py; 1 = standard WaterGAP): the soil bound of the filter and of the threshold is
         smax.nc x land fraction x this factor, applied with the land fraction in run_mpi'''
@@ -49,15 +55,10 @@ class EnKF:
         '''obtain info'''
         self._obs_helper = self.helper_resolve_time(obs.get_obs_aux())
 
-        '''inflation factor'''
-        self._inflation = 1.1
-
         '''model re-configuration'''
         self._model.unit_converter= self._model.unit_converter.from_basin_mask(local_mask=self._sv.DM.local_mask,
                                                    cell_area_global=self._model.unit_converter.cell_area_global,
                                                    contfrac_global=self._model.unit_converter.contfrac_global)
-
-        pass
 
     def _member_smax_multiplier(self):
         """smax_multiplier of the member this rank runs (one value per member), 1.0 if the parameter file has none"""
@@ -72,30 +73,100 @@ class EnKF:
             raise ValueError('smax_multiplier varies in space; the DA soil bound supports one value per member')
         return float(m[0])
 
-    def _replace_state(self, original_state_a: dict, updated_internal_c: dict) -> None:
+    def _release_config(self):
         """
-        Safely write the values from processed internal state C back into the original state A.
-        Supports partial updates, ensuring that variables in A not present in C are preserved.
-
-        Parameters:
-        -----------
-        original_state_a : dict
-            The original model state dictionary A (internal names). Updated in-place.
-        updated_internal_c : dict
-            The state dictionary C containing updated/assimilated values mapped back to internal names.
+        "increment_release": {"storages": ["riverstor"], "days": 5} in the method block of DA_setting.json (absent or
+        null = off, the default). The analysis increment of the listed storages is NOT put into the state the model
+        restarts from at the end of a window; it is added in equal parts on the first `days` days of the next window
+        (a simple incremental analysis update, IAU, for fast storages). Without it the whole river increment enters the
+        model at once and is routed out on the next day, which gives a discharge pulse at the window start.
+        The stored daily analysis of the window itself keeps the full increment of every storage (the product is
+        unchanged); only the trajectory that continues into the next window receives the listed storages' share
+        gradually. A share still pending when the next window is analysed is added to that restart at once.
         """
-        for internal_key, updated_array in updated_internal_c.items():
-            if internal_key in original_state_a:
-                # In-place assignment if the array supports it to maintain object reference integrity,
-                # otherwise fall back to direct key replacement.
-                if hasattr(original_state_a[internal_key], '__setitem__'):
-                    original_state_a[internal_key][:] = updated_array
-                else:
-                    original_state_a[internal_key] = updated_array
-            else:
-                print(f"Warning: Key '{internal_key}' from C is not found in original state A.")
+        cfg = getattr(self.DA_setting.method, 'increment_release', None)
+        if not cfg:
+            return None
+        names = list(self._sv.DM.statesnn)
+        storages = [v for v in cfg.get('storages', ['riverstor']) if v in names]
+        days = int(cfg.get('days', 5))
+        if not storages or days < 2:
+            print('increment_release %s: no storage of the DA state %s or days < 2 - off' % (cfg, names))
+            return None
+        return dict(storages=storages, days=days, var_idx=[names.index(v) for v in storages], nvar=len(names))
 
-        pass
+    def _soil_cap_config(self):
+        """
+        "soil_daily_bounds": true in the method block (default false). The window-mean soil increment delta is bounded
+        by 0 <= x_mean + delta <= cap (the filter's bounds act on the window mean for soil), and the soil increment of
+        every day is proportional to what that day can take, so that every day of the window stays within [0, cap]:
+            delta > 0:  d_t = delta * r_t / mean(r),  r_t = max(cap - x_t, 0)   (room to capacity)
+            delta < 0:  d_t = delta * a_t / mean(a),  a_t = max(x_t, 0)          (water available)
+        mean_t(d_t) = delta exactly. Without it every day receives the same increment, and a soil that touches its
+        capacity (or zero) on one day of the window blocks the increment of the whole window.
+        """
+        if not getattr(self.DA_setting.method, 'soil_daily_bounds', False):
+            return None
+        names = list(self._sv.DM.statesnn)
+        if 'soilmoist' not in names:
+            print('soil_daily_bounds: soilmoist is not in the DA state %s - off' % names)
+            return None
+        return dict(nvar=len(names), i_soil=names.index('soilmoist'))
+
+    def _soil_proportional(self, delta, soil_days, cap):
+        """
+        delta: window-mean increment (state vector); soil_days: (n_days x n_cell) forecast
+        soil of this member on the days of the window; cap: (n_cell,) capacity. Returns the soil increments
+        (n_days x n_cell): delta > 0 shared in proportion to the room to capacity, delta < 0 in proportion to the water
+        available, so that no day leaves [0, cap]. A cell without any room / water where delta needs it falls back to
+        the equal increment (the threshold clips).
+        """
+        sc = self._soil_cap
+        d_s = delta[sc['i_soil']::sc['nvar']]
+        x = np.asarray(soil_days, dtype=float)
+        capb = np.broadcast_to(np.asarray(cap, dtype=float)[None, :], x.shape)
+        room = np.where(np.isfinite(capb), np.maximum(capb - x, 0.0), 1.0)          # no capacity: equal weights
+        avail = np.maximum(x, 0.0)
+        w = np.where(d_s[None, :] > 0, room, avail)
+        wm = w.mean(0)
+        ok = wm > 1e-12
+        out = np.where(ok[None, :], d_s[None, :] * w / np.where(ok, wm, 1.0)[None, :], d_s[None, :])
+        # never more than a day's own room / water (rounding, or delta beyond the window-mean bound)
+        out = np.where(ok[None, :] & np.isfinite(capb), np.minimum(out, room), out)
+        out = np.where(ok[None, :], np.maximum(out, -avail), out)
+        st = self._soil_cap_stats
+        st['n_windows'] += 1
+        st['n_cells_shifted'] += int((~ok & (d_s != 0)).sum())                 # here: cells on the equal fallback
+        lost = np.abs(out.mean(0) - d_s)
+        st['excess_mm'] += float(lost.sum())                                   # here: mean change lost to the limits
+        if lost.size:
+            st['max_excess_mm'] = max(st['max_excess_mm'], float(lost.max()))
+        return out
+
+    def _release_mask(self, n_state):
+        """True for the elements of the released storages (state vector cell-major, nvar storages per cell)"""
+        return np.isin(np.arange(n_state) % self._release['nvar'], self._release['var_idx'])
+
+    def _released_part(self, state: dict, values: dict):
+        """state with the released storages replaced by `values` (dict storage -> 2-D field), the others unchanged"""
+        out = dict(state)
+        for v in self._release['storages']:
+            if v in values:
+                out[v] = values[v]
+        return out
+
+    def _apply_release(self, today):
+        """add the day's share of the withheld increment to today's state (saved file and the model's restart
+        vector); only the released storages are re-checked by the threshold"""
+        st = self._sv.load_state_dict(date=today)
+        st = self._sv.restore_states(old_states=st, new_states=self._release_pending, isdelta=True)
+        sub = self.threshold(state={v: st[v] for v in self._release['storages'] if v in st}, date=today)
+        st = self._released_part(st, sub)
+        self._sv.save_to_nc(state=st, date=today)
+        _per_contfrac = self._model.vertical_waterbalance._per_contfrac
+        internal = self._model.unit_converter.state_dict_to_internal(state=st, per_contfrac=_per_contfrac)
+        self._sv.regional2Dstate_transfer_global2Dstate(rs=internal, gs=self._states_predict)
+        self._release_left -= 1
 
     def _land_ratio_box(self):
         """land / continental fraction of the model's current day on the regional box (the factor WaterGAP applies
@@ -114,10 +185,6 @@ class EnKF:
         self._DM = DM.operator
         return self
 
-    def configure_inflation_factor(self, inflation=1.0):
-        self._inflation = inflation
-        return self
-
     def predict(self, states, today='2002-01-01', is_first_day=False, issave=True):
         """
         prediction is for one ensemble
@@ -130,42 +197,8 @@ class EnKF:
         return self
 
     def update(self, obs, obs_cov, ens_states):
-        """
-        update is for all ensembles
-        reference: WIKI
-        """
-        R = obs_cov
-        # R = np.diag(np.diag(R)) #todo test
-
-        '''calculate the deviation of ens_states'''
-        A = ens_states - np.mean(ens_states, 1)[:, None]
-
-        '''Inflation to increase the model perturbation'''
-        A = A * self._inflation
-        ens_states_inf = np.mean(ens_states, 1)[:, None] + A
-
-        '''propagate it into obs-equivalent variable'''
-        HX = self._DM(states=ens_states_inf)
-
-        '''to calculate the deviation'''
-        HA = HX - np.mean(HX, 1)[:, None]
-
-        '''calculate matrix P'''
-        P = np.cov(HA) + R
-
-        '''calculate the gain factor K'''
-        N = self.DA_setting.basic.ensemble
-        '''method-1: straight-forward'''
-        # K = 1 / (N - 1) * A @ HA.T @ np.linalg.inv(P)
-        '''method-2: via linear solver'''
-        Bt = np.linalg.lstsq(P.T, HA, rcond=None)[0]
-        K = 1 / (N - 1) * A @ Bt.T
-
-        '''update the states'''
-        states_update = ens_states_inf + K @ (obs - HX)
-        # print(obs-HX)
-
-        return states_update
+        """analysis of one window for all members (implemented by the filters, see src_DA.filter_factory)"""
+        raise NotImplementedError('EnKF is the driver; the analysis is EnKF_localized.update or LETKF_localized')
 
     def run_mpi(self):
         """
@@ -199,6 +232,7 @@ class EnKF:
         historic_min_states = None          # daily minimum / maximum over the window (window-aware bounds)
         historic_max_states = None
         historic_land_ratio = None          # largest land / continental fraction of the window (soil capacity)
+        historic_soil_days = None           # forecast soil of every day of the window (soil_daily_bounds)
         obs = None
         obs_cov = None
         rr = -1
@@ -218,6 +252,8 @@ class EnKF:
             print('.', end='')
             '''==================kalman filter: prediction step=================================='''
             self.predict(today=today, states=self._states_predict, is_first_day=firstday, issave=True)
+            if self._release_left > 0 and rank != OL_thread:
+                self._apply_release(today)          # share of the previous window's withheld increment
             local_predict_of_today = self._sv.load_state_dict(date=today)  # load state from hard disk
 
             local_predict_of_today_excluded = self._sv_excluded.load_state_dict(date=today)  # load state from hard disk
@@ -227,7 +263,6 @@ class EnKF:
             newRecord = self._obs_helper['NewRecord'][count]
             keepRecord = self._obs_helper['KeepRecord'][count]
             assimilationRecord = self._obs_helper['AssimilationRecord'][count]
-            # print(newRecord, keepRecord, assimilationRecord)
             if newRecord:
                 """create a new vector to prepare for assimilation of next time"""
                 historic_mean_states = None
@@ -240,6 +275,11 @@ class EnKF:
                 '''record the previous states over areas of interest'''
                 sv = self._sv.get_states_by_transfer_single(states=local_predict_of_today)
                 sv_excluded = self._sv_excluded.get_states_by_transfer_single(states=local_predict_of_today_excluded)
+                if self._soil_cap is not None:
+                    if historic_mean_states is None:
+                        historic_soil_days = []
+                    historic_soil_days.append(np.array(sv[self._soil_cap['i_soil']::self._soil_cap['nvar']],
+                                                       dtype=float, copy=True))
                 if historic_mean_states is None:
                     historic_min_states = np.array(sv, dtype=float, copy=True)
                     historic_max_states = np.array(sv, dtype=float, copy=True)
@@ -263,7 +303,6 @@ class EnKF:
                 continue
 
             '''====================start assimilation================================'''
-            # print('====> GRACE data has been assimilated.')
             print('|', end='')
             rr += 1
             '''get obs and cov'''
@@ -278,7 +317,7 @@ class EnKF:
                 pass
             else:
                 historic_mean_states_excluded = historic_mean_states_excluded / len(info[1])
-                obs = obs - self._sv_excluded.DM.getDM()@historic_mean_states_excluded
+                obs = obs - self._sv_excluded.DM.getDM() @ historic_mean_states_excluded
                 historic_mean_states_excluded = None # free memory
 
             obs_cov = self._obs.get_cov()
@@ -344,7 +383,6 @@ class EnKF:
 
                 '''kalman filter: update step'''
                 states_update = self.update(obs=ens_obs, obs_cov=obs_cov, ens_states=ens_states)
-                # print(np.shape(states_update.T), '=============================')
 
                 '''delta for monthly mean'''
                 delta_state = states_update - ens_states
@@ -359,21 +397,62 @@ class EnKF:
             delta_state = None  # free the memory
             '''update the states for each ensemble: equal increment for each day'''
             self._thresholder.set_soil_scale(historic_land_ratio)        # soil capacity of this member and window
-            for his_day_datetime in info[1]:
+            release_now = self._release is not None and rank != OL_thread
+            if release_now:
+                '''time-released increment: the listed storages restart from the forecast (plus a share still pending
+                from the previous window); their increment is added over the first days of the next window'''
+                delta_full = states_ens_update_delta.flatten()
+                mask = self._release_mask(delta_full.size)
+                carry = self._release_pending * self._release_left if self._release_left > 0 else None
+                self._release_pending = np.where(mask, delta_full, 0.0) / self._release['days']
+                self._release_left = self._release['days']
+                self._release_windows += 1
+            soil_cap_now = self._soil_cap is not None and rank != OL_thread
+            if soil_cap_now:
+                '''soil capacity of this member and window (the threshold's bound) on the mask cells'''
+                _cap2d = self._thresholder._bounds('soilmoist', None)[1]
+                _mk = np.asarray(self._sv.DM.local_mask['basin_2d']).astype(bool)
+                _cap = np.broadcast_to(np.asarray(_cap2d, dtype=float), _mk.shape)[_mk]
+                if historic_soil_days is None or len(historic_soil_days) != len(info[1]):
+                    print('soil_daily_bounds: %s recorded days for a window of %d days - equal increments'
+                          % (None if historic_soil_days is None else len(historic_soil_days), len(info[1])))
+                    soil_cap_now = False
+                else:
+                    _dsoil = self._soil_proportional(states_ens_update_delta.flatten(),
+                                                     np.vstack(historic_soil_days), _cap)
+                    _rs = slice(self._soil_cap['i_soil'], None, self._soil_cap['nvar'])
+            historic_soil_days = None
+            for k_day, his_day_datetime in enumerate(info[1]):
                 his_day = his_day_datetime.strftime("%Y-%m-%d")
                 states_old = self._sv.load_state_dict(date=his_day)
 
                 if rank != OL_thread:
                     '''do not update the OL thread'''
+                    last_day = his_day_datetime == info[1][-1]
+                    if release_now and last_day:
+                        restart_forecast = {v: states_old[v].copy() for v in self._release['storages'] if v in states_old}
                     if self._thresholder.snow_cap is not None and 'swe' in states_old:
                         self._thresholder.set_snow_forecast(states_old['swe'].copy())   # cap never removes it
-                    new_state = self._sv.restore_states(old_states=states_old,
-                                                        new_states=states_ens_update_delta.flatten(), isdelta=True)
-                    '''possible negative value exists in the updated states. replace the negative value with zero'''
+                    if soil_cap_now:
+                        d_day = np.array(states_ens_update_delta.flatten(), dtype=float, copy=True)
+                        d_day[_rs] = _dsoil[k_day]
+                        new_state = self._sv.restore_states(old_states=states_old, new_states=d_day, isdelta=True)
+                    else:
+                        new_state = self._sv.restore_states(old_states=states_old,
+                                                            new_states=states_ens_update_delta.flatten(), isdelta=True)
+                    '''physical limits after the update (negative storages, soil capacity, snow cap, ...)'''
                     new_state = self.threshold(state=new_state, date=his_day)
 
                     '''save the new states, and overwrite the old one'''
                     self._sv.save_to_nc(state=new_state, date=his_day)
+                    if release_now and last_day:
+                        if carry is not None:
+                            restart_forecast = self._sv.restore_states(
+                                old_states=self._released_part(new_state, restart_forecast), new_states=carry,
+                                isdelta=True)
+                            restart_forecast = self.threshold(
+                                state={v: restart_forecast[v] for v in self._release['storages']}, date=his_day)
+                        restart_state = self._released_part(new_state, restart_forecast)
 
             if rank != OL_thread:
                 # Retrieve the per_contfrac that the VB module used when it
@@ -384,7 +463,8 @@ class EnKF:
                 _per_contfrac = self._model.vertical_waterbalance._per_contfrac
 
                 '''to assign the last day to the current prediction vector to enable another round of kalman filter'''
-                new_state_internal= self._model.unit_converter.state_dict_to_internal(state=new_state, per_contfrac=_per_contfrac)  # convert to internal units
+                new_state_internal= self._model.unit_converter.state_dict_to_internal(
+                    state=restart_state if release_now else new_state, per_contfrac=_per_contfrac)  # convert to internal units
                 self._sv.regional2Dstate_transfer_global2Dstate(rs=new_state_internal, gs=self._states_predict)
                 pass
 
@@ -392,6 +472,15 @@ class EnKF:
             states_old = None
             vv = None
             states_ens_update_delta = None
+
+        if self._soil_cap is not None and rank != OL_thread:
+            st = self._soil_cap_stats
+            print('soil_daily_bounds: %d windows, %d cell-windows on the equal fallback, %.1f mm of window-mean soil '
+                  'increment not placed because of the daily limits (largest %.1f mm)'
+                  % (st['n_windows'], st['n_cells_shifted'], st['excess_mm'], st['max_excess_mm']))
+        if self._release is not None and rank == main_thread:
+            print('increment_release: %s released over %d days after each of %d windows'
+                  % (self._release['storages'], self._release['days'], self._release_windows))
 
         '''clipping statistics of this member (printed to the rank log, saved next to its daily output)'''
         if rank != OL_thread:

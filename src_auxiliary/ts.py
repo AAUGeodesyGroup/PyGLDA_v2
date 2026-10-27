@@ -16,7 +16,7 @@ where t is time in YEARS measured from the first epoch of the series (see `set_p
 Which terms are included is chosen with `setDecomposition`; every cosine/sine pair is
 reported back as an amplitude and a phase (see `getSignal` for the phase convention).
 
-Typical use (as in `demo2`): monthly basin-mean TWS from an OL or DA run, one column per
+Typical use: monthly basin-mean TWS from an OL or DA run, one column per
 (sub-)basin, to extract the linear trend and the annual amplitude/phase of each basin.
 
 Usage
@@ -92,8 +92,6 @@ class ts:
         """
 
         if signal is None:
-            # signal = [decomposition.trend, decomposition.annual, decomposition.semi_annual,
-            #           decomposition.quarter_annual]
             signal = [decomposition.trend, decomposition.annual]
 
         # kept (with possible duplicates) for the membership tests in getSignal
@@ -318,42 +316,3 @@ class ts:
 
         return err
 
-
-def demo1():
-    """minimal example: build the design matrix for 5 epochs (nothing is fitted)"""
-    tsd = ts().set_period(time=np.array([2002.1, 2002.2, 2002.3, 2002.4, 2002.5]))
-
-    tsd.setDecomposition()
-
-    pass
-
-
-def demo2():
-    """
-    real use: monthly basin-mean TWS of a DA run stored in an HDF5 file with one dataset per
-    month ('YYYY-MM' -> values per sub-basin). Each month is placed at its 15th day, turned
-    into a year fraction, and trend + annual cycle are fitted for every sub-basin at once.
-    """
-    from datetime import datetime
-    from src_auxiliary.GeoMathKit import GeoMathKit
-    import h5py
-    hf = h5py.File('/home/user/Desktop/res/monthly_mean_TWS_DRB_DA.h5', 'r')
-
-    time = []
-    vv = []
-
-    for x, v in hf.items():
-        m = x.split('-')
-        n = datetime(year=int(m[0]), month=int(m[1]), day=15)    # mid-month epoch
-        time.append(GeoMathKit.year_fraction(n))
-        vv.append(v[:])                                          # -> obs rows = months, cols = sub-basins
-        pass
-
-    tsd = ts().set_period(time=np.array(time)).setDecomposition()
-    res = tsd.getSignal(obs=vv)
-    pass
-
-
-if __name__ == '__main__':
-    # demo1()
-    demo2()

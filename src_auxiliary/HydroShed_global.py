@@ -21,6 +21,14 @@ the basin's code as prefix):
      repeated until no unit < area_min is left. Neighbours are units that share a boundary (also across HydroBASINS
      regions, e.g. 'ar'/'na'). Units without any neighbour (islands) are kept if >= area_island, dropped otherwise
   3) the level-<atom_level> polygons of each unit are dissolved into one polygon
+  2b) optional leakage rule (configure_leakage, GlobalBasins v2.0): the GRACE mascons resolve ~300 km, so a unit
+     whose open-loop annual cycle differs strongly from the same cycle smoothed with a Gaussian of that width (a
+     narrow, strong signal such as the Amazon main stem: GRACE sees it damped and spread into the neighbours) cannot
+     be observed as a separate unit. Leakage of a unit: D = mean_u(G s - s), L = |D| / |mean_u(s)| (s = complex
+     annual coefficient of the open-loop TWS incl. rivers / lakes / wetlands / reservoirs, G = land-normalised
+     Gaussian, FWHM 300 km). A unit "leaks" if L > l_max AND |D| > k_noise x sigma_noise(unit). The split is as in
+     v1.0; leaking units are then merged like units below area_min (river-basin rule, ranking and ceilings as there)
+     until they no longer leak (optional split_guard: refuse a signal split if any child leaks - too coarse)
   4) optional glacier flag (configure_glacier): GLAC_IN / GLAC_EFF [%] ice area in / seen by GRACE in a unit,
      GLACIER = 1 (>= 0.5 %), 2 (>= 5 %): WaterGAP has no glacier mass change, GRACE does
 
@@ -72,6 +80,34 @@ unzipped (hybas_<r>_lev01-12_v1c/) or as zip (hybas_<r>_lev01-12_v1c.zip, read w
 Greenland ('gr') is used only if present; Antarctica is not in HydroBASINS.
 Ice: Extra/glacier/ne_10m_glaciated_areas.shp (Natural Earth 1:10m physical, public domain, from
 github.com/nvkelso/natural-earth-vector); RGI 7.0 (NSIDC-0770, Earthdata login) is more accurate for mountain glaciers.
+
+Recipes (<ext> = the external data folder; open-loop fields from <ext>/OL_output/Ens_0, 2002-01..2007-06):
+  GRACE noise per level-6 polygon (SaGEA DDK3 Monte-Carlo samples, months 2003-07, 2008-07, 2012-03, 2016-08,
+  2019-07, 2022-01; ~10 min) -> <ext>/Extra/grace_noise/atom_noise_DDK3.npz, needed by configure_signal:
+      hydrobasins_global(hybas_dir=<ext>/Extra).configure_atom_level(6).export_atom_noise(
+          [<ext>/GRACE/SaGEA/sample_DDK3/<month>_0.npy, ...], <ext>/Extra/grace_noise/atom_noise_DDK3.npz,
+          south_first=True, scale=1000.0)
+  GlobalBasins v1.0 -> <ext>/Basin/shp/Global/GlobalBasins.shp:
+      f, lat, lon = hydrobasins_global.load_ol_field(<ol>, begin='2002-01', end='2007-06')
+      g, glat, glon = hydrobasins_global.load_grace_mascon(<CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc>)
+      hg = hydrobasins_global(hybas_dir=<ext>/Extra)
+      hg.configure_size(area_min=6.3e4, area_max=5.0e5, area_island=1.0e5).configure_atom_level(6)
+      hg.configure_coherence(f, lat, lon, merge_rule='hybrid', c_split=0.8)
+      hg.configure_signal(g, glat, glon, snr_min=3.0, debias=True, area_max_low=1.0e7, extent_max_low=8000.0,
+                          snr_drop=1.0, snr_keep=('eu_233', 'au_571', 'au_572'),   # Great Britain, North / South Island NZ
+                          noise_atoms=<atom_noise_DDK3.npz>)
+      hg.configure_glacier(shp=<ext>/Extra/glacier/ne_10m_glaciated_areas.shp, remove=0.10)
+      hg.configure_basin_rule(basin_first=True, min_shared=0.05, same_drainage=True)
+      hg.configure_model(static_dir=<ext>/Input_data/static_input, n_cells_min=15, lake_max=0.25)
+      hg.configure_output(out_dir=<ext>/Basin/shp/Global, name='GlobalBasins')
+      hg.run().save(); hg.evaluate(f, lat, lon, fn=...); hg.compare(<Danube.shp>, pfaf_prefix='227')
+  GlobalBasins v2.0 -> <ext>/Basin/shp/Global_v2.0/GlobalBasins_v2.0.shp: as v1.0, plus
+      s, slat, slon = hydrobasins_global.load_ol_annual(<ol>, begin='2002-01', end='2007-06')
+      hg.configure_leakage(s, slat, slon, fwhm_km=300.0, l_max=0.2, k_noise=1.5, split_guard=False)
+      hg.configure_shape(compact_min=0.08)
+  (the leakage rule: a unit leaks if L > 0.2 AND |D| > 1.5 x its GRACE DDK3 noise, leakage from cell sums; the shape
+  rule: no merge longer than 1000 km with area / extent^2 < 0.08; split as v1.0, then merge only the leaking units).
+  The DA masks are then made from the shapefile with global_shp2mask.py.
 """
 import sys
 import heapq
@@ -114,6 +150,8 @@ class hydrobasins_global:
         self.snr_drop = None                                    # units below this SNR are removed (configure_signal)
         self.snr_keep = set()                                   # unit NAMEs kept despite a low SNR (configure_signal)
         self.glac_remove = None
+        self.leak_s = None                                      # complex annual OL coefficient (configure_leakage)
+        self.compact_min, self.compact_extent = None, 1000.0    # (configure_shape)
         self.static_dir, self.label = None, None                # WaterGAP static input (configure_model)
 
         self.atoms = None                                       # GeoDataFrame of the level-<atom_level> polygons
@@ -179,6 +217,92 @@ class hydrobasins_global:
         self.snr_drop = snr_drop
         self.snr_keep = set(snr_keep)
         return self
+
+    def configure_leakage(self, s, lat, lon, fwhm_km=300.0, l_max=0.2, k_noise=1.0, cutoff_sigma=2.5,
+                          exclude=((59.5, 90.0, -74.0, -10.0),), split_guard=False):
+        """
+        leakage rule (GlobalBasins v2.0, see step 2b): units are not resolved below the GRACE resolution where the
+        signal is narrow and strong.
+          s[lat, lon]: complex annual coefficient of the open-loop TWS (load_ol_annual; NaN = no land), lat north
+                       to south on the 0.5 deg grid
+          fwhm_km:     effective GRACE resolution (Gaussian FWHM; 300 km fits the CSR mascons best)
+          l_max:       relative leakage a unit may have; k_noise: and the absolute leakage |D| must stay below
+                       k_noise x the GRACE noise of the unit mean (needs configure_signal; without it: 10 mm x k_noise)
+          exclude:     boxes (lat0, lat1, lon0, lon1) whose cells are no source of G (Greenland)
+          split_guard: also refuse a signal / coherence split if any child leaks (False, default: split as v1.0 and
+                       merge only the leaking units afterwards - the guard blocked whole quiet parents because of one
+                       small leaking child)
+        Needs configure_signal for the noise (noise_atoms or the noise model).
+        """
+        from scipy import sparse
+        from scipy.spatial import cKDTree
+        s = np.asarray(s, dtype=np.complex128)
+        lat, lon = np.asarray(lat), np.asarray(lon)
+        X, Y = np.meshgrid(lon, lat)
+        good = np.isfinite(s)
+        for la0, la1, lo0, lo1 in exclude:
+            good &= ~((Y >= la0) & (Y <= la1) & (X >= lo0) & (X <= lo1))
+        idx = np.flatnonzero(good.ravel())
+        R = 6371.0
+        la, lo = np.deg2rad(Y.ravel()[idx]), np.deg2rad(X.ravel()[idx])
+        xyz = np.column_stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)])
+        sig = fwhm_km / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        rcut = cutoff_sigma * sig
+        pairs = cKDTree(xyz).query_pairs(r=2 * np.sin(rcut / (2 * R)), output_type='ndarray')
+        i = np.concatenate([pairs[:, 0], pairs[:, 1], np.arange(len(idx))])
+        j = np.concatenate([pairs[:, 1], pairs[:, 0], np.arange(len(idx))])
+        chord = np.linalg.norm(xyz[i] - xyz[j], axis=1)
+        d = 2 * R * np.arcsin(np.clip(chord / 2, 0, 1))
+        w = np.exp(-0.5 * (d / sig) ** 2) * np.cos(la[j])
+        G = sparse.csr_matrix((w, (i, j)), shape=(len(idx), len(idx)))
+        G = sparse.diags(1.0 / np.asarray(G.sum(axis=1)).ravel()) @ G
+        sv = s.ravel()[idx]
+        gs = np.full(s.size, np.nan + 0j)
+        gs[idx] = G @ sv
+        self.leak_s = np.where(good, s, np.nan)
+        self.leak_d = gs.reshape(s.shape) - self.leak_s                 # G s - s
+        self.l_lat, self.l_lon = lat, lon
+        self.l_max, self.k_noise, self.fwhm_km = l_max, k_noise, fwhm_km
+        self.leak_split_guard = bool(split_guard)
+        print('  leakage rule: FWHM %.0f km, L <= %.2f or |D| <= %.1f x noise; G %d cells, %.1f M non-zeros'
+              % (fwhm_km, l_max, k_noise, len(idx), G.nnz / 1e6))
+        return self
+
+    @staticmethod
+    def load_ol_annual(ol_dir, begin='2002-01', end='2007-06', day=15, trend_max=100.0,
+                       storages=('canopystor', 'swe', 'soilmoist', 'groundwstor', 'locallakestor', 'localwetlandstor',
+                                 'globallakestor', 'globalwetlandstor', 'riverstor', 'reservoirstor')):
+        """
+        complex annual coefficient s = a_cos + i a_sin [mm] per cell of the open-loop TWS (all storages: the narrow
+        river / lake signals are what leaks), from monthly snapshots as load_ol_field (fit of bias + trend + annual +
+        semi-annual); cells with |trend| >= trend_max mm/yr -> NaN. Returns s, lat, lon
+        """
+        import xarray as xr
+        months = pd.period_range(begin, end, freq='M')
+        out, t, lat, lon = [], [], None, None
+        for m in months:
+            fn = Path(ol_dir) / ('daily_output_%s-%02d.nc' % (m, day))
+            if not fn.exists():
+                continue
+            with xr.open_dataset(fn) as d:
+                miss = [v for v in storages if v not in d]
+                if miss:
+                    raise KeyError('load_ol_annual: %s not in %s (variables: %s)' % (miss, fn.name, list(d.data_vars)))
+                out.append(sum(d[v].values.astype(np.float64) for v in storages))
+                lat, lon = d.lat.values, d.lon.values
+            t.append((pd.Timestamp('%s-%02d' % (m, day)) - pd.Timestamp(begin + '-01')).days / 365.25)
+        f = np.stack(out)
+        t = np.asarray(t)
+        w = 2 * np.pi * t
+        B = np.column_stack([np.ones_like(t), t, np.cos(w), np.sin(w), np.cos(2 * w), np.sin(2 * w)])
+        a = f.reshape(len(f), -1)
+        ok = np.isfinite(a).all(axis=0)
+        coef = np.full((B.shape[1], a.shape[1]), np.nan)
+        coef[:, ok] = np.linalg.lstsq(B, a[:, ok], rcond=None)[0]
+        s = (coef[2] + 1j * coef[3]).reshape(f.shape[1:])
+        s[~np.isfinite(coef[2]).reshape(f.shape[1:]) | (np.abs(coef[1]) >= trend_max).reshape(f.shape[1:])] = np.nan
+        print('open-loop annual coefficient: %d months from %s, %d cells' % (len(f), ol_dir, np.isfinite(s).sum()))
+        return s, lat, lon
 
     def export_atom_noise(self, sample_files, out_npz, south_first=True, scale=1000.0, n_max=500, chunk=50):
         """
@@ -319,6 +443,17 @@ class hydrobasins_global:
         self.same_drainage, self.protect_signal = same_drainage, protect_signal
         return self
 
+    def configure_shape(self, compact_min=None, compact_extent=1000.0):
+        """
+        compactness of merged units (GlobalBasins v2.0): a merge whose result is longer than
+        compact_extent [km] (bounding-box diagonal) is treated as too big if area / extent^2 < compact_min. Stops
+        the low-signal aggregation from chaining coastal strips along a whole continent (v1.0 sa_6629: 1072e3 km2,
+        230 parts, Pacific coast from Mexico to Chile: area / extent^2 ~ 0.03) while compact deserts (~0.3) are kept.
+        A square has 0.5, a 1:10 strip ~0.1. None = off (v1.0)
+        """
+        self.compact_min, self.compact_extent = compact_min, compact_extent
+        return self
+
     def configure_output(self, out_dir, name='GlobalBasins'):
         self.out_dir, self.name = Path(out_dir), name
         return self
@@ -457,10 +592,15 @@ class hydrobasins_global:
             p = stack.pop()
             big = self.area[p] > self.area_max or self._extent(self.box[p]) > self.extent_max \
                 or self._n_land.get(p, 1) > 1                           # two land masses (islands) in one code
+            forced = big                                               # size / extent / land masses: always split
             if not big and self.c_split is not None and self.area[p] > 2 * self.area_min and self._connected(p):
                 big = self._coherence_of(p) < self.c_split            # (archipelagos are not split: isolated pieces)
             if not big and self.sig_field is not None and self.area[p] > 2 * self.area_min and self._connected(p):
                 big = self._snr_of(p) >= self.snr_split               # strong signal: smaller units are resolved
+            if big and not forced and self.leak_s is not None and self.leak_split_guard and p in self.children and \
+                    any(self._leaks_code(c) for c in self.children[p]):
+                big = False                                            # a child would leak: GRACE cannot resolve it
+                self._n_leak_refused = getattr(self, '_n_leak_refused', 0) + 1
             if big and len(p) - 2 < self.atom_level and p in self.children:
                 stack.extend(self.children[p])
             else:
@@ -573,9 +713,23 @@ class hydrobasins_global:
                 sn = np.zeros((n, self.noise_series.shape[1]))
                 np.add.at(sn, unit_of, self.sig_w[:, None] * self.noise_series)
 
+        leak = self.leak_s is not None
+        if leak:                                               # unit sums of area x s and area x (G s - s)
+            ls = np.zeros(n, dtype=np.complex128)
+            ld = np.zeros(n, dtype=np.complex128)
+            lw = np.zeros(n)
+            np.add.at(ls, unit_of, self.leak_atom_s)              # cell sums (see _prepare_series)
+            np.add.at(ld, unit_of, self.leak_atom_d)
+            np.add.at(lw, unit_of, self.leak_w)
+
         def noise_of(k):
+            if not sig:
+                return 10.0
             return (np.std(sn[k] / sv[k]) if self.noise_series is not None
                     else self.sigma0 * (self.a0 / area[k]) ** self.beta)
+
+        def leaks(k):
+            return leak and self._leaks(ls[k], ld[k], lw[k], noise_of(k))
 
         def snr(k):
             if not sig or sv[k] <= 0:
@@ -583,11 +737,12 @@ class hydrobasins_global:
             return self._ratio(np.std(ss[k] / sv[k]), noise_of(k))
 
         def small(k):
-            return area[k] < self.area_min or snr(k) < (self.snr_min if sig else -1)
+            return area[k] < self.area_min or snr(k) < (self.snr_min if sig else -1) or leaks(k)
 
         def prio(k):
             return snr(k) if sig else area[k]
 
+        why = {}                                               # why a leaking unit could not be merged (last reason)
         heap = [(prio(k), k) for k in range(n) if small(k)]
         heapq.heapify(heap)
         isolated, n_merge, n_low, n_basin = [], 0, 0, 0
@@ -598,6 +753,7 @@ class hydrobasins_global:
             cand = [m for m in adj[k] if alive[m]]
             if not cand:
                 isolated.append(k)
+                why[k] = 'no neighbour'
                 continue
             if self.basin_first:
                 '''river basins are a hard rule: only merges that keep the unit hydrologically clean'''
@@ -606,6 +762,7 @@ class hydrobasins_global:
                 best_level = max(chk.values())
                 if best_level == 0:
                     n_basin += 1
+                    why[k] = 'river-basin rule'
                     continue
                 cand = [m for m in cand if chk[m] == best_level]
             '''rank the neighbours: within the size limits, same river basin (longest common Pfafstetter prefix;
@@ -613,7 +770,7 @@ class hydrobasins_global:
             A unit that is large enough but below snr_min (deserts) is aggregated further, up to area_max_low and
             extent_max_low, preferably with neighbours that are also below snr_min (the units with a usable signal
             are not diluted)'''
-            low = sig and area[k] >= self.area_min
+            low = sig and area[k] >= self.area_min and snr(k) < self.snr_min     # (a leaking unit is not 'low')
             if low and self.protect_signal:
                 cand = [m for m in cand if snr(m) < self.snr_min]   # never dilute a unit with a usable signal
                 if not cand:
@@ -624,7 +781,10 @@ class hydrobasins_global:
 
             def score(m):
                 merged = area[k] + area[m]
-                too_big = merged > c_area or self._extent(self._join(box[k], box[m])) > c_ext
+                ext = self._extent(self._join(box[k], box[m]))
+                too_big = merged > c_area or ext > c_ext
+                if self.compact_min is not None and ext > self.compact_extent:
+                    too_big = too_big or merged / ext ** 2 < self.compact_min      # no continental strips
                 good = low and snr(m) >= self.snr_min
                 common, sibling = max(((self._common(p, q), self._common(p, q) >= max(len(p), len(q)) - 1)
                                      for p in codes[k] for q in codes[m]))
@@ -637,6 +797,7 @@ class hydrobasins_global:
             m = min(cand, key=score)
             if score(m)[0] and area[k] >= self.area_min:       # only too-big merges left: keep k (low SNR)
                 n_low += 1
+                why[k] = 'size ceiling'
                 continue
             if self.field is not None:
                 sx[m] += sx[k]
@@ -646,6 +807,10 @@ class hydrobasins_global:
                 sv[m] += sv[k]
                 if self.noise_series is not None:
                     sn[m] += sn[k]
+            if leak:
+                ls[m] += ls[k]
+                ld[m] += ld[k]
+                lw[m] += lw[k]
 
             '''merge k into m'''
             for b_, a_ in bdict[k].items():
@@ -684,6 +849,12 @@ class hydrobasins_global:
                  if self.basin_first else ''))
         self._bas_total = bas_total
         self._unit_snr = {k: snr(k) for k in range(n) if alive[k]}
+        if leak:
+            self._unit_leak = {k: (float(abs(ld[k]) / max(abs(ls[k]), 1e-12)), float(abs(ld[k]) / max(lw[k], 1e-9)),
+                                   leaks(k), why.get(k, 'size split (forced)') if leaks(k) else '')
+                               for k in range(n) if alive[k]}
+            print('  leakage rule: %d signal splits refused, %d units still leaking (size ceiling / river-basin rule)'
+                  % (getattr(self, '_n_leak_refused', 0), sum(v[2] for v in self._unit_leak.values())))
         if sig:
             self._unit_sig = {k: float(np.std(ss[k] / max(sv[k], 1e-9))) for k in range(n) if alive[k]}
             self._unit_noise = {k: float(noise_of(k)) if sv[k] > 0 else np.nan for k in range(n) if alive[k]}
@@ -726,6 +897,31 @@ class hydrobasins_global:
         has = np.asarray(M.sum(axis=1)).ravel() > 0
         return M, has
 
+    def _atom_cells(self, lat, lon, good):
+        """sparse matrix [atom, cell] of cos(lat) weights (NOT normalised) of the good cells whose centre lies in the
+        atom; every cell belongs to at most one atom (first match), atoms without a cell centre get an empty row"""
+        import shapely
+        from scipy import sparse
+        X, Y = np.meshgrid(lon, lat)
+        wc = np.cos(np.deg2rad(Y))
+        taken = np.zeros(good.shape, dtype=bool)
+        rows, cols, vals = [], [], []
+        for k, g in enumerate(self.atoms.geometry.values):
+            x0, y0, x1, y1 = g.bounds
+            ci = np.flatnonzero((lon >= x0) & (lon <= x1))
+            ri = np.flatnonzero((lat >= y0) & (lat <= y1))
+            if not (len(ci) and len(ri)):
+                continue
+            R, C = np.meshgrid(ri, ci, indexing='ij')
+            m = shapely.contains_xy(g, X[R, C], Y[R, C]) & good[R, C] & ~taken[R, C]
+            R, C = R[m], C[m]
+            if len(R) == 0:
+                continue
+            taken[R, C] = True
+            rows.append(np.full(len(R), k)); cols.append(R * len(lon) + C); vals.append(wc[R, C])
+        return sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                                 shape=(len(self.atoms), len(lat) * len(lon)))
+
     def _atom_series(self, field, lat, lon):
         """atom series [atom, time] of field[time, lat, lon] and the atom weights (area; 0 without a model cell)"""
         good = np.isfinite(field).all(axis=0)
@@ -752,6 +948,19 @@ class hydrobasins_global:
                 self.snr_min, self.snr_split, '%d GRACE error samples (%s)' % (self.noise_series.shape[1], Path(self.noise_atoms).name)
                 if self.noise_atoms is not None else '%.0f mm x (%.0f km2 / A)^%.2f' % (self.sigma0, self.a0, self.beta),
                 ', signal debiased' if self.debias else ''))
+        if self.leak_s is not None:
+            # leakage sums per atom over the CELLS whose centre lies in the atom (each cell once, cos-lat weights, not
+            # normalised): a unit's L and |D| are then cell means as in the observation operator H. Area-weighted
+            # atom means under-weight the narrow river cells that are the single cell of a small atom
+            good = np.isfinite(self.leak_s)
+            C = self._atom_cells(self.l_lat, self.l_lon, good)
+            S = np.nan_to_num(self.leak_s.ravel())
+            D = np.nan_to_num(self.leak_d.ravel())
+            self.leak_atom_s = np.asarray(C @ S.real) + 1j * np.asarray(C @ S.imag)
+            self.leak_atom_d = np.asarray(C @ D.real) + 1j * np.asarray(C @ D.imag)
+            self.leak_w = np.asarray(C.sum(axis=1)).ravel()
+            print('  leakage: %d of %d model cells assigned to atoms (cell centre), %d atoms without a cell'
+                  % (C.nnz, good.sum(), (self.leak_w == 0).sum()))
         keys = self.atoms.KEY.values
         i, j = self._shared_pairs(self.atoms.geometry, self.min_shared)
         self._atom_adj = [set() for _ in range(len(keys))]
@@ -776,6 +985,36 @@ class hydrobasins_global:
         else:
             noise = self.sigma0 * (self.a0 / self.area[p]) ** self.beta
         return self._ratio(np.std(s), noise)
+
+    def _noise_of_code(self, p):
+        idx = self._atoms_of.get(p)
+        w = self.sig_w[idx] if self.sig_field is not None else None
+        if self.sig_field is not None and self.noise_series is not None and w.sum() > 0:
+            return float(np.std((w[:, None] * self.noise_series[idx]).sum(axis=0) / w.sum()))
+        if self.sig_field is not None:
+            return float(self.sigma0 * (self.a0 / self.area[p]) ** self.beta)
+        return 10.0
+
+    def _leaks(self, S, D, W, noise):
+        """leakage test from cell sums S = sum w s, D = sum w (G s - s), W = sum w (w = cos lat)"""
+        if W <= 0:
+            return False
+        d = abs(D) / W
+        return bool(d > self.k_noise * noise and abs(D) > self.l_max * abs(S))
+
+    def _leak_of_code(self, p):
+        """(L, |D| [mm]) of code p"""
+        idx = self._atoms_of.get(p)
+        W, S, D = self.leak_w[idx].sum(), self.leak_atom_s[idx].sum(), self.leak_atom_d[idx].sum()
+        if W <= 0:
+            return 0.0, 0.0
+        return float(abs(D) / max(abs(S), 1e-12)), float(abs(D) / W)
+
+    def _leaks_code(self, p):
+        if self.leak_s is None or p not in self._atoms_of:
+            return False
+        L, d = self._leak_of_code(p)
+        return d > self.k_noise * self._noise_of_code(p) and L > self.l_max
 
     def _ratio(self, signal, noise):
         """signal-to-noise ratio; with debias the signal (GRACE = true signal + noise) is reduced by the noise"""
@@ -875,6 +1114,13 @@ class hydrobasins_global:
                 row['SIGNAL'] = round(self._unit_sig[u], 1)                     # std of unit-mean TWS [mm]
                 row['NOISE'] = round(self._unit_noise[u], 1)                    # GRACE noise of the unit mean [mm]
                 row['SNR'] = round(min(self._unit_snr[u], 999.0), 2)
+            if self.leak_s is not None:
+                row['LEAK'] = round(self._unit_leak[u][0], 3)                   # relative leakage L
+                row['LEAK_MM'] = round(self._unit_leak[u][1], 1)                # |mean(G s - s)| [mm]
+                if self._unit_leak[u][2]:
+                    print('  still leaking: %s (%.0f x10^3 km2) L %.3f, %.1f mm: %s'
+                          % (row['NAME'], row['SUB_AREA'] / 1e3, self._unit_leak[u][0], self._unit_leak[u][1],
+                             self._unit_leak[u][3]))
             '''river-basin class of the unit (HydroBASINS MAIN_BAS)'''
             ba = g.groupby('MAIN_BAS').SUB_AREA.sum()
             tot = pd.Series(self._bas_total).reindex(ba.index)
@@ -912,7 +1158,7 @@ class hydrobasins_global:
         out.insert(0, 'ID', np.arange(1, len(out) + 1))
         cols = ['ID', 'NAME', 'PFAF', 'SUB_AREA', 'REGION', 'LEVEL', 'N_PFAF', 'ENDO', 'COAST', 'MAIN_BAS', 'BAS_CLASS',
                 'N_BAS', 'MAIN_SHR']
-        out = out[cols + [c for c in ('SIGNAL', 'NOISE', 'SNR') if c in out] + ['geometry']]
+        out = out[cols + [c for c in ('SIGNAL', 'NOISE', 'SNR', 'LEAK', 'LEAK_MM') if c in out] + ['geometry']]
         self.units = out
         self.dropped = gpd.GeoDataFrame(drop, geometry='geometry', crs=self.atoms.crs) if drop else \
             gpd.GeoDataFrame(columns=['NAME', 'REASON', 'geometry'], geometry='geometry', crs=self.atoms.crs)
@@ -1301,64 +1547,3 @@ class hydrobasins_global:
             print('  ID %4d %-12s %7.0f km2  PFAF %s' % (r.ID, r.NAME, r.SUB_AREA, r.PFAF[:90]))
         return u
 
-
-# ------------------------------------------------------------------ demos
-EXT = Path('/media/user/My Book/Fan/PyGLDA_v2_external_data')
-
-
-def demo1():
-    """
-    global units: Pfafstetter + open-loop coherence + size from the GRACE signal-to-noise ratio; river basins as a
-    hard rule; neighbours only along a shared boundary; islands < 1e5 km2 (or below SNR 3), units below SNR 1, the
-    major glaciated units and the large lakes removed -> Basin/shp/Global/GlobalBasins.shp
-    (run demo3 first for the GRACE noise; then global_shp2mask.demo2 for the mask)
-    """
-    ol = EXT / 'OL_output/Ens_0'
-    f, lat, lon = hydrobasins_global.load_ol_field(ol, begin='2002-01', end='2007-06')             # coherence
-    hg = hydrobasins_global(hybas_dir=EXT / 'Extra')
-    hg.configure_size(area_min=6.3e4, area_max=5.0e5, area_island=1.0e5).configure_atom_level(6)
-    hg.configure_coherence(f, lat, lon, merge_rule='hybrid', c_split=0.8)
-    '''signal: CSR mascons (GRACE itself, incl. the trends WaterGAP lacks); noise: the SaGEA DDK3 error samples
-    reduced by demo3 (falls back to the literature noise model if that file does not exist yet)'''
-    g, glat, glon = hydrobasins_global.load_grace_mascon(
-        EXT / 'GRACE/SaGEA/signal_Mascon/CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc')
-    noise = EXT / 'Extra/grace_noise/atom_noise_DDK3.npz'
-    hg.configure_signal(g, glat, glon, snr_min=3.0, debias=True, area_max_low=1.0e7, extent_max_low=8000.0,
-                        snr_drop=1.0, snr_keep=('eu_233', 'au_571', 'au_572'), noise_atoms=noise if noise.exists() else None)   # Great Britain, North and South Island NZ
-    hg.configure_glacier(shp=EXT / 'Extra/glacier/ne_10m_glaciated_areas.shp', remove=0.10)
-    hg.configure_basin_rule(basin_first=True, min_shared=0.05, same_drainage=True)
-    hg.configure_model(static_dir=EXT / 'Input_data/static_input', n_cells_min=15, lake_max=0.25)
-    hg.configure_output(out_dir=EXT / 'Basin/shp/Global', name='GlobalBasins')
-    hg.run().save()
-    # the DA mask is made from GlobalBasins.shp by global_shp2mask.py (same rules and format as shp2mask.py)
-    hg.evaluate(f, lat, lon, fn=EXT / 'Basin/shp/Global/GlobalBasins_coherence.csv')
-    hg.compare(EXT / 'Basin/shp/Danube/Danube.shp', pfaf_prefix='227')
-    hg.compare(EXT / 'Basin/shp/Amazon/Amazon.shp', pfaf_prefix='62')
-    pass
-
-
-def demo3():
-    """
-    GRACE noise per level-6 polygon from the SaGEA DDK3 Monte-Carlo samples (500 per month, ~1 GB per file; run on
-    the machine that holds them, ~10 min) -> Extra/grace_noise/atom_noise_DDK3.npz (~200 MB), used by demo1.
-    Six months: GRACE early / mid / late (degraded accelerometer) and GRACE-FO
-    """
-    smp = EXT / 'GRACE/SaGEA/sample_DDK3'
-    files = [smp / ('%s_0.npy' % m) for m in ('2003-07', '2008-07', '2012-03', '2016-08', '2019-07', '2022-01')]
-    out = EXT / 'Extra/grace_noise'
-    out.mkdir(parents=True, exist_ok=True)
-    hg = hydrobasins_global(hybas_dir=EXT / 'Extra').configure_atom_level(6)
-    hg.export_atom_noise(files, out / 'atom_noise_DDK3.npz', south_first=True, scale=1000.0)
-    pass
-
-
-def demo2():
-    """one region only (Europe), for a quick test"""
-    hg = hydrobasins_global(hybas_dir=EXT / 'Extra', regions=('eu',))
-    hg.configure_output(out_dir=EXT / 'Extra/test_global_basins', name='eu_basins')
-    hg.run().save()
-    pass
-
-
-if __name__ == '__main__':
-    demo3()
