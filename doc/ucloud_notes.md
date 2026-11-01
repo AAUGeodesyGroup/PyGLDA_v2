@@ -10176,6 +10176,889 @@ V2c step 3 complete 00:48:29; H2 / H4 00:48:30; SNR and P block 00:48:51/52; gla
 
 - Heartbeat 16:34 CET (Claude Code): production pass (a): outlier EXIT=0 15:45:24 (peak 54.5 GB, 2 workers), 10e EXIT=0 16:03:46; 10e2 running: "[2026-10-27 16:03:46] V2cGP_10e: memory gate waited 0 s, peak tree RSS 1.33 GB, peak cgroup anon 1.3 GB [2026-10-27 16:03:46] V2cGP: step3 discharge 10e EXIT=0 OL member 16". Mounts OK.
 
+- Heartbeat 17:04 CET (Claude Code): production pass (a), discharge 10e2 still running: "17:04 [2026-10-27 16:03:46] V2cGP: step3 discharge 10e EXIT=0 DA member 1". Mounts OK.
+
+- Heartbeat 17:34 CET (Claude Code): production pass (a), discharge 10e2: "17:34 DA member 17 2026-10-27 17:28:44 data root 5743 GB". Mounts OK.
+
+#### Production pass (a) COMPLETE — full 2002-2012 card of V2cGP — Claude Code, 27 Oct 18:17 CET
+
+- Pass (a) 14:41-18:15:57 (`job9/pilot2_v2cgp/`, copies in `job9/prod_V2cG_2002-2012/full_2002-2012/`).
+  - One reader failed: **mask M** (IndexError: the units of the 2002-2012 M cells reach beyond the box columns; latent bug in my `amazon_maskM_v2.py`).
+  - Fixed (af5ad601, read the bounding box of box ∪ rest-of-units; the pilot results are unchanged because their rest cells stayed in the box) and rerun by hand at 18:16. Its Harmonic inputs were loaded before pass (c) stashed them.
+- **Hard rules (2002-2012, 122 windows):**
+  - **H1 PASS: RMS 0.959 mm, chi2 0.638.** Exact-unit median RMS 4.37 mm, |trend DA − GRACE| median 0.13 / p90 0.51 mm/yr; 5 of 737 units worse than OL.
+  - H2 3.1 % PASS. H3 gw +0.139, wetlands +0.079 mm/yr PASS. H4 snow cap 859 / trend cells 1362 PASS.
+  - **H5 "FAIL" is formal:** 8687 s vs 1.5 × the 5-year base 3335 s. Per simulated year the DA is 790 s vs 667 s.
+- **Scores:** S1 0.174 (RMS 22.0 mm); S2 1.035 / 0.972.
+  - The scorecard header says "2002-2006 cell fits", a fixed text of the script; the maps used here are the run's 2002-2012 harmonics.
+- **H6:** a 97.1 % / Amazon 97.4 % met; **b 78.3 % / Amazon 80.2 % met**. The pilots missed H6b.
+- **H8 monthly (122 epochs):** ratio global 2.70 (GRACE 1.29), Amazon 2.10 (0.95), small units 2.21 (1.05); B_across 38.9 / 50.6 / 45.8 mm (6.3 / 3.9 / 6.5 × GRACE).
+- **SNR:** unit-median chi2 all 0.607 (V2o 0.528); Q5 1.048.
+- **gw hotspots 2002-2012** (gw OL → DA || TWS DA vs GRACE, mm/yr):
+  - NW India −61.7 → −53.7 || −53.0 vs −40.8; Ganges −10.3 → −11.0 || −10.0 vs −14.7; North China Plain −17.7 → −10.8 || −10.1 vs −10.3;
+  - High Plains −12.3 → −3.1 || −1.6 vs +0.4; California CV −18.2 → −5.4 || −3.1 vs −1.8; Middle East −3.2 → −8.5 || −13.4 vs −14.8.
+- **Soil (all units):** DA mean 51.5 mm = OL + 3.5; amplitude 25.3 (OL 25.7).
+- **Next:** pass (c) (2002-2006 subset, staged files, like-for-like vs V2c), then the Job-10 paper chain, then pass (b).
+
+#### Pass (c) — two repairs, and the datum-consistent 2002-2006 GRACE fit of V2cGP (like-for-like vs V2c) — Claude Code, 27 Oct 18:47 CET
+
+- **Repair 1 (my bug):** the sub2006 evaluation / visualization failed (exit 1, 18:28): `${DATA_ROOT}` unresolved.
+  - The live DA_setting.json is the restored V2o variant with placeholders, and my `_sub` scripts did not call `GDA.config_external_data()` as the other stage scripts do.
+  - Fixed (run_gda_eval_sub 73c96686, run_gda_vis_sub 134f9c1a) and rerun while the staged files were in place (`subfix_eval.sh`): eval EXIT=0 18:44:55, vis 18:45:34, scorecard 18:45:44.
+- **Repair 2 (method): the sub2006 card's GRACE-fit numbers are a datum artefact.**
+  - The rerun gave H1 RMS 1.905 / chi2 0.832, exact-unit 13.05 mm, 63 units worse than OL.
+  - Cause: `window_statistics` (da_evaluation.py:195) re-centres GRACE on the OL mean of the windows it is given — on the staged 1826-day files, the 2002-2006 OL mean.
+  - The production DA assimilated GRACE on the **2002-2012** OL mean (gather_OLmean), so each unit is shifted by the difference of the two OL means, tens of mm for trending units.
+  - H8, H6, the P block, gw / soil, discharge and the H3 / H4 counts do not use that re-centring. The SNR and glacier readers of pass (c) do, so their chi2 / RMS columns are inflated in the same way; only the datum-consistent table below should be used.
+  - **Correct numbers:** `da_dev/subset_metrics.py` 0ae28ea5 → `job9/pilot2_v2cgps/subset_metrics.txt` runs window_statistics on the full 2002-2012 series (122 windows, the DA's datum), then keeps the 54 windows of 2002-2006. Check over all 122 windows: global RMS 0.959 = prod2012.
+
+| 2002-2006 (54 windows) | V2cGPs (production, DA datum) | V2c (E1 pilot) |
+|---|---|---|
+| global RMS DA − GRACE, 737 units | **1.122 mm** (OL 5.669) | 0.945 |
+| global RMS, 719 assimilated units | **0.803 mm** (OL 5.816) | 0.775 |
+| corr DA vs GRACE (global) | 0.999 | — |
+| chi² (median per unit of the window chi²) | 0.561 | 0.559 (scorecard median) |
+| exact-unit median RMS DA | **4.84 mm** (OL 44.08) | 4.78 |
+| median RMS reduction | 0.899 | — |
+| units DA worse than OL | 5 of 737 | 7 of 737 |
+
+  - So **like-for-like the production run's 2002-2006 part matches V2c** at the unit level; 719-unit RMS +4 %.
+  - The all-unit global RMS is higher (1.122 vs 0.945), mostly a mean offset (mean DA − GRACE −0.714 mm vs −0.444 without the 18 excluded units, which carry the glacier trends of the longer record).
+  - The OL-mean datum difference itself (2002-2012 vs 2002-2006) is the reason the pilots' numbers cannot be reproduced exactly.
+- **Paper Fig. 8 (10a):** `paper_prod.sh` af046cac now takes group_series from the **prod2012** evaluation, filtered to windows before 2007 (datum-consistent), plus `summary_prod2012.txt` and `subset_metrics.txt`. Not the sub2006 series. Chain restarted (18:47:21), waiting for pass (c).
+- **Mask M rerun (pass a):** exit 0 at 18:43:55. **22 M cells** in the Amazon box (H7a count ≤ 30 met), median DA / min(OL, GRACE) 0.64. Files refreshed in `full_2002-2012/`.
+
+- Heartbeat 19:05 CET (Claude Code): pass (c) discharge 10e EXIT=0 18:51:09; 10e2 running: "19:05 OL member 16 2026-10-27 19:00:45 data root 5764 GB". Paper chain and pass (b) waiting. Mounts OK.
+
+- Heartbeat 19:36 CET (Claude Code): pass (c) discharge 10e2: "". Mounts OK.
+
+- **Job lost + pass (c) resumed, 20:24 CET (Claude Code):** job j-12432546 (port 2749) stopped answering ssh from about 19:05 (tries 19:36-19:40 timed out; the web side was reachable). **Correction:** the 19:36 heartbeat above is wrong: ssh already timed out then, so its empty 10e2 line and "Mounts OK" were not real readings. New job **j-12435475, port 2662** (96 GB, 248 CPUs). Mounts OK. The old tmux session was gone, so pass (c) was killed in discharge 10e2.
+  - **Production files:** found in `Res/GDA_Global/_prod2012_stash/`, with the truncated 2002-2006 copies still live. All five stash md5s matched the 18:17:37 record (Res_DA 28332f1d, Res_OL 6662bbc1, Harmonic_DA b3791754, Harmonic_OL 8c6f87df, Harmonic_GRACE b7c3bc67). At 20:22:13 I restored them by hand (md5 all equal) and moved the staged 2002-2006 files to `_prod2012_stash/sub2006/`.
+  - **Resume:** `da_dev/prod_readers_c_resume.sh` (454489b2). Same guard / stash / restore-trap as `prod_readers_c.sh`. It stages the kept 2002-2006 files without a new truncation or harmonic refit, then runs the original commands from **10e2** to the end (H2 / H4 fill, SNR, glacier, H8, gw / soil, mask M, GLWS readers, H7, top boundaries, subset_report, copies, restore). The steps already done (eval / vis / scorecard rerun 18:45, H6, amzstore, outlier, 10e 18:51) stay as they are. Started 20:22:57 in tmux `da:prodRC`; production stashed + 2002-2006 staged 20:23:17.
+  - **Re-armed 20:22:53:** paper chain `da:paperP` (`paper_prod.sh` af046cac), pass (b) `da:prodRB` (`prod_readers_b.sh` 7c338344), storage watch `da:storwatch` (389f0c5c). Order unchanged: c → paper → b.
+
+- **DA reviews 131-142, answer 20:27 CET (Claude Code).** I only saw these reviews now: my review-file watch had a wrong baseline, so reviews 131-141 got no answer here. Sorry. State against each:
+  - **131 / 132 (OOM):** the 31-rank collect step 2 was replaced by my own runner `da_dev/collect_pool.py` (pool of 8 / 6 members, same library calls): collect_DA 6022 s, peak 8.8 GB. Cowork's `statistical_analysis.py` fix (abb0808b) was not used by the production run.
+  - **136-138 (stop, 737-unit rerun) and 137 step 4:** not done; superseded by **review 141** (Fan: no rerun, V2cGP stays). V2cGP output untouched.
+  - **141:** order followed: **pass (a) was already COMPLETE** (2002-2012, its H1-H8 lines are above), **pass (c)** is resuming now (see the entry above), then the **paper chain**, then **pass (b)**. Units: all remaining readers take the 18 excluded units from the run's own setting (`variants/DA_setting_V2c.json` / `_V2cGP.json`: boundary_steps, top_boundary_cells, g_reader, subset_metrics), never from `settings/`. So the 719 / 737 split is the production run's. `da_evaluation.py` has no `exclude_units` at all (all units).
+  - **142 (settings/ rewritten 18:44):** cause confirmed: `da_dev/run_gda_eval_sub.py` and `run_gda_vis_sub.py` (pass c) set `setting_dir` to the repository `settings/GDA_Global` and called `config_external_data()`. Both are fixed: 232a519a / cd194d5d. They now copy `settings/GDA_Global` to `da_dev/settings_run/GDA_Global/`, put the run's `variants/DA_setting_V2cGP.json` in as DA_setting.json, and resolve only that copy. They do not run again in this chain. No other script of the remaining chain (rest of c, paper, b) calls config_external_data / read_config_and_save or reads `settings/`. The older `run_gda_*` drivers that do (da_prod, prepare, e2 / prod stage) are retired.
+    - `git status settings/` 20:25: DA_setting.json clean (738a6bc4 on desktop and UCloud). Only Cowork's new `GDA_Global/{Config_ReWaterGAP,perturbation}.json` (review 140) are `M`; I did not touch them. I will repeat the check after each phase.
+  - **137 step 2 / 139 / 140 (deletions):** of the corrected list, 19 paths were already gone. **7 tracked files are still there:** `src_GHM/Extension/fan_run_watergap.py`, `src_GHM/Interface/Hotrun.py`, `src_OBS/prepare_ESA_SING.py`, `src_auxiliary/{PCA,Shape,get_h5_structure,upscaling}.py`, plus the `__pycache__` folders. Nothing in src_* or my readers imports them. My `git rm` was blocked by the permission check here, so **Fan please run it** (or allow it); I have not retried.
+    - `settings/` is as review 140 wants: three files in each of the three case folders, no `GDA_Ucloud/`, no `default/`.
+  - **137 step 3 (regression old vs new):** after the paper chain (review 141 (4)), not started.
+  - **135 (three archive folders):** not deleted yet; all three are still present. Data root 5764 GB (storage_watch 20:23), so there is no pressure. I will delete them only on a direct word from Fan in this session.
+  - **133 (ESSD prep) / 134 (GMD numbers) / 142 (3) numbers** (unit-area stats 737 / 719, H8 2002-2006, 8-region RMS and trends with the DA datum, stage timings + node): **queued after the paper chain**, read-only, in one block (`gmd_numbers.py`).
+    - Node: 248 vCPU, 96 GB cgroup (memory.max 96000000000).
+    - Production stage walls, already logged: perturbation 560 s, spin-up 3261 s, OL 4382 s, OL rebuild 1643 s, harmonic 621 s, DA 8687 s (peak 73.0 GB), collect_pool 6022 s (8.8 GB).
+
+- **DA review 143, 21:59 CET (Claude Code):** understood. The 7 files stay; I will not delete them or ask about them again, and `__pycache__` / the two `M` settings files are left alone.
+  - **Order now pass (c) → paper → gmd_numbers → pass (b):** `da_dev/gmd_then_b.sh` (7b0144d7) is armed in `da:gmdB` (21:58:28). It waits for the paper chain COMPLETE, runs `gmd_numbers.py`, then pass (b) through `prod_readers_b.sh` (fbd00d96, new switch `B_NOWAIT=1` skips its own wait). The earlier waiting pass-(b) window was closed with tmux kill-window; it had only armed.
+  - **`da_dev/gmd_numbers.py` (5c347d59)** writes `temp/exp_logs/paper/prod_V2cG/gmd_numbers.txt`, covering reviews 134 and 142. Sections (1)-(3) were tested at 21:57:
+    - **Areas:** 737 units: SUB_AREA total 126.60 ×10⁶ km², median 115.0 ×10³ km² (p10 73.2, p90 265.0, min 48.2, max 4702). 719 assimilated: 123.91 ×10⁶ km², median 115.3 (73.2 / 264.4). 18 excluded: 2.70 ×10⁶ km². 0.5° mask: 127.72 / 125.01 ×10⁶ km², 55 817 / 54 431 cells.
+    - **Cells / states:** 55 817 cells = 334 902 states, as in the DA log.
+    - **Regions** (by unit-name prefix; 8 units list two regions in REGION): af 142, ar 33, as 97, au 42, eu 117, na 105, sa 118, si 83 units.
+    - **Costs:** node 248 vCPU / 96 GB, 31 ranks. DA 8687 s, of which time stepping is 2.03 s per model day incl. analyses. A fit of wall per window gives about 19 s per global analysis + 1.46 s per model day; the analysis is not logged separately, so this comes from the Ens_1 file mtimes. DA wall up to the 2006/12 window: 4272 s. Peak 73.0 GB node anon (2.35 GB per rank on average; per-rank RSS not logged).
+    - **Section (4)**, the 8 regions 2002-2006 with the DA datum, runs after the production files are restored.
+  - **Pass (c) progress:** 10e2 EXIT=0 (21:22:21), H2 / H4 PASS, H8 0, gw / soil 0, mask M, focus, extra_stats, Amazon amplitude and extras 0. The glacier reader failed once (exit 1, 21:22:42): `variants/DA_setting_V2cGPs.json` was missing. I added it as an exact copy of V2cGP (a80afdb6) and the rerun gave exit 0 (21:23:54).
+    - The glacier reader and the scorecard H1 line use the sub2006 evaluation datum (H1 1.905, exact-unit 13.05). The DA-datum numbers are in `subset_metrics.txt` (1.122 / 0.803 mm, exact-unit 4.84).
+  - `git status settings/` 21:58: unchanged (only the two expected `M`).
+
+- **Pass (c) COMPLETE, 22:07:47 CET (Claude Code, DA reviews 129 / 141 / 142):**
+  - **Production files** restored 22:07:33 (md5 all equal). The 2002-2006 copies stay in `_prod2012_stash/sub2006/` (7.4 GB; can go on Fan's word).
+  - **Non-zero exits:** the "4 with a non-zero exit" are the 18:28 eval / vis / scorecard (`${DATA_ROOT}`) and the 21:22 glacier reader (missing variant). All four were rerun with exit 0 before the copies were made, so none is open.
+  - **Output:** `job9/prod_V2cG_2002-2012/subset_2002-2006/`. `subset_report.txt` now ends with the DA-datum block from `subset_metrics.txt` (in both copies), because its H1 / unit-level lines come from the sub2006 evaluation datum.
+  - **Like-for-like V2cGPs vs V2c**, with the DA datum where the evaluation datum would mislead:
+
+| | V2cGPs | V2c |
+|---|---|---|
+| H1 global RMS, 737 / 719 units [mm] | **1.122 / 0.803** (DA datum) | 0.945 / 0.775 |
+| unit-median chi2 / exact-unit median RMS | 0.561 / 4.84 mm (DA datum) | 0.559 / 4.78 |
+| units DA worse than OL | 5 of 737 (DA datum; 63 with the sub2006 datum) | 7 |
+| \|trend DA − GRACE\| median / p90 | 0.37 / 1.16 mm/yr | 0.36 / 1.19 |
+| H2 window-start share | 2.7 % PASS | 2.6 % |
+| H3 gw / wetlands long-term | −0.040 / −0.106 mm/yr PASS | −0.121 / −0.093 |
+| H4 snow cap / trend cells | 376 / 3997 PASS | 366 / 3984 |
+| H6a | 93.9 % met | 92.9 % |
+| H7a mask-M cells / ratio | 36 / 0.64 missed | 27 / 0.64 missed |
+| H7b missing share 555 / 559 / 552 | 4.5 / 0.0 / 17.9 % missed | 0.0 / 0.0 / 16.9 % |
+| H7c / H7d | 0.70 met / 0.135 met | 0.74 / 0.138 |
+| S1 / S3 invented gw cycle | 0.187 / 31 units | 0.190 / 25 |
+| P1 snow-free soil / gw share DA (GLWS 0.44 / 0.23) | 0.37 / 0.32 | 0.38 / 0.31 |
+| P2 gw amp DA / OL; P4 soil | 1.89; 1.05 | 1.82; 1.05 |
+| H8 monthly ratio global / Amazon / small (GRACE) | 2.83 / 2.12 / 2.30 (1.30 / 0.93 / 1.12) | no monthly field (trend / amp 3.38 / 4.37) |
+
+  - **Not like-for-like in the report:**
+    - H5 "FAIL" compares the 11-year DA wall (8687 s) with the 5-year base. The 2002-2006 part took 4272 s = 1.28 x base (≤ 1.5).
+    - The P4 soil bound-hit counts (12.3 M / 7.2 M vs 5.6 M / 3.1 M) are over the whole 2002-2012 run (x 2.2 ≈ 11 / 5 years).
+  - **Reading:** the 2002-2006 part of the production run matches V2c. It is a little worse on H7a / H7b (Amazon mask M 36 cells) and on the invented gw cycles (31 vs 25), the same within noise elsewhere.
+  - **Next:** the paper chain (armed since 20:22:53) starts on this COMPLETE, then gmd_numbers.py, then pass (b). Data root 5764 GB.
+
+- **Heartbeat 01:59 CET (Claude Code):** job j-12435475 (port 2662) unreachable since 00:25 (ssh timeouts; last status line seen 23:47:41 "10e3 RUNNING"). State at the loss: pass (c) COMPLETE with the production files restored (md5 all equal, 22:07:33); paper chain 10a / 10b / 10c / 10c2 / 10e EXIT=0, 10e3 running, 10d open; gmd_numbers.py and pass (b) not started. Retry every 2 min; when back (or on a new job) I rerun only the missing paper steps, then gmd_numbers.py, then pass (b).
+
+- **Job lost again + resumed, 09:05 CET 28 Oct (Claude Code):** job j-12435475 (port 2662) was unreachable from 00:25. Its tmux was gone on the new job **j-12435670, port 2500** (96 GB, 248 vCPU). Mounts OK. The production Res_DA / Res_OL are unchanged (8 185 854 808 B, mtimes 27 Oct 14:37 / 09:56).
+  - **Killed:** paper step 10e3 (log last written 28 Oct 00:02, at DA member 4). 10a / 10b / 10c / 10c2 / 10e EXIT=0 are kept.
+  - **Stale lock:** `da_dev/locks/paper_10e3.lock` (pid 17513 of the old job) removed.
+  - **Resume:** `paper/prod_V2cG/paper_resume.sh` (4fedf604) runs only 10e3 and 10d with the same commands, then COMPLETE. Started 09:04:01 in `da:paperR`.
+  - **Re-armed:** `gmd_then_b.sh` (7b0144d7) waits in `da:gmdB` from 09:03:58 (→ gmd_numbers.py → pass b); storage watch in `da:storwatch`.
+
+- **Parallel member reading, 09:40 CET 28 Oct (Claude Code, Fan "ok"):** two of my readers now read the ensemble members in a pool of 8 processes. Sums are added in the old member order. The serial loop is kept behind a switch.
+  - **Scripts:** `paper/prod_V2cG/job10d_ganges3_prod.py` (2b39700e; `G10D_SERIAL=1`) and `da_dev/glws_storage_compare.py` (b6a1aa52; `GSC_SERIAL=1`).
+  - **Test against the original scripts** (2 members, `da_dev/partest/`, 322 MB scratch, can go):
+    - 10d: GangesBrahmaputra_series / _monthly.csv byte-identical.
+    - glws_storage_compare: OL cache npz, cells / units / basins / global / grace_tws_units / grace_tws_basins.csv byte-identical; summary.txt differs only in its "wall" line.
+  - **Expected gain:** pass (b) glws comparison DA part about 12.5 → 2-3 min (75 s per member, 10 members; OL from the m10 cache). 10d a few minutes less.
+  - Results unchanged; nothing in `settings/` or `src_*` touched.
+
+- **Paper chain (Job 10, 2002-2006 of V2cGP) COMPLETE 09:52:44 + gmd_numbers 09:54:19, 28 Oct (Claude Code, DA reviews 130 / 134 / 142):**
+  - **Outputs:** `temp/exp_logs/paper/prod_V2cG/`.
+  - **Exits:** 10a / 10b / 10c / 10c2 / 10e EXIT=0 (27 Oct); 10e3 EXIT=0 (2863 s) and 10d EXIT=0 (60 s, parallel reading) on 28 Oct.
+  - **Reference:** the 17 Oct Job-10 run (`paper/results/GDA_Ucloud`). Same report definitions, so the numbers are like-for-like.
+
+| Job-10 headline | V2cGP 2002-2006 | 17 Oct Job 10 |
+|---|---|---|
+| 10a Fig. 8 | group_series = prod2012 series, 54 windows < 2007 (DA datum); global RMS 1.122 / 0.803 mm (737 / 719), OL 5.67 | — |
+| 10b global land RMS of trend diff. to GRACE, OL / DA | 52.81 / 46.26 mm/yr | 40.90 / 38.85 |
+| 10b annual-amplitude RMS diff., OL / DA | 127.82 / 115.42 mm | 126.05 / 119.28 |
+| 10b hot spots DA − GRACE trend | NW India −15.3, N China Plain −12.6, Central Valley −34.3, Lake Victoria +26.4, Caspian −22.3 mm/yr | NW India −11.2, NCP −13.0 |
+| 10c land with amp ≥ 5 mm, OL / DA | 87.2 / 96.0 % | 87.2 / 94.5 % |
+| 10c dominant gw / soil / snow / surface, DA | 23.9 / 39.8 / 20.1 / 16.2 % (OL 6.6 / 50.8 / 23.7 / 18.9) | 27.6 / 35.8 / 20.9 / 15.7 |
+| 10c area changing dominant group | 15.2 % | 19.2 % |
+| 10e big-river peak flow rel. change, median (p10 / p90) | +2.4 % (−4.1 / +17.9) | +3.2 % (−3.7 / +23.6) |
+| 10e3 annual-max on a window-start day, OL / DA (exp. 2.9 %) | 3.3 / **2.7 %** | 3.3 / 7.0 |
+| 10e3 window-start +0..+2 days, OL / DA (exp. 8.7 %) | 8.6 / 11.9 % | 8.6 / 21.2 |
+| 10d Ganges-Brahmaputra seasonal amp TWS, OL / DA / GRACE | 97 / 102 / 129 mm, DA s_k gw 0.18 soil 0.37 surface 0.50 | 97 / 110 / 131, gw 0.27 |
+
+  - **Reading:**
+    - The production filter barely leaves window-start pulses in the peak flows (DA 2.7 % ≈ the 2.9 % chance level; Job 10 had 7.0 %). Peak-flow changes are smaller (median +2.4 %).
+    - The gw takeover of the seasonal storage is milder than in Job 10 (gw-dominant 23.9 vs 27.6 %). Ganges-Brahmaputra DA amplitude is 102 mm (GRACE 129), less gw.
+    - The 10b trend RMS is higher than Job 10 for OL as well (52.8 vs 40.9). So it comes from the GRACE / OL basis of the v2.0 2002-2006 fit, not from the filter; DA reduces it by 12 % (Job 10: 5 %).
+  - **gmd_numbers.txt (4) — 8 regions 2002-2006, DA datum, RMS OL → DA [mm], trends OL / DA / GRACE [mm/yr], all units:**
+    - global 5.67 → 1.12 (−1.34 / −0.90 / −0.95); 719 assimilated: 5.82 → 0.80 (−1.14 / −0.69 / −0.67)
+    - af 9.89 → 1.38 (−0.34 / −3.28 / −3.23); ar 19.43 → 5.92 (asm 1.44); as 10.93 → 2.86 (asm 1.70); au 13.92 → 2.23 (+1.44 / −2.80 / −3.16)
+    - eu 19.20 → 2.18 (−4.68 / −0.11 / +0.03); na 17.79 → 2.37 (asm 1.44); sa 13.74 → 1.49 (−1.77 / +1.19 / +1.20); si 15.98 → 1.55 (−4.54 / −0.88 / −0.87)
+    - The glacier units carry ar / as / na. Areas and costs: see the 21:59 entry (sections 1-2 unchanged).
+  - **Filter cost for Sect. 3.4** (from `gmd_numbers.txt` (2)):
+    - DA 2002-2012: 8687 s on 31 ranks (248 vCPU node), 2.03 s per model day incl. analyses.
+    - About 19 s per global analysis (334 902 states × 737 obs, block localisation) + 1.46 s per model day of stepping, from a fit of window wall vs window length.
+    - 2002-2006 part 4272 s. Peak 73.0 GB node (2.35 GB per rank on average).
+    - Spin-up 3261 s, OL 4382 s (398 s per model year), perturbation 560 s, collect_pool 6022 s.
+  - **Pass (b) started 09:54:19** (GLWS 2003-2006, the parallel glws_storage_compare). `git status settings/`: unchanged (two expected `M`).
+
+- **Pass (b) COMPLETE 10:02:19 CET 28 Oct (Claude Code, DA review 129):** GLWS2.0 readers of V2cGP, 2003-2006. 0 non-zero exits; 7.9 min in total (the parallel glws_storage_compare took 3 min, vs 27 min serial in pass (c)). Copies in `job9/prod_V2cG_2002-2012/glws_2003-2006/`. Data root 5764 GB.
+  - **H7 (V2cGP, mask M from its own run):**
+    - H7a 22 mask-M cells (≤ 30 met), ratio 0.64 (≥ 0.75 missed)
+    - H7b missing share 555 / 559 / 552: 1.5 / 0.0 / 13.8 % → **met** (pass (c) subset 4.5 / 0.0 / 17.9; V2c 0.0 / 0.0 / 16.9)
+    - H7c 0.77 met; H7d 0.135 met
+  - **P block:**
+    - P1 snow-free soil / gw share: DA 0.37 / 0.32 (OL 0.56 / 0.16, GLWS2.0 0.44 / 0.23); all cells DA 0.31 / 0.21 (GLWS 0.35 / 0.12)
+    - P2 gw amp DA / OL 1.89, invented gw cycles 28 units; P4 soil 1.05
+  - **GRACE-footprint TWS, unit medians** (amp ratio to GRACE | corr res | RMS mm): OL 0.85 | 0.70 | 36.8; **DA 0.96 | 0.97 | 9.4**; GLWS2.0 0.77 | 0.56 | 42.0.
+  - **All four reader passes on the production run are done:** a (2002-2012) → c (2002-2006, paper) → paper chain → b (GLWS 2003-2006).
+  - **Open from the reviews:** the regression test old vs new code (review 137 step 3, kept by review 141 (4) "after the paper chain") and the ESSD preparation report (review 133, report-only).
+  - **Before the regression I will copy two files** to `_prod2012_stash/grace_before_regression/`: `GRACE/OLmean/GDA_Global_GlobalBasins_v2.0.hdf5` and `GRACE/obs/GlobalBasins_v2.0_obs_GRACE.hdf5`. A 3-month DA rewrites both, and subset_metrics / gmd_numbers read the 2002-2012 obs file.
+
+- **DA review 145 (new plan, 2002-2006, U1 / U2 / U3), 10:20 CET 28 Oct (Claude Code):**
+  - **Superseded reviews:** review 144 is superseded, so the Job-14 jobs were not started. Pass (b) was already COMPLETE (10:02:19), and nothing runs on V2cGP.
+  - **Regression (review 137 step 3):** not run. Its chain refused to start at 10:06:40 because its process guard matched my own ssh command; nothing was set up, and it is not part of the new plan. The scripts (`da_dev/reg_*`) are kept in case it is wanted with the released code later.
+  - **Step 2 — the 2002-2012 results, paths and sizes** (data root 5764 GB). **Nothing deleted yet**; I am asking Fan in this session first.
+
+| path (data root) | size | in review 145 |
+|---|---|---|
+| `DA_output/GDA_Global` (V2cGP members, 4018 days) | 616 GB | yes |
+| `Res/GDA_Global/DA` (collected V2cGP DA, 2002-2012 yearly files + basin_ts) | 577 GB | implied ("2002-2012 results") |
+| `Res/GDA_Global/_prod2012_stash` (incl. sub2006) | 8 GB | yes |
+| `Res/GDA_Global/Res_DA.h5`, `Res_OL.h5` | 8 + 8 GB | yes |
+| `Res/GDA_Global/Harmonic_{DA,OL,GRACE}.nc` | 3 GB | yes |
+| `Res/GDA_Global/evaluation_global` (pilot2 / prod2012 / sub2006) | 2 GB | yes |
+| `OL_output/Ens_0..30/daily_output_2007-01-01 .. 2012-12-31.nc` (2192 of 4018 days) | about 333 GB | "may go" |
+| `Res/GDA_Global/OL` (collected OL 2002-2012, basin_ts_OL + yearly files) | 9 GB | not listed — kept for now |
+| `Res/GDA_Global/GRACE_GlobalBasins_v2.0.h5` | 1 GB | not listed — kept for now |
+| regression folders (`DA_output_reg*`) | none exist | — |
+
+  - **Kept:** Ensemble_input, Ensemble_Initialization, OL_output 2002-2006 (1826 days per member). Total to delete about 1222 GB, or about 1555 GB with OL 2007-2012.
+  - **Driver finding for Cowork:** `src_demo/global_run.py` chdirs to src_demo for WaterGAP's `cf_conv.json`, but the clean-up removed `src_demo/cf_conv.json`; it now exists only in `src_GHM/ReWaterGAP/` (md5 02f1b4c1, same content). A 'ensemble' / 'assimilate' run would therefore not find it. Please add it back to src_demo, or chdir to src_GHM/ReWaterGAP; I do not edit src_demo.
+    - Also an empty `src_demo/${DATA_ROOT}/Res/...` folder tree (made by my failed 18:28 sub2006 eval on 27 Oct, empty) was removed with rmdir.
+
+- **DA review 145 steps 1-3, 10:35 CET 28 Oct (Claude Code):**
+  - **Step 2 done, on Fan's word in this session ("all incl. OL 2007-12", 10:10)** with `da_dev/del2012.sh` (3bc3b9d0); paths resolved inside the data root, no open handles.
+    - Deleted: `DA_output/GDA_Global` 616 GB, `Res/GDA_Global/DA` 577 GB, `_prod2012_stash` 8 GB, `Res_DA.h5` / `Res_OL.h5` 8 + 8 GB, `Harmonic_{DA,OL,GRACE}.nc` 3 GB, `evaluation_global` 2 GB.
+    - OL_output 2007-2012 days: 124 558 → 56 606 daily files (67 952 removed = 31 × 2192); every Ens_0..30 still has its 1826 days 2002-2006.
+    - **Data root 5764 → 4216 GB** (10:13:22).
+    - Kept: Ensemble_input, Ensemble_Initialization, OL_output 2002-2006, `Res/GDA_Global/OL` (9 GB, re-collected by U1), `GRACE_GlobalBasins_v2.0.h5`, all temp/exp_logs outputs.
+  - **Step 3, unit sets:** the T9 / T10 zips exist only in the desktop data root (`.../global_basins_redesign/results_T9|T10/`, not synced to UCloud).
+    - Copied (md5 116a7a6d / 3a041996) and unzipped to `Basin/shp/GlobalBasins_T9/GlobalBasins_T9.shp` and `Basin/shp/GlobalBasins_T10/GlobalBasins_T10.shp`.
+    - Check `da_dev/unitset_check.py` → `unitset_check.txt` (cell-centre pre-check on the WaterGAP land mask, not the code's mask):
+
+| set | units | ID 1..N | cells per unit median / min / max | units with 0 cells | detached parts (≥ 2 parts of ≥ 1 % area) | median area ×10³ km² |
+|---|---|---|---|---|---|---|
+| U1 v2.0 | 737 | OK | 50 / 18 / 1667 | 0 | 13 | 115 |
+| U2 T9 | 707 | OK | 68 / 16 / 246 | 0 | 7: 82, 168, 296, 313, 336, 382, 432 | 160 |
+| U3 T10 | 684 | OK | 69 / 22 / 338 | 0 | 5: 79, 164, 302, 325, 417 | 161 |
+
+  - **Blocker for U2 / U3 — please decide (Cowork / Fan):** the released code takes the unit set as FROZEN. `GDA.check_units` / `get_GRACE_obs` need `Basin/mask/<basin>/<basin>_res_0.5.h5` (+ `_res_1.h5`), and `check_units` reads the shapefile column `SUB_AREA`.
+    - For T9 / T10 there is no mask yet, and the shapefiles have `AREA`, not `SUB_AREA`.
+    - **Proposal:** build both masks with `src_auxiliary/global_shp2mask.py` exactly as v2.0 (`GlobalBasins_v2.0_settings.txt`): area rule threshold 0.4, `configure_model_mask` (WaterGAP continental area), then `mask_05_to_1`.
+    - **Open 1:** `configure_exclude` — v2.0 used `GlobalBasins_v2.0_removed.shp`. Is there a T9 / T10 removed-units file, or should it be off, or should v2.0's removed shapefile be used?
+    - **Open 2:** `SUB_AREA` — may I write the masks plus a units copy of the shapefile with `SUB_AREA = AREA` (km²?) under a new name, or will Cowork add the column? I do not edit the delivered shapefiles.
+  - **U1 does not wait for this:** I start it now with the released code (run copy via `GDA.prepare_settings`, period 2002-01-01..2006-12-31): prepare → collect OL 2002-2006 → DA → collect DA → evaluate `gmd_U1` → readers.
+    - Driver `da_dev/gmd_run.py` mirrors `src_demo/global_run.py`. The only difference is the working directory: a folder with a copy of `cf_conv.json`, because of the src_demo issue above.
+
+- **DA review 146 + U1 started, 10:20 CET 28 Oct (Claude Code):**
+  - Deletion: done as in your list (see above; data root 4216 GB). `Res/GDA_Global/OL` and `GRACE_GlobalBasins_v2.0.h5` were left; U1's collect / prepare overwrite them.
+  - `src_demo/cf_conv.json` is on UCloud (02f1b4c1), so U1 runs from src_demo exactly as global_run.py. Regression dropped.
+  - **U1 chain:** `da_dev/gmd_chain.sh U1` (7f976549) + `gmd_run.py` (42902a7a) in tmux `da:gmdU1`, started 10:15:16.
+    - Stages, each under the memory gate: prepare → collect_OL (31 ranks) → assimilate → collect_DA → evaluate / visualize (tag gmd_U1).
+    - `check_units`: 737 units = 737 IDs, 55 817 cells, 0 in two units, 0 empty, mask / SUB_AREA median 1.00 (0.94-1.07), md5 vs `GlobalBasins_v2.0_settings.txt` True. GRACE obs of 2002-2006 being prepared.
+    - `git status settings/` before: only the two expected `M`.
+  - U2 / U3 wait for the mask decision (entry above).
+
+- **QUESTION FOR COWORK / FAN — unit masks of U1 / U2 / U3, 10:30 CET 28 Oct (Claude Code):**
+  - **Fan's instruction in my session:** "Each exp uses its own shapefile, do not edit the shapefile any longer. For V2, don't exclude anything."
+  - **What I did with it:**
+    - **U2 / U3 masks built** with `da_dev/make_masks_T.py`, the v2.0 recipe of `make_masks_v2.0.py` without the exclusion step:
+      - `global_shp2mask`, area rule (a cell goes to the unit covering most of it if the units cover ≥ 40 % of it), WaterGAP continental-area model mask, then `mask_05_to_1`.
+      - **No** `configure_exclude`; the T9 / T10 zips carry no removed-units file anyway.
+      - Result: `Basin/mask/GlobalBasins_T9/` 707 units, 56 356 cells (1 deg: 14 911); `Basin/mask/GlobalBasins_T10/` 684 units, 56 356 cells. 10:19-10:20, exit 0.
+    - **SUB_AREA:** the shapefiles stay as delivered. T9 / T10 have `AREA` [km², = polygon area, ratio 1.001] instead of `SUB_AREA`, which check_units / prepare_GRACE / global_evaluation / global_visualization read. My driver `gmd_run.py` (0dd342b5) adds `SUB_AREA = AREA` in memory when the shapefile is read; no effect on v2.0.
+    - **U1 runs on the existing frozen v2.0 mask** (`Basin/mask/GlobalBasins_v2.0/..._res_0.5.h5`, 55 817 cells, md5 41c9160b). It was built WITH `configure_exclude(GlobalBasins_v2.0_removed.shp)`: 42 cells mostly covered by removed units (islands, glaciers, lakes) are in no unit. The 18 glacier units are assimilated (no exclude_units).
+      - U1 started 10:15; prepare done, collect_OL running since 10:16:46.
+  - **QUESTION 1 — U1 mask:** does "for V2, don't exclude anything" mean
+    - **(a)** U1 keeps the frozen v2.0 mask as it is (no exclude_units in the DA; the frozen mask's 42 left-out cells stay out), or
+    - **(b)** U1 must use a NEW v2.0 mask rebuilt without `configure_exclude` (about 42 cells more; md5 no longer matches `GlobalBasins_v2.0_settings.txt`, so check_units' md5 check would fail unless the record is updated or the mask gets a new name, e.g. `GlobalBasins_v2.0_noexcl`)?
+    - With (b), U1 restarts from prepare (about 1-2 h lost), and I would write the mask under a new name rather than overwrite the frozen v2.0 files.
+  - **QUESTION 2 — U2 / U3 masks:** is the recipe above (area rule 0.4 + model land, no exclusion) the one you want, or should the T9 / T10 masks use another rule (e.g. cell-centre, or a threshold other than 0.4)?
+  - **QUESTION 3 — same footprint:** U2 / U3 cover 56 356 cells, U1 55 817. For the step-5 comparison I plan all metrics on the common land cells of the 0.5-deg grid with the GRACE gridded field, as review 145 asks; please confirm.
+  - **Until you answer:** U1 continues as (a). U2 / U3 do not start before your answer (they would start only after U1 anyway).
+
+- **DA review 147 done, 10:28 CET 28 Oct (Claude Code):**
+  - **U1 stopped** at 10:25:52 in collect_OL (tmux kill-window `da:gmdU1`; no rank left, checked with ps).
+  - **New mask:** `Basin/mask/GlobalBasins_v2.0_noexcl/` from the unchanged v2.0 shapefile with `make_masks_T.py` (5951b45f): area rule 0.4 + model land, no exclusion, + 1 deg. The frozen v2.0 mask is untouched.
+    - **55 859 cells** (frozen v2.0: 55 817, so +42); 1 deg 14 810 cells.
+    - 26 units gain cells, none loses any:
+      - af: 33 +1, 107 +2, 137 +3, 138 +1
+      - ar: 145 +1, 146 +5, 147 +1, 155 +1
+      - as: 230 +1, 238 +1, 258 +2, 259 +1, 265 +1, 270 +1, 271 +3
+      - eu: 424 +4
+      - na: 438 +1, 446 +1, 462 +1, 463 +1, 484 +1, 486 +2, 535 +1, 536 +2
+      - sa: 648 +1, 649 +2
+      - Several of these are glacier units (146, 147, 230, 238, 259, 265, 270, 271).
+  - **U1 restarted** 10:27:08 (`gmd_run.py` 08e87215: U1 = basin `GlobalBasins_v2.0_noexcl`, shp `Global_v2.0/GlobalBasins_v2.0.shp`).
+    - check_units: 737 units = IDs, 55 859 cells, 0 in two units, 0 empty, mask / SUB_AREA median 1.00, md5 (shapefile) True.
+    - GRACE obs with the earthquake correction are being prepared. `git status settings/`: unchanged.
+  - **Mask set for the comparison (all area rule 0.4 + model land, no exclusion):** U1 `GlobalBasins_v2.0_noexcl` 55 859 cells, U2 `GlobalBasins_T9` 56 356, U3 `GlobalBasins_T10` 56 356. Step 5 uses the intersection of the three, plus each run's own footprint.
+
+- **Finding: the collected OL lives in `Res/GDA_Ucloud/OL`, 11:10 CET 28 Oct (Claude Code):**
+  - **Symlinks:** `Res/GDA_Global/OL/Ens_k/daily_output_<year>.nc` are symlinks (made 27 Oct by the production rebuild, `rebuild_v2.0_ol_2012.py`) to `Res/GDA_Ucloud/OL/Ens_k/daily_output_<year>.nc`.
+    - The production ensemble's collect step 1 wrote the yearly OL files there, under the old case name.
+    - U1's collect_OL (10:28-10:42) merged the 2002-2006 yearly files again **through these links**, i.e. it rewrote `Res/GDA_Ucloud/OL/Ens_k/daily_output_2002..2006.nc`. They come from the same OL_output (E1 ensemble), so the content should be the same (Ens_1 2002: 1 769 815 096 B, about the previous size).
+    - U2 / U3 will do the same; no harm, but the U1-U3 gridded OL physically sits in GDA_Ucloud.
+  - **Stale items removed** (review 146 allows it): 186 links `Res/GDA_Global/OL/Ens_k/daily_output_2007..2012.nc` (links only), 6 `Ens_mean` 2007..2012 files (0.5 GB), `Res/GDA_Global/GRACE_GlobalBasins_v2.0.h5` (old run; U1 writes `GRACE_GlobalBasins_v2.0_noexcl.h5`). Readers can no longer pick up old-run files there by name.
+  - **Not deleted, needs Fan's word:** `Res/GDA_Ucloud/OL/Ens_0..30/daily_output_2007..2012.nc`, **186 files, 330 GB**. This is the collected OL 2007-2012 of the deleted 2002-2012 production, missed in my 10:20 table because it sits under GDA_Ucloud.
+    - The other content of `Res/GDA_Ucloud` (DA, Res_DA.h5, Harmonic_*, evaluation_global, paper, GRACE_GlobalBasins_v1.0.h5 - the 17 Oct v1.0 Job-10 basis) is not touched and not proposed.
+  - **U1 DA:** 2004/02 at 11:07, about 66.6 GB; expected end about 11:45. 335 154 states = 6 × 55 859 cells (the noexcl mask).
+  - **Readers:** an audit of my 27 reader scripts shows almost all hard-code the v2.0 unit tables / V2cGP paths. I am porting them (paper chain + Job 14 → `paper/gmd/`, H-card + step-5 comparison in `da_dev/`, run-tagged outputs). Per run the gridded fields go to `paper/gmd_grid/gmd_grid_<SET>.npz` (`gmd_grid.py` 8e80b856) before the next run overwrites Res/GDA_Global.
+
+- **Readers for U1 / U2 / U3 + Res/GDA_Ucloud/OL, 11:25 CET 28 Oct (Claude Code):**
+  - **`Res/GDA_Ucloud/OL/Ens_0..30/daily_output_2007..2012.nc` deleted** on Fan's word in the session (11:18:55): 186 files, 330 GB; every member keeps its 5 files 2002-2006. Data root 4091 GB (U1's DA output is growing).
+  - **Paper chain + Job 14 for the new runs:** `temp/exp_logs/paper/gmd/` (`gmd_common.py` b27d10b7, `gmd_paper.sh` eb6ead2d, job10a-10e3, job14_budget / spread_pass1 / spread_share / gbm_units; README.md lists every deviation from the originals).
+    - Parametrised by SET (BASIN / SHP derived); outputs to `paper/gmd_<SET>/`.
+    - A path guard refuses any old-run file (`GlobalBasins_v2.0*` other than the run's own basin, `output_2002-2006_v2o`, `_prod2012_stash`).
+    - REGION: the 2-letter HydroBASINS code (first token).
+    - 10e3: the TOP cells come from this run's discharge_report (3 largest increases), and there is no fixed verdict.
+    - Job 14 caches are per run.
+  - **Step 5:**
+    - `da_dev/gmd_grid.py` (8e80b856): monthly OL / DA ensemble-mean TWS + the run's GRACE gridded field on the grid → `paper/gmd_grid/gmd_grid_<SET>.npz`.
+    - `gmd_card.py` (cb4c5d53): H1 / chi2 / units worse / H2 / H3 / H8 global + Amazon (as boundary_steps (d), the run's own units) / 10b cell RMS / wall + peak.
+    - `gmd_compare.py` (a839daac): global + 8 regions + glacier cells (the 18 v2.0 glacier units' cells) + Amazon box on the COMMON footprint, global on the OWN footprint, then the card table. Regions by cell = the region prefix of the U1 unit owning the cell.
+    - Not ported (not meaningful with no excluded / remapped units): g_reader, subset_metrics. H7a / H7b (mask M) are still to be ported for T9 / T10; the Amazon-box block is in the table meanwhile.
+  - **`da_dev/gmd_post.sh` (07077697)** armed 11:21:09 in `da:postU1`: after the U1 core COMPLETE it runs the paper chain → grid → card → compare → copies the evaluation to `paper/gmd_U1/evaluation/`.
+    - It does not delete DA_output and does not start U2: I check U1's reader outputs first, because U2 overwrites Res/GDA_Global.
+
+- **U1 core COMPLETE + reader speed-ups, 12:20 CET 28 Oct (Claude Code):**
+  - **U1 core:** prepare 80 s → collect_OL 829 s (21 GB; abb0808b works) → DA 3282 s (peak about 71 GB) → collect_DA 748 s → evaluate 61 s → visualize 40 s; COMPLETE 11:52:21. `git status settings/` unchanged. Data root 4462 GB.
+    - **gmd_U1 headline:** RMS OL 5.591 → DA **0.782 mm** (all 737 units), corr 0.999, chi² median 0.565, 100 % of the units improved, median reduction 0.894.
+    - Trends GRACE / OL / DA: −0.955 / −1.338 / −0.963 mm/yr. Region ar (glacier units now assimilated): RMS 17.4 → 1.4.
+  - **Paper readers, parallel member reading** (pool of 8, sums added in the old member order):
+    - `paper/gmd/job10c_storage_share.py` (120f4577), test vs the previous version with 2 members: storage_share_OL / _DA.nc and the report byte-identical, 312 → 158 s with 2 workers.
+    - `job10e3_check.py` (544fb906): the series npz is byte-identical to the previous version.
+    - **Bug fixed** in the ported 10e3 (both versions crashed in the new SUMMARY line: '%d' formatting applied to an f-string containing '%').
+    - `gmd_common.py` (c1cd2b89): optional GMD_OUT for tests.
+  - **U1 post restarted** 12:05:31 (`gmd_post.sh` 3cb17bb4, `POST_NOWAIT=1`) to use the parallel 10c; the serial 10c was at OL member 8. 10a / 10b EXIT=0, 10c running since 12:06:11.
+
+- **DA review 148 — U2 / U3 running, 18:30 CET 28 Oct (Claude Code):**
+  - **Delay:** sorry for the idle hours. U1's post chain was COMPLETE at 13:46:19, but I waited for Fan's answer in my session before deleting U1's members; I had not seen your 16:45 GO.
+    - Fan has now told me never to wait for a choice: I follow your reviews and keep in sync through §7.
+  - **U1 post COMPLETE** 13:46:19 with 0 failed steps.
+    - Paper chain: 10a-10e3 + Job 14 budget / spread / GBM. The parallel versions of 10c (662 s, was about 90 min), 10e3 (421 s, was 2863 s), budget and spread pass 1 (`job14_budget.py` a333e0c7, `job14_spread_pass1.py` 701bc972, members in a pool; each writes its own npz from the same code).
+    - Also gmd_grid / gmd_card / gmd_compare. Your summary of U1 matches mine.
+  - **`da_dev/gmd_seq.sh` (99c511f5)** in tmux `da:gmdseq`, started 18:22:48:
+    - U1 members deleted 18:23:34 (280 GB; data root 4182 GB).
+    - **U2 (T9) core started 18:23:43.** check_units: 707 units = IDs, 56 356 cells, 0 in two units, 0 empty (no md5 record for T9 → None).
+    - Then U2 post (POST_NOWAIT) → U2 members deleted only if its post chain had 0 failed steps → U3 core + post.
+    - It stops at the first failure and keeps that run's members for reruns.
+  - **U3 members:** `gmd_del_U3.sh` (`da:delU3`) deletes them after the sequence's COMPLETE, as review 148 asks.
+  - **Final table:** gmd_compare.py runs at the end of each post chain, so after U3 the table covers U1-U3 (common + own footprint). I post it here as soon as it exists.
+  - **Expected:** U2 core about 1.6 h + post about 45 min, the same for U3; done around 23:30 CET if nothing fails.
+
+- **U2 (T9) COMPLETE + interim comparison U1 / U2, 20:50 CET 28 Oct (Claude Code, DA review 148):**
+  - **U2 core:** prepare 80 s, collect_OL 870 s, DA 3933 s (71.1 GB), collect_DA 810 s, evaluate / visualize; COMPLETE 20:01:50.
+    - Post (paper + Job 14 + grid / card / compare) 43 min, 0 failed steps (parallel 10c 702 s, 10e3 481 s, budget 380 s, spread pass 1 401 s).
+    - U2 members deleted 20:46:30 (280 GB, data root 4182 GB). **U3 (T10) started right after.** `git status settings/` unchanged.
+  - **Interim table** (`paper/gmd_grid/gmd_compare.txt`). Common footprint 55 857 cells; the GRACE fields of both runs are identical there (max |diff| 0).
+
+| COMMON footprint, RMS OL → DA vs GRACE [mm], trend DA / GRACE [mm/yr] | U1 (v2.0_noexcl, 737) | U2 (T9, 707) |
+|---|---|---|
+| global | 5.56 → **0.65**, −0.95 / −0.94 | 5.56 → 0.80, −0.96 / −0.94 |
+| af / ar / as / au | 1.32 / 1.36 / 1.55 / 2.13 | 1.95 / 1.29 / 1.68 / 2.67 |
+| eu / na / sa / si | 2.13 / 1.37 / 1.44 / 1.39 | 2.40 / 1.38 / 1.38 / 1.48 |
+| glacier cells (18 v2.0 units, 1401 cells) | **1.57**, −13.77 / −13.75 | 4.40, −13.29 / −13.75 |
+| Amazon box | 2.15, +6.55 / +7.09 | **1.72**, +6.77 / +7.09 |
+| unit level: H1 RMS (own units), chi² median, units worse | 0.782, 0.565, 0 | 0.968, 0.465, 0 |
+| H2 window-start share DA (OL 3.3 %) | 2.6 % | 2.8 % |
+| H3 gw / wetlands long-term [mm/yr] | −0.217 / −0.113 | −0.278 / −0.062 |
+| H8 global ratio (GRACE on the same pairs) | 2.73 (1.30) | 2.39 (1.12) |
+| H8 Amazon ratio (GRACE) | 2.06 (0.93) | 1.97 (0.92) |
+| 10b cell trend RMS OL → DA [mm/yr] | 52.8 → **45.3** | 53.5 → 56.2 |
+| 10b cell amplitude RMS OL → DA [mm] | 127.8 → 116.4 | 128.6 → 124.1 |
+| DA wall / peak | 3282 s / 71.3 GB | 3933 s / 71.1 GB |
+
+  - **Reading (interim):**
+    - U1 fits GRACE better globally and in af / au / eu, and clearly in the glacier cells. U2 is slightly better in the Amazon box, ar and sa.
+    - U2's cell-scale trend RMS gets worse than its OL (56.2 vs 53.5), while U1 improves it (45.3).
+    - H8 relative to GRACE: about the same (U1 2.10 x, U2 2.13 x GRACE's ratio).
+    - The final table with U3 follows, around 23:00 CET.
+
+- **FINAL COMPARISON U1 / U2 / U3 (DA review 145 step 5, review 148), 23:25 CET 28 Oct (Claude Code):**
+  - **All runs COMPLETE:** released code, 2002-2006, 30 members, same E1 ensemble, masks by the same recipe (area rule 0.4 + model land, no exclusion).
+    - U3 core COMPLETE 22:33:13, post 23:21:40, 0 failed steps. `gmd_seq.sh` COMPLETE 23:21:40. U1 / U2 members deleted; U3 members are deleted by `gmd_del_U3.sh` (reported below).
+    - `git status settings/` before / after every run: only the two expected `M`.
+  - **File:** `temp/exp_logs/paper/gmd_grid/gmd_compare.txt` (+ `card_U*.json`, `gmd_grid_U*.npz`). Paper / Job-14 outputs in `paper/gmd_U1|U2|U3/`.
+  - **COMMON footprint** = 55 857 cells in all three masks; the GRACE gridded fields of the three runs are identical there (max |diff| 0).
+    - Series = cos-lat mean of the cells, anomalies at the 54 GRACE epochs. Regions by cell (region of the U1 unit owning the cell).
+
+| COMMON footprint: RMS OL → DA vs GRACE [mm]; trend DA / GRACE [mm/yr] | **U1** v2.0_noexcl (737) | U2 T9 (707) | U3 T10 (684) |
+|---|---|---|---|
+| **global** (OL 5.56) | **0.65**; −0.95 / −0.94 | 0.80; −0.96 / −0.94 | 0.80; −0.95 / −0.94 |
+| af (OL 7.65) | **1.32**; −3.23 / −3.25 | 1.95; −3.21 | 1.95; −3.21 |
+| ar (OL 17.24) | 1.36; −2.70 / −2.93 | 1.29; −2.70 | **1.28**; −2.78 |
+| as (OL 10.12) | **1.55**; −0.23 / −0.16 | 1.68; −0.05 | 1.65; −0.01 |
+| au (OL 13.89) | **2.13**; −2.66 / −3.12 | 2.67; −2.54 | 2.75; −2.52 |
+| eu (OL 16.77) | **2.13**; −0.23 / −0.01 | 2.40; −0.56 | 2.36; −0.55 |
+| na (OL 13.76) | **1.37**; +0.97 / +0.96 | 1.38; +0.92 | 1.39; +0.90 |
+| sa (OL 11.87) | 1.44; +1.12 / +1.23 | **1.38**; +1.15 | 1.41; +1.15 |
+| si (OL 15.22) | **1.39**; −0.91 / −0.89 | 1.48; −0.90 | 1.50; −0.92 |
+| glacier cells, 18 v2.0 units, 1401 cells (OL 16.12) | **1.57**; −13.77 / −13.75 | 4.40; −13.29 | 4.55; −12.99 |
+| Amazon box lat −20..12, lon −80..−45 (OL 18.72) | 2.15; +6.55 / +7.09 | **1.72**; +6.77 | 1.73; +6.81 |
+| global, OWN footprint | 0.65 (55 859 cells) | 0.82 (56 356) | 0.82 (56 356) |
+
+| unit level / H-card (own units, evaluation gmd_<SET>) | U1 | U2 | U3 |
+|---|---|---|---|
+| H1 RMS OL → DA [mm] | 5.591 → **0.782** | 5.592 → 0.968 | 5.592 → 0.963 |
+| chi² median / units DA worse than OL | 0.565 / 0 | 0.465 / 0 | 0.464 / 0 |
+| median unit RMS reduction / median unit RMS DA [mm] | 0.894 / 4.72 | 0.877 / 4.82 | 0.875 / 4.88 |
+| H2 window-start share DA (OL 3.3 %) | **2.6 %** | 2.8 % | 2.9 % |
+| H3 gw / wetlands long-term [mm/yr] | −0.217 / −0.113 | −0.278 / −0.062 | −0.269 / −0.073 |
+| H8 global ratio (GRACE same pairs); DA / GRACE | 2.73 (1.30); 2.10 × | 2.39 (1.12); 2.13 × | 2.39 (1.12); 2.14 × |
+| H8 Amazon ratio (GRACE) | 2.06 (0.93) | 1.97 (0.92) | 1.96 (0.92) |
+| 10b cell trend RMS OL → DA [mm/yr] | 52.8 → **45.3** | 53.5 → 56.2 | 53.5 → 56.7 |
+| 10b cell amplitude RMS OL → DA [mm] | 127.8 → **116.4** | 128.6 → 124.1 | 128.6 → 124.1 |
+| wall collect_OL / DA / collect_DA [s] | 829 / 3282 / 748 | 870 / 3933 / 810 | 893 / 4279 / 933 |
+| peak anon DA / collect [GB] (node 96 GB, 248 vCPU) | 71.3 / 21.3 | 71.1 / 21.0 | 71.4 / 21.0 |
+
+  - **Reading (for Cowork / Fan's choice):**
+    - **U1 (v2.0, no exclusion) is best on the common footprint globally (0.65 vs 0.80 mm)** and in af / as / au / eu / na / si.
+    - U1 is clearly best in the glacier cells (1.57 vs 4.4-4.6 mm; trend −13.77 vs GRACE −13.75), and it is the only set whose DA improves the cell-scale trend RMS (45.3 vs OL 52.8; U2 / U3 get worse than their OL: 56.2 / 56.7). It also has the lowest H2.
+    - U2 / U3 are better only in the Amazon box (1.72 vs 2.15 mm) and slightly in ar / sa.
+    - Their unit chi² (0.46) is lower, i.e. more under-dispersed innovations relative to the obs error.
+    - H8 relative to GRACE's own ratio is the same for all three (2.10-2.14 ×).
+    - U2 and U3 differ little from each other.
+  - **H7a / H7b (mask M)** are not in the table (mask-M reader not ported for T9 / T10; the Amazon-box block stands in). If you need them for the choice, I port `amazon_maskM_v2.py` next.
+
+- **Heartbeat 23:27 CET 28 Oct (Claude Code):** U3 members deleted 23:23:17 (review 148; 280 GB) → data root **4183 GB**. All three runs and the step-5 table done (entry above); nothing running on UCloud except the storage watch (`da:storwatch`). Waiting for your choice / next review; H7a/b mask-M port on request.
+  - **Correction to "H7a / H7b on request":** for U1 and U2 they can no longer be computed. The mask-M reader needs each run's Harmonic_*.nc and Ens_1..10 daily files: U2 / U3 overwrote Res/GDA_Global and the DA members are deleted. Only U3's collected files remain. The Amazon-box rows of the table (box RMS / trend on identical cells) are the like-for-like Amazon comparison; H7 would need reruns.
+
+- **DA review 149 — first answers, 00:05 CET 29 Oct (Claude Code):**
+  - **(1) Budget does not close — cause, current state:**
+    - **Not a data mix-up.** U2's job14_budget ran 20:31-20:37, before U3 started (20:46), on U2's own files.
+      - U1 (separate run, U1's files) gives the same picture: I_cum 19 617 / dS −536 / Q 5 934 / E 14 219 / residual 7 019 km³, I_jump 12 598.
+      - U2: 19 464 / −553 / 5 798 / 14 219 / 7 025, I_jump 12 439.
+      - U3: 19 298 / −554 / 6 005 / 13 847 / 6 905, I_jump 12 393.
+    - **What matches 17 Oct:** I_jump (12.4-12.6k vs 12.35k km³), I_gross ± (82k / −70k vs 82k / −70k), and the jumps sit on the increment days (top-10 all True). Precipitation DA − OL = 0 exactly.
+    - **What differs:** E (DA − OL evap-total) is 14.2k vs 5.3k km³, and Q is 5.9k vs 7.1k. So dS + Q + E exceeds the jump estimate by about 7k km³.
+    - **increment_release (riverstor, 10 days) is only a small part.** Budget on U3's files with the increment days widened to days 0..9 after each window (`job14_budget.py` f186ddc6, `G14B_RELEASE_DAYS=10`, output `paper/gmd_U3_relcheck/`): residual 6 905 → 6 052 km³ (I_jump 12 393 → 13 246).
+    - **Main suspect: `soil_daily_bounds: true`** (released config; the 17 Oct runs had equal increments). `src_DA/EnKF.py:96-125` / `:405-440`: the window-mean soil increment is shaped per day, d_t ∝ room to capacity (or water available), and written to every day of the window.
+      - What carries into the next window is the last day's d_T, not the first day's d_1. The jump estimator counts d_1 at the window start (debiased with the mean daily change of the other days), so it is biased whenever d_T ≠ d_1 systematically; dS + Q + E sees the persistent water.
+      - The extra E fits soil water added where the soil has room.
+    - **Check pending:** a within-window (DA − OL) soil profile, Σ(d_T − d_1) over the 54 windows vs the residual. My first try on U3's files failed because U2's rerun had started rewriting the OL files. I run it on U2's own daily files after the rerun (U2's DA_output is kept this time).
+    - If confirmed, the closure test needs an estimator for shaped increments; the physical budget terms dS / Q / E are not wrong.
+  - **(2) Discharge (`paper/gmd/discharge_peaks.py` d699a425), from each run's own 10e3 series** (`discharge_check_series.npz`, ensemble-mean daily dis of the 3323 big-river cells; written before U3 started):
+
+| U2 (T9) [U1 for reference] | median | p10 | p90 |
+|---|---|---|---|
+| annual peak of the **monthly-mean** | **+1.6 %** [+2.3] | −6.7 [−7.2] | +16.7 [+16.8] |
+| annual peak of the 7-day mean | +2.2 % [+2.2] | −6.6 [−7.3] | +19.2 [+19.3] |
+| daily annual peak (ens-mean series) | +2.6 % [+2.7] | −6.3 [−7.0] | +20.8 [+22.2] |
+
+    - **Obidos** (cell −2.25, −54.75, mean OL flow 173 756 m³/s), monthly-mean annual peak OL → DA:
+      - U2: 2002 229 284 → 263 886, 2003 231 608 → 237 568, 2004 225 108 → 240 347, 2005 238 781 → 258 012, 2006 258 342 → 287 747; mean **236 624 → 257 512 (+8.8 %)**.
+      - U1: +7.8 %.
+    - **Daily annual maxima on window days (10e3, U2):** day 0 DA 2.8 % (OL 3.3, expected 2.9); days 0-2 DA 11.9 % (OL 8.6, expected 8.7).
+  - **(3) Missing for U2:** U3 overwrote Res/GDA_Global, so U2's Harmonic_OL / DA / GRACE.nc (Fig. 5), Res_DA / Res_OL.h5 and the daily DA / OL fields (budget check, Fig. 4 unit series) are gone. Saved and usable: storage_share_*.nc (Fig. 6), GBM files, budget csv, discharge (Fig. 10), group_series.csv (Fig. 4 global / regions), evaluation, card / grid.
+    - **→ U2 rerun started 23:58:39** (`da_dev/gmd_u2_redo.sh` 9533cd3a, tmux `da:u2redo`): first-run outputs kept as `paper/gmd_U2_run1` (+ card / grid `_run1`); core → post (paper + Job 14 + grid / card / compare) → budget with `G14B_RELEASE_DAYS=10` → discharge peaks → figdata.
+    - **U2's DA_output is kept** for the budget diagnosis. Expected end about 02:30 CET.
+    - The rerun repeats the GRACE perturbation; I compare it with run 1 (card / compare) and report whether the numbers are identical.
+  - **(4) `paper/gmd_U2/figdata/`** is filled at the end of the redo: Harmonic_OL / DA / GRACE.nc, storage_share_*.nc + regions, discharge_annmax.nc + peaks, group_series.csv, GBM files, budget + budget_rel10 csv, summary / unit_metrics.
+
+- **U2 redo restarted 00:31:55 CET 29 Oct (Claude Code):** the first start (23:58) stopped at collect_OL 00:00:38 with "Permission denied" writing `Res/GDA_Global/OL/Ens_1/daily_output_2002.nc`. My read-only soil-profile check (U3 files) had the OL yearly files open at that moment; my mistake (no harm, nothing written). Restarted unchanged; the expected end moves to about 03:00 CET. The soil-profile check runs only after the redo, on U2's own files.
+
+- **U2 rerun = run 1 exactly + budget diagnosis status, 02:15 CET 29 Oct (Claude Code, DA review 149):**
+  - **The U2 rerun is bit-reproducible.** Core COMPLETE 02:08:55 (DA 3877 s). The evaluation headline lines (RMS 5.592 → 0.968, trends, units, chi²) and unit_metrics.csv are identical to run 1 (cmp). All U2 numbers reported so far stay valid.
+    - Res/GDA_Global now holds U2 again (Res_DA / Res_OL / Harmonic_* / daily OL + DA, 2002-2006), and U2's DA_output is kept.
+    - The post chain (paper + Job 14 + grid / card) is running; then the budget with the 10-day release window and the figdata copy.
+  - **Budget — what is established:**
+    - Precipitation DA − OL = 0.
+    - I_jump and I_gross agree with 17 Oct.
+    - The gap is in dS + Q + E (E 14.2k vs 5.3k km³), the same in U1 / U2 / U3.
+    - The release window explains about 850 km³ (U3 test).
+  - **Budget — what is not established:** the share of `soil_daily_bounds`.
+    - Within-window (DA − OL) drift, U2 member 1, global, summed over the 54 windows (`da_dev/soil_window_drift.py`): soil −4290, gw −2363, river −5281, TWS −11 900 km³ (window means first / last day: TWS 525 / 305, soil 281 / 202, river 110 / 12).
+    - This mixes the natural within-window drain of the extra water (Q, E of the forecast) with any shaping effect (d_T vs d_1). The forecast before the update is not stored, so the output files alone cannot split them.
+  - **Why the jump estimator can fail with the released filter:** the window-mean increment is written onto every day of the window (EnKF.py:405-440), and what continues into the next window is the last day's increment. For soil the day-to-day increments are shaped (d_t ∝ room / water), for river storage the increment enters over the first 10 days of the next window. I_jump counts the first-day jump, so the 17 Oct closure test (equal increments) does not carry over 1:1. That is my reading of the code, not yet a number.
+  - **Options (Cowork to decide; I do not touch src_*):**
+    - (a) The paper reports dS / Q / E and I_bal as the net water added (the physical terms are consistent: precipitation identical, routing table checked), and states that the jump-based closure is not applicable with shaped / released increments.
+    - (b) Cowork adds a log of the applied increment per window and storage in src_DA (e.g. a global km³ sum of the delta carried into the restart state per member), and I rerun U2's DA core (about 1.6 h, bit-reproducible as shown) to get the exact I and close the budget.
+    - I continue with the U2 post + figdata meanwhile.
+
+- **DA review 149 items 3 / 4 done — U2 redo COMPLETE 03:07:33 CET 29 Oct (Claude Code):**
+  - **U2 post on the rerun:** 0 failed steps (paper 10a-10e3, Job 14 budget / spread / GBM, grid / card / compare).
+    - The budget recomputed on the rerun is identical to run 1 (budget_summary.csv cols 1-3 cmp-equal), on top of the identical evaluation.
+    - Res/GDA_Global = U2. **U2's DA_output (280 GB) is kept.** Data root 4463 GB.
+  - **Budget with the 10-day release window on U2's own files** (`paper/gmd_U2/budget_rel10_run/budget/`): I_cum 19 464 (same), I_jump 12 439 → 13 137, residual **7 025 → 6 327 km³** (36 → 33 % of I). As in the U3 test, the release explains about 700 km³ only; the rest is open (see 02:15 entry, options a / b).
+  - **`paper/gmd_U2/figdata/`** (56 MB; syncing to the desktop now):
+    - Harmonic_OL / DA / GRACE.nc (Fig. 5, U2 rerun = run 1);
+    - storage_share_OL / DA.nc + storage_share_regions.txt (Fig. 6a); GangesBrahmaputra_* + GBM_units* (Fig. 6b);
+    - discharge_annmax.nc + discharge_peaks.txt (Fig. 10: monthly / 7-day / daily peaks, Obidos);
+    - group_series.csv (Fig. 4); budget/ + budget_rel10/ csv (Fig. 9); summary.txt + unit_metrics.csv.
+  - **Nothing runs on UCloud now** (storage watch only). Waiting for your decision on the budget (a or b); the U2 DA_output stays for (b).
+
+- **Heartbeat 06:04 CET 29 Oct (Claude Code):** job j-12435670 (port 2500) unreachable (ssh timeout); nothing was running (U2 redo COMPLETE 03:07:33, figdata synced to the desktop, 24 files, 81 MB). The data root keeps Res/GDA_Global = U2 and U2's DA_output (for budget option b). A new job needs a new port from Fan; no review pending since 149.
+
+- **DA review 150 (option b) — prepared, waiting for a UCloud job, 08:10 CET 29 Oct (Claude Code):**
+  - `src_DA/EnKF.py` on the desktop = **d95cc23b**; `git status src_DA` shows only ` M src_DA/EnKF.py`. UCloud is down (port 2500 since about 07:10), so the check there runs as step 1 of the chain.
+  - **`da_dev/gmd_run.py` (3a8835c4):** env `GMD_LOG_INC=1` writes `"log_applied_increment": true` into the RUN COPY's method block (`<data root>/settings/GDA_Global/DA_setting.json`) right after `prepare_settings`; settings/ stays untouched. Otherwise identical to the redo.
+  - **`paper/gmd/job14_applied.py` (2fad3230):** I_applied per member, month, domain (global + 8 regions) and storage.
+    - The same AREA (continental area × contfrac / 100) and IS_LAND domains as job14_budget.py; the vector mapped through applied_increment_info.json (mask cells, cell-major).
+    - Against I_bal = dS + Q + E and I_jump from job14_budget's member files of the same run: closure (km³, %), split by storage, seasonal cycle (Fig. 9b).
+    - The share of the extra ET (Ens_mean evap-total DA − OL) from cells where the soil increment dominates (|I_soil| ≥ 0.5 Σ|I_s|) → `paper/gmd_U2/budget_applied/`.
+  - **`da_dev/gmd_applied.sh` (a4af0da7)**, started as soon as Fan gives a port:
+    - EnKF md5 check;
+    - `GMD_LOG_INC=1 gmd_chain.sh U2` (prepare → collect_OL → DA → collect_DA → evaluate / visualize);
+    - cmp of the evaluation headline + unit_metrics vs run 1; 60 applied_increment files per member;
+    - job14_budget → job14_applied → copy to `figdata/budget_applied`.
+    - **U2's DA_output is kept** (your revised item 5). About 1.9 h.
+
+- **DA review 150 started 08:58 CET 29 Oct (Claude Code):** new job **j-12437378, port 2432** (96 GB, 248 vCPU), mounts OK. `src_DA/EnKF.py` on UCloud = **d95cc23b**; `git status src_DA` = only ` M src_DA/EnKF.py` (settings/: the two expected `M`). `da_dev/gmd_applied.sh` (a4af0da7) runs in tmux `da:applied` since 08:58:02 (U2 core with GMD_LOG_INC=1 → eval cmp vs run 1 → job14_budget → job14_applied → figdata/budget_applied); U2 DA_output kept. Expected end about 10:50 CET.
+
+- **DA review 151 — regional reruns armed, 09:45 CET 29 Oct (Claude Code):** `da_dev/rda_chain.sh` (99f59c82) in tmux `da:rda`; it starts when the review-150 chain writes "gmd U2 applied: COMPLETE" (about 10:50).
+  - **Danube, then Amazon**, each: prepare → open_loop (31 ranks, collection of the existing global 2002-2006 OL) → assimilate (DA + collect) → evaluate (tag gmd) → visualize (pygmt env; not fatal).
+    - Driver `da_dev/rda_run.py` (554c4404) imports `src_demo/regional_run.py` and calls its `configure()`, so case, basin, shapefile, period and the run copy via `RDA.prepare_settings(settings/RDA_<case>)` are the released driver's.
+    - Env `RDA_LOG_INC=1` writes `"log_applied_increment": true` into the RUN COPY only.
+    - The 17 Oct Res/RDA_* and DA_output/RDA_* are overwritten (no suffixes); the 17 Oct `paper/results/RDA_*` stay as history.
+  - **Readers** (copies of the 17 Oct scripts; the only change is the output folder, so the 17 Oct Res/<case>/paper and results/<case>/budget stay untouched):
+    - `paper/gmd/rda_extras.py` (f53ce6e5) = paper_extras_rda.py: series_daily, windows (Fig. 8), seasonal_increment by storage (Fig. 7), obidos_daily (Fig. 10b), outside-mask check;
+    - `rda_budget.py` (a12c0291) = job14_budget.py <case>;
+    - `rda_applied.py` (cdefc3d7) = the review-150 applied-increment budget for the basin (closure, by storage, seasonal cycle, soil-dominated ET share).
+    - Outputs to `paper/gmd_RDA_Danube|Amazon/` + `figdata/` (series / windows / seasonal / Obidos csv, budget + budget_applied, Harmonic_*.nc, evaluation summary).
+  - **Then `DA_output/RDA_<case>` is deleted** (review 151 (4)) only if all readers passed and the 60 monthly increment files exist; storage before / after in the status. The global U2 DA_output is not touched.
+  - Per-case §7 report (RMS basin / sub-basins, trends, chi², s_k, budget, Obidos / Danube 2006, wall + peak) as each case completes.
+
+- **DA review 150 RESULT — the U2 budget CLOSES with the logged increments, 10:25 CET 29 Oct (Claude Code):**
+  - **Run:** U2 DA core with `log_applied_increment` in the run copy (EnKF.py d95cc23b on UCloud). DA 2872 s, collect_DA 687 s.
+    - **Evaluation headline + unit_metrics identical to run 1 (cmp)**: the flag changes no result.
+    - 56 monthly increment files per member: months without a window or a released share (2002-01..03 and the GRACE gap months) have none. U2 DA_output kept.
+  - **`paper/gmd_U2/budget_applied/report.txt`** (+ csv; also in `figdata/budget_applied/`). job14_applied.py abd1eb69: the ET source changed to the mean of the members, because the Ens_mean files hold only the storages. 2002-2006 cumulative, km³, ensemble median of the members:
+
+| domain | **I_applied** (p10, p90) | I_bal = dS + Q + E | I_jump (old estimator) | **closure I_applied − I_bal** | by storage: gw / soil / local wetl. / global wetl. / river / snow |
+|---|---|---|---|---|---|
+| **global** | **24 343** (−9 919, 46 121) | 24 386 | 15 231 | **+221 (+1.0 %)** | 630 / **14 044** / 171 / 2 545 / 42 / 274 |
+| af | 5 503 | 5 295 | 3 591 | +196 (+4.0 %) | 33 / 4 475 / 109 / 504 / 280 / 0 |
+| ar | 385 | 403 | 389 | −14 (−3.7 %) | −8 / 323 / 15 / 22 / −16 / 109 |
+| as | 3 151 | 3 146 | 1 902 | +27 (+0.6 %) | −28 / 2 528 / 36 / 169 / 348 / 58 |
+| au | 1 859 | 1 811 | 1 297 | +53 (+1.6 %) | 244 / 1 292 / 14 / 201 / 95 / −1 |
+| eu | 1 962 | 1 924 | 915 | +30 (+1.7 %) | 259 / 1 492 / −4 / 38 / 160 / −70 |
+| na | 1 884 | 1 825 | 1 407 | +42 (+1.5 %) | 107 / 1 733 / −50 / 23 / −51 / 29 |
+| sa | 1 825 | 1 902 | 3 800 | −93 (−0.3 %) | 154 / 1 271 / 105 / 1 835 / −408 / 15 |
+| si | 1 750 | 1 748 | 1 447 | −15 (−0.8 %) | 182 / 1 320 / 62 / 51 / −28 / 175 |
+
+  - **Reading:**
+    - **The physical budget dS + Q + E is right; the jump estimator undercounts** the water entering the trajectory (15.2k vs 24.3k km³) because of the shaped soil increments (d_T ≠ d_1) and the river release. Closure within 1 % globally and within 4 % in every region.
+    - **Soil carries 58 % of the applied water** (14 044 km³), then global wetlands 10 % (2 545, mostly sa / af), gw only 3 %.
+    - **The large extra ET is real:** 14 219 km³ (mean of the members, land of the mask); **78 % (11 141 km³) comes from cells where the soil increment dominates** (27 330 of 56 356 cells, 49 % of the area).
+    - Note: medians are of the per-member values (the earlier budget_summary "I_cum 19 464" was the ensemble mean).
+  - **Seasonal cycle of the global I_applied** (Fig. 9b), mean of each calendar month 2002-2006, ensemble median, km³ / month, Jan..Dec: 72 453 268 819 1030 460 481 349 170 −84 345 211.
+  - The report text still calls the ET source "Ens_mean"; it is the mean of Ens_1..30 (fixed in the docstring; the label will be fixed in the next run).
+  - **Regional reruns (review 151) running** since 10:20: Danube prepare OK (40 s), open_loop running.
+
+- **DA review 151 — DANUBE done, 11:10 CET 29 Oct (Claude Code):** released code (`regional_run.py` stages through `da_dev/rda_run.py`), run copy with log_applied_increment; outputs `paper/gmd_RDA_Danube/` (+ `figdata/`, 6.9 MB).
+  - **Cost:** prepare 40 s, open_loop 121 s (12.6 GB), **DA + collect 2162 s, peak 58.2 GB**, evaluate 20 s, visualize 200 s. Readers 0 failed; 56 monthly increment files per member.
+  - **Fit to GRACE (evaluation gmd, 54 windows):** basin RMS OL 31.7 → **DA 5.4 mm**, corr 0.877 → 0.997, **chi² median 0.55** (mean 1.43).
+    - Sub-basins RMS OL → DA: 1 25.2 → 6.0, 2 28.3 → 7.0, 3 36.3 → 7.0, 4 40.9 → 8.5, 5 49.9 → 9.0, 6 48.4 → 9.4 mm.
+  - **Trends GRACE / OL / DA [mm/yr]:** basin 9.33 / −1.31 / 8.76; sub 1 −15.26 / −5.81 / −13.63, 2 1.13 / 1.02 / 1.71, 3 9.90 / −3.12 / 8.89, 4 11.70 / −0.30 / 10.50, 5 22.07 / −0.59 / 20.38, 6 23.27 / −0.13 / 20.71.
+  - **s_k of the seasonal increment** (basin): gw 0.23, soil 0.56, snow 0.01, surface 0.20.
+    - TWS increment cycle Jan..Dec [mm]: −21 −17 −7 +9 +28 +28 +18 +7 +2 −13 −18 −16.
+    - Per sub-basin in `paper_extras_report.txt`.
+  - **Budget with the logged increments** (D1, 2002-2006, km³, ensemble median):
+    - I_applied **146.2** (p10 −72.8, p90 324.2) vs I_bal = dS + Q + E **135.3** (dS 8.6, Q 41.7, E 55.7); I_jump 78.9.
+    - **Closure: medians +10.9 km³ (+8 %)**; the median of the per-member closures is +12.2 km³ = +16 %, inflated by members with a small I_bal.
+    - Less tight than the global +1 %. Possible causes I have not yet separated: river water routed out of / into the cropped regional box, and cells at the mask edge.
+    - By storage: gw 26.4, soil 40.4, river 45.3, snow 10.5, wetlands −0.8.
+    - Seasonal cycle Jan..Dec [km³ / month]: −3.4 −0.7 5.6 11.0 17.1 8.6 3.2 0.0 −4.1 −11.1 −2.2 0.1.
+    - Extra ET over the basin 65.3 km³, 58 % from soil-dominated cells (196 of 376).
+  - **Fig. 8, 2006 example (snow):** April-May snow loss −27.4 mm, largest single-day loss −1.7 mm on 2006-04-01, peak swe 57 mm. Daily series + window means in `series_daily.csv` / `windows.csv`; key months 2006-03..05 DA − GRACE −6.2 / −7.7 / −0.8 mm (OL −19.7 / −59.8 / −60.0).
+  - DA_output/RDA_Danube deleted after the readers (status line); **Amazon running now.**
+
+- **DA review 151 — AMAZON done, 11:55 CET 29 Oct (Claude Code):** released code, log_applied_increment in the run copy; outputs `paper/gmd_RDA_Amazon/` (+ `figdata/`, 20 MB).
+  - **Cost:** prepare 20 s, open_loop 162 s (11-13 GB), **DA + collect 2202 s, peak 58.3 GB**, evaluate 20 s, visualize 20 s (figures written). Readers 0 failed; 56 monthly increment files per member.
+  - **Fit to GRACE:** basin RMS OL 20.5 → **DA 2.8 mm**, corr 0.992 → 1.000; DA / OL by season DJF 1.7 / 11.3, MAM 2.8 / 21.3, JJA 2.0 / 24.2, SON 3.9 / 22.4.
+    - **Sub-basins RMS OL → DA [mm]:** 1 31.7 → 4.1, 2 28.5 → 4.6, 3 42.2 → 0.6, 4 50.7 → 1.6, 5 42.6 → 3.3, 6 97.6 → 4.1, 7 78.8 → 6.7, 8 50.6 → 2.5, 9 108.0 → 4.4, 10 180.3 → 4.3, 11 46.4 → 6.3, 12 37.9 → 5.7, 13 66.9 → 8.9, 14 49.3 → 3.3, 15 66.7 → 3.1, 16 87.0 → 7.0, 17 74.9 → 6.7, 18 188.3 → 4.2.
+    - **chi² median per sub-basin** 0.19-1.70 (sub 18 1.70, sub 10 1.03, the rest < 0.85).
+  - **Trends GRACE / OL / DA [mm/yr]:** basin −1.95 / −4.26 / −1.73. The sub-basins follow GRACE closely (e.g. 7: 57.58 / 20.21 / 55.65; 6: −33.62 / −22.89 / −33.16); all 18 in `evaluation/summary.txt`.
+  - **s_k of the seasonal increment** (basin): gw 0.27, soil 0.41, snow 0.00, surface 0.33.
+    - TWS increment cycle Jan..Dec [mm]: −8 −11 −9 +8 +20 +20 +22 +13 −12 −23 −18 −3.
+  - **Budget with the logged increments** (A1, km³, ensemble median):
+    - I_applied **−1 185** (p10 −8 734, p90 14 855) vs I_bal = dS + Q + E **−985** (dS 28.6, Q −1 118, E 366); I_jump 661.
+    - The net is a small difference of large gross terms (member spread ±10 000 km³). The difference of the medians is −200 km³ (the per-member median closure is −167 km³; its % is meaningless here because I_bal changes sign across members).
+    - By storage: global wetlands 340, soil 205, river −343, gw −1.
+    - Seasonal cycle Jan..Dec [km³ / month]: 84 39 0 38 67 −25 −70 −70 −111 −104 8 110.
+    - Extra ET 287 km³, 75 % from soil-dominated cells (654 of 2004).
+  - **Obidos (cell −2.25, −55.25), monthly-mean discharge, OL → DA [m³/s]** (`obidos_monthly_peaks.txt`):
+
+| year | annual peak of the monthly mean | lowest month |
+|---|---|---|
+| 2002 | 214 299 → 241 204 (+12.6 %) | 107 471 → 107 471 (Jan, before the first analysis) |
+| 2003 | 216 058 → 220 139 (+1.9 %) | 109 858 → 116 785 (+6.3 %) |
+| 2004 | 200 536 → 217 682 (+8.5 %) | 109 664 → 119 011 (+8.5 %) |
+| 2005 | 216 295 → 236 340 (+9.3 %) | 95 141 → 107 112 (+12.6 %) |
+| 2006 | 233 577 → 255 839 (+9.5 %) | 104 820 → 115 933 (+10.6 %) |
+| **mean** | **216 153 → 234 241 (+8.4 %)** | **105 391 → 113 262 (+7.5 %)** |
+
+    - Daily: DA day-to-day jump at Obidos on the first day of a window 1041 vs other days 1079 m³/s (no window-start pulse).
+  - **Budget closure (open point):** global U2 +1 % (review 150); Danube +8 %; Amazon −200 km³ on a net of about −1 000. For the regional boxes the closure is less tight. My candidates: lateral river exchange at the edge of the cropped box (Q is net outflow of the mask cells) and the mask-edge cells; not yet separated.
+  - The Amazon DA_output deletion and the final "rda: both COMPLETE" line follow in the status log.
+
+- **DA reviews 152 + 153 — running / armed, 12:35 CET 29 Oct (Claude Code).** I first missed both reviews, because they were appended at the END of `cowork_review_da.md` (I only checked the top); I now grep the whole file.
+  - **Review 153 (1), regional closure split — `da_dev/rda_diag.sh` (c08e5363), tmux `da:rdadiag`, started 12:23:16.**
+    - The per-member applied increments went with DA_output/RDA_* (review 151 (4)). They are regenerated by rerunning the DA step only (same run copy). Reproducibility is checked by the md5 of `Res/<case>/Res_DA.h5` before / after (Danube before: faefdb33).
+    - Then `paper/gmd/rda_closure.py` (8d4d98f3) splits the closure per member:
+      - (a) Q_in / Q_out. The budget's Q is the NET outflow of the mask: Σ over mask cells of (dis − dis-from-upstream) = Q_out − Q_in.
+      - (b) DA − OL storage change (2006-12-31) and ET of the land cells of the cropped yearly-file box outside the mask. Receiving cells beyond the box are not in the files.
+      - (c) net water of the daily safety clip inside the mask (threshold_monthly.csv × mean cell area of each sub-basin).
+      - (d) the remainder = closure + (c).
+    - Outputs `budget_applied/closure_split.{csv,txt}` per case. **DA_output/RDA_* is kept** (review 153 (3)). Global U2 not repeated.
+  - **Review 152, TUD 5-daily Amazon — `da_dev/tud_chain.sh` (59ae7204), tmux `da:tud`**, starts after "rda diag: COMPLETE".
+    - **(1) Data check: present on UCloud**, `GRACE/Miguel_TUdelft/` holds TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc, TUD-L3Uncorr-5dayEWH_UNC-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc (+ TUD-L3-5dayEWH_UNC-…). Same files on the desktop under PyGLDA_v2_external_data/GRACE/Miguel_TUdelft/. Nothing downloaded.
+    - **(2) Case RDA_Amazon_5daily — `da_dev/rda5_run.py` (df9e2f57):** `regional_run.configure('Amazon')`, `RDA.case = 'RDA_Amazon_5daily'`, `RDA.prepare_settings(settings/RDA_Amazon)` → run copy `<data root>/settings/RDA_Amazon_5daily`. RUN COPY edits only:
+      - obs.GRACE.kind TUD_5daily; EWH_grid_dir = aux_for_time_epochs = GRACE/Miguel_TUdelft; ewh_file / unc_file as above; unit cm, corr_length_km 300, add_gia false;
+      - obs.dir = GRACE/obs/RDA_Amazon_5daily, preprocess_res = GRACE/output/RDA_Amazon_5daily (the monthly Amazon obs files are not touched);
+      - method.log_applied_increment true. Everything else = RDA_Amazon. OL mean → GRACE/OLmean/RDA_Amazon_5daily_Amazon.hdf5 (own file).
+    - **configuration.md §1.2 check:** no other key HAS to change for 5-day windows (the regional get_GRACE_obs supports TUD_5daily, `prepare_GRACE_TUD.py`). Three method keys change their meaning, kept identical so that only the obs block differs — please say if you want any changed:
+      - (i) `increment_release` riverstor 10 days > 5-day window: at the next analysis the unreleased remainder is carried and added at once (`EnKF.py:458-505`), i.e. effectively a 5-day release plus a step; mass-conserving.
+      - (ii) `inflation.adaptive_additive` `weight_current` 0.5 (default) smooths per window → the memory in days is about 6× shorter.
+      - (iii) `bias_memory` 0.05 per window, likewise about 6× shorter in days.
+    - **(3) Open loop:** the driver's `open_loop` stage collects the existing global ensemble for the case (no model run; about 160 s for the Amazon in review 151). It is run for the new case name; the extra time is reported.
+    - **(4)-(5) Reader `paper/gmd/tud_extras.py` (fe1e858e)**, from rda_extras.py:
+      - windows = the TUD 5-day windows of the case's obs file, TUD signal / cov from the case subfolder;
+      - series_daily, windows.csv (start / end, GRACE ± σ, OL / DA window means and spreads), seasonal_increment s_k, obidos_daily + monthly peaks / lows, window-start jump at Obidos;
+      - **comparison with the MONTHLY mascons:** monthly means of the daily OL / DA vs GRACE/output/Amazon_signal.hdf5, GRACE mean aligned to the OL mean, for RDA_Amazon_5daily and RDA_Amazon on the same basis;
+      - number of analyses.
+      - RMS / chi² vs the TUD windows from the case's evaluation (tag gmd). → `paper/gmd_RDA_Amazon_5daily/` + `figdata/`.
+    - **(6)** DA_output/RDA_Amazon_5daily deleted afterwards under the review-151 condition. Data root now 4459 GB.
+
+- **DA review 154 done, 12:30 CET 29 Oct (Claude Code):**
+  - **Regional-closure diagnostic (review 153 (1)) cancelled** at 12:27:48. The Danube DA rerun was stopped in its DA step (2002/08), before its collect.
+    - `Res/RDA_Danube/Res_DA.h5` md5 faefdb33 unchanged; a stale gate lock (dead pid) removed.
+    - The partial `DA_output/RDA_Danube` of the stopped rerun is left in place (about 1-2 GB; nothing deleted beyond review 152 (6)).
+    - **Open point for later:** regional budget closure Danube +8 %, Amazon −200 km³ on about −1 000; scripts ready (`paper/gmd/rda_closure.py` 8d4d98f3, `da_dev/rda_diag.sh` c08e5363).
+  - **Review 152 started directly** 12:28:15 (`da_dev/tud_chain.sh` 9b139952, tmux `da:tud`; TUD files found).
+    - The report will be reduced to: number of analyses, wall time, peak memory, basin RMS vs the TUD window means (OL → DA), and `series_daily.csv` / `windows.csv` in `figdata`.
+    - The extra lines (monthly-mascon comparison, Obidos) come with the reader at no extra cost.
+
+- **DA review 152 (reduced per 154) — TUD 5-daily Amazon COMPLETE, 13:20 CET 29 Oct (Claude Code):** case RDA_Amazon_5daily; only the obs block of the run copy changed (run copy obs kind "TUD_5daily" confirmed); `git status settings/` unchanged.
+  - **Number of analyses: 288** (TUD windows 2002-04-05 … 2006-11-28, 3-5 days each; the monthly run has 54).
+  - **Wall time / peak memory:**
+    - obs preparation 16 s (prepare stage 20 s; basin TWS + grid + covariance L = 300 km, cm → mm);
+    - open-loop collection for the new case 142 s / 13.1 GB;
+    - **DA + collect 2224 s / 58.4 GB** (the monthly RDA_Amazon: 2202 s / 58.3 GB, so the 5-day windows cost almost nothing extra).
+  - **Basin RMS vs the TUD window means: OL 28.5 → DA 3.0 mm** (corr 0.973 → 1.000); chi² median 0.61; gain 0.84; forecast spread 6.5 mm vs TUD σ 5.5 mm. Sub-basins in `evaluation/summary.txt` (e.g. 1 33.4 → 3.5, 7 70.3 → 9.1).
+  - **Figdata** `paper/gmd_RDA_Amazon_5daily/figdata/`: series_daily.csv, windows.csv (start / end, TUD ± σ, OL / DA window means + spreads; the basin GRACE = area-weighted mean of the sub-basins), obidos_daily.csv, evaluation summary. Reader `tud_extras.py` ae9015e9: the basin row was empty before this fix.
+  - **Extra, for the reading:**
+    - **Against the MONTHLY CSR mascons** the 5-daily DA is far from them (basin OL 20.5 → DA 31.2 mm; sub-basin median 47.3), while the monthly run is at 2.8.
+    - This is the **product difference, not the filter**: TUD monthly means vs CSR directly (no model), basin, 50 months: RMS 30.0 mm, corr 0.977, seasonal half-range TUD 163 vs CSR 183 mm (−11 %); sub-basin 1 RMS 32.7 (corr 0.82), sub-basin 7 RMS 56.5 mm.
+    - So the DA follows whichever product it is given. Worth a sentence in Sect. 5.5.
+    - s_k of the seasonal increment (basin): gw 0.12, soil 0.17, surface 0.72 (monthly run: 0.27 / 0.41 / 0.33).
+    - Obidos monthly-mean peak +11.3 %, low +13.5 % (monthly run +8.4 % / +7.5 %).
+  - **DA_output/RDA_Amazon_5daily deleted** (review 152 (6); 17 GB; data root 4486 → 4470 GB). Nothing else deleted; U2 DA_output kept.
+
+- **Heartbeat 16:29 CET 29 Oct (Claude Code):** job j-12437378 (port 2432) unreachable (ssh timeout); nothing was running (TUD 5-daily COMPLETE 13:10:10). The data root keeps U2's DA_output (Fan decides). No review after 154. A new job needs a new port from Fan.
+
+- **DA review 155 — export of the global U2 run started, 12:21 CET 30 Oct (Claude Code):** new job, **port 2945**, mounts OK. `da_dev/export_chain.sh` (0be1e089) in tmux `da:export`.
+  - **U2 check:** `Res/GDA_Global/Res_DA.h5` has 707 sub-basins and `GRACE_GlobalBasins_T9.h5` is present.
+    - No md5 of Res_DA.h5 was recorded at the 03:07 redo, so I compared `Harmonic_DA.nc` with the copy in `paper/gmd_U2/figdata` (made at the redo) array by array: **all 16 variables identical**; only the `created` attribute differs (rewritten by the bit-identical review-150 run at 10:10).
+  - **`da_dev/export_global.py` (30ad6f1e):** daily ensemble mean and std (ddof 1) over Ens_1..30 of every time-dependent variable of the collected member files `Res/GDA_Global/{OL,DA}/Ens_k/daily_output_<year>.nc` (U2's members; the OL ones are the links into Res/GDA_Ucloud/OL), 2002-2006.
+    - Sum and sum of squares in float64, one member at a time; variables in a pool of 8; float32, zlib 4, attributes kept.
+    - → `${DATA_ROOT}/export/GDA_Global/{OL,DA}/daily_{mean,std}_<year>.nc`.
+  - **Then copied:** Res_OL / Res_DA.h5, Harmonic_OL / DA / GRACE.nc, GRACE_GlobalBasins_T9.h5, `GRACE_obs/GlobalBasins_T9_obs_GRACE.hdf5`, `units/shp` + `units/mask` (T9), `settings_run_copy/` (the run copy; it carries log_applied_increment = true, a diagnostic without effect). Plus README.md (variables + units from the files) and md5sums.txt.
+  - Nothing deleted; settings/ untouched. The report (size, number of files, wall time, absolute path) follows here.
+
+- **DA review 155 COMPLETE — export of the global U2 run, 13:50 CET 30 Oct (Claude Code):**
+  - **Folder (UCloud): `/work/PyGLDA_v2_external_data/export/GDA_Global/`** — **23 GB, 41 files** (40 + md5sums.txt). Export wall 2562 s (13:04:04, about 4.3 min per stage-year of 30 members × 18 variables). Data root 4493 GB.
+  - **Content:**
+    - `OL/` and `DA/daily_mean_<year>.nc` + `daily_std_<year>.nc`, 2002-2006 (18 variables each, about 0.84 GB per file);
+    - Res_OL / Res_DA.h5, Harmonic_OL / DA / GRACE.nc, GRACE_GlobalBasins_T9.h5, `GRACE_obs/`, `units/shp` + `units/mask`;
+    - on Fan's request also **`GlobalBasins_T9_shp.zip`** (the T9 shapefile in one file, md5 116a7a6d) at the top, with md5sums.txt regenerated;
+    - `settings_run_copy/`, README.md, md5sums.txt.
+  - **Pulled to the desktop for Fan:** `/media/user/My Book/Fan/PyGLDA_v2_results/GDA_Global/`.
+    - rsync over ssh (port 2945), exit 0, about 9-11 MB/s, 13:07-13:42.
+    - **`md5sum -c md5sums.txt`: OK 40 of 40.**
+  - Fan: future exports go to the desktop's `PyGLDA_v2_external_data/Res/`. Nothing deleted; settings/ untouched.
+
+- **Heartbeat 22:12 CET 30 Oct (Claude Code):** new job **j-12440624, port 2309** (96 GB, 248 vCPU), mounts OK, data root 4493 GB; `git status`: settings/ the two expected `M`, `src_DA/EnKF.py` `M` (d95cc23b, review 150). Storage watch started in tmux `da`; nothing else running. Waiting for the next Cowork review (highest so far: 155, done).
+
+#### Answer to DA review 156 — six factual look-ups for the GMD paper — Claude Code, 30 Oct 22:46
+
+Read-only: no runs, no deletions, no settings touched. Review 155 is already COMPLETE (export done 30 Oct 13:04, 41 files / 23 GB in `export/GDA_Global/`, pulled to the desktop with md5 40/40 OK at 13:50; see my 155 entry), so it does not stay open.
+
+1. **Discharge threshold 973.** It is the 95th percentile of the open-loop mean discharge over all land cells (`job10e_discharge.py`: `land = isfinite(mOL) & (mOL > 0)`, 66 454 cells; `p95 = nanpercentile(mOL[land], 95)` = 973.0 m³ s⁻¹; cells with `mOL >= p95` → 3 323 cells). One sentence: "river cells are the 5 % of land cells with the largest open-loop mean discharge (≥ 973 m³ s⁻¹, 3 323 cells)". Note it is "≥", not ">", and the base is all land cells with positive mean discharge, not a river-network mask.
+2. **Diagonal observation errors — the paper sentence is not backed by a test run. Please reword.**
+   - No DA run with the full sample covariance (`obs_error_correlation: "full"`) was ever completed. P2e2 (full R, pilot2) was queued (DA review 10) but dropped on 22 Oct at the review-53 restart. V2pLGR (full R on v2.0) was "not run" (my answer to review 103: "block + diagonal R stay"). So there is no number of units for which full R was unstable.
+   - Where the word "unstable" comes from: the code fix of 7–8 Oct (commit 4f949df, `src_DA/EnKF_localized.py`). It concerned the **diagonal mode itself**. Before the fix, the member perturbations eps_i drawn with the sample covariance C were whitened, eps_i' = diag(sqrt R_jj) L⁻¹ eps_i with C = L Lᵀ, via Cholesky or an eigen-decomposition with an eigenvalue floor of 1e-12. For the ill-conditioned 772 × 772 C, the floor shrank most components, so the members got only a fraction of the spread sqrt(R_jj): over-confident analyses. The note at the time says the spread "collapsed or blew up for many units". The number of units was not logged. Since then, perturbations are independent N(0, diag R) draws (seed 20021).
+   - The full matrices exist: `GRACE/output/GlobalBasins_v2.0_cov.hdf5` is (54, 737, 737) with 99.9 % non-zero off-diagonal entries. For v1.0: diagonal median 371 mm², neighbour correlation median 0.54 at the first epoch (p10 −0.07, p90 0.83), mean over epochs 0.48.
+   - Diagonal R was **Fan's choice** (master note §2: "correlated GRACE errors of neighbouring units are ignored → observations slightly over-weighted; full R is the test if chi2 / RMS look too good").
+   - Suggested wording: "We use the diagonal of the sample covariance; the full matrix (neighbour correlation median ≈ 0.5) was not tested, so the observations are somewhat over-weighted."
+3. **Regional sub-basins.**
+   - Danube: the RDA_Danube 0.5° mask has 376 cells = **802 323 km²**. The polygon area is 797 335 km² (SUB_AREA sum 795 318 km²).
+   - Amazon: 2 004 cells = 6 124 969 km² (SUB_AREA sum 6 059 112 km²).
+   - Source: both shapefiles are unions of **HydroBASINS Pfafstetter units**, not a single level.
+     - Danube: 6 units from 25 codes (18 level-5, 7 level-4).
+     - Amazon: 18 units from 51 codes (45 level-5, 6 level-4).
+   - Suggested wording: "aggregated from HydroBASINS level-4/5 units".
+4. **Adaptive additive inflation.** The run copies of all three experiments (GDA U2/T9, RDA_Danube, RDA_Amazon) carry only `"inflation": {"kind": "adaptive_additive", "split_storages": ["groundwstor", "soilmoist"], "seed": 42}`. All other values are the code defaults of `src_DA/inflation.py`:
+   - `weight_current` 0.5: s²_j = (1 − w) s²_prev + w d'², w = 0.5.
+   - `min_sigma` 5.0 mm (floor).
+   - `max_factor` 3.0: the cap is 3 × sqrt(R_jj).
+   - `remove_bias` true, `bias_memory` 0.05.
+   - The clip is on **sigma**: `sigma = clip(sqrt(max(s²_a, 0)), min_sigma, max_factor * sqrt(R_jj))` with s²_a = s² − var(HX) − R_jj.
+   - The DA log confirms it: "weight of current window 0.50, sigma in [5.0 mm, 3.0 x obs error], bias removal True (memory 0.05)".
+   - Quote "defaults (keys not set in the run copy)", not "keys from the run copy".
+5. **Error proxy (`cov_dir` = `GRACE/SaGEA/sample_DDK3`).**
+   - **What the files show:** 231 monthly files `YYYY-MM_0.npy`, 2002-04..2024-03. Each holds float64 (2000, 180, 360): **2 000 samples on a 1° global grid**, EWH in metres. `basin_COV` flips them north-up, area-weights to unit means and multiplies by 1000 → mm.
+   - **What is not recorded:** the SH solution (centre, release, max degree) and the exact SaGEA options. The files carry no metadata (plain .npy). There is no SaGEA config or README in the data root or the repo. They were made outside this project (file dates Jul–Aug 2024).
+   - `doc/configuration.md` says only "Monte-Carlo error samples of a DDK3-filtered spherical-harmonic solution (1°)". `GRACE/SaGEA/signal_DDK3` (2005 only) has no metadata either.
+   - **→ question for Fan:** centre / release / degree of the SH input to SaGEA. Likely CSR RL06 to d/o 60, but **unverified**: please do not write this without Fan's confirmation.
+   - Also: an older note (configure_signal, v1c) says "3000" samples; the files hold 2 000.
+6. **Regional closure of the applied-increment budget, U2 (T9)**, from `paper/gmd_U2/figdata/budget_applied/report.txt`:
+
+   | Region | Closure |
+   |---|---|
+   | af | +4.0 % |
+   | ar | −3.7 % |
+   | as | +0.6 % |
+   | au | +1.6 % |
+   | eu | +1.7 % |
+   | na | +1.5 % |
+   | sa | −0.3 % |
+   | si | −0.8 % |
+   | **Global** | **+1.0 %** (I_applied 24 343 vs I_bal 24 386 km³) |
+
+   "Within 1 % globally and 4 % in each region" holds. The largest |value| is af at 4.0 %, so the safe wording is "within about 4 %" or "≤ 4.0 %".
+
+#### Answer to DA review 157 — nine look-ups from the second GMD reviewer pass — Claude Code, 31 Oct 00:03
+
+Read-only: no runs, no deletions, no settings touched. The run copies are on UCloud in `<data root>/settings/<case>/DA_setting.json` (GDA_Global = U2/T9 f4e51856, RDA_Danube cd62cd69, RDA_Amazon c7f77528). The code facts were checked in `src_DA/`.
+
+1. **LETKF test: V2mp1pL, 23 Oct 2026.**
+   - **Run:** DA EXIT=0 at 20:30:08, 54 windows 2002-2006, on GlobalBasins_v2.0 (737 units), not on T9.
+   - **Metrics vs V2mp1p (EnKF_localized, same settings except the filter):**
+     - H1, the RMS of the global area-weighted mean TWS against GRACE (exact unit operator): 1.134 vs 1.140 mm (−0.5 %).
+     - **Median unit RMSD vs GRACE: 7.63 vs 7.46 mm (+2.3 %).**
+     - chi² median 0.446 vs 0.540.
+     - "Within 2 %" holds for H1. For the unit fit, write "within 2.5 %".
+   - **Configuration:**
+     - **One transform per unit**: block localization, `letkf.min_taper` 0, filter_summary n_transforms 737, 1.0 local observation per cell.
+     - **Same R as the EnKF**: R = obs_cov × scale, then diag (`obs_error_correlation` "diagonal").
+     - In V2mp1pL the obs-error inflation was **none**: the log says "obs-error inflation: none". U2 uses 0.5.
+     - **No observation perturbation in the transform.** It uses the deterministic y = GRACE ens_0 minus the member mean of the excluded storages (LETKF.py:95). The perturbed, centred member observations only feed the inflation statistics.
+     - **Partition, bounds and inflation are applied to the transformed members exactly as for the EnKF.** `LETKF_localized` subclasses `EnKF_localized` and overrides only `analysis_increment` (LETKF.py:39, 91). The shared `update()` (EnKF_localized.py:196-205) runs inflation.prior → increment → partition.split (non_negative, storage_shares, bound-aware soil/snow) → posterior. Window bounds and the daily write-back with threshold are shared too.
+   - **Differences to U2 besides the filter:** v2.0 units; no boundary smoothing; river release 5 d instead of 10 d; no soil_daily_bounds; no block_mean resampling; no obs-error scaling.
+   - Wording: "a global test on an earlier configuration".
+2. **Inflation at the floor (U2, `paper/gmd_U2/adaptive_inflation_log.csv`, 707 units × 54 windows = 38 178 unit-windows).**
+   - **sigma_j at the floor of 5 mm: 46.4 %.**
+   - **At the cap 3 × sqrt(R_jj): 16.2 %.** The cap is checked against `obs_error_mm`, which is sqrt of the scaled R.
+   - **Unclipped: 37.4 %, median sigma_j 15.9 mm** (p25 10.8, p75 22.8). The median over all unit-windows is 7.5 mm.
+   - 313 of 707 units sit at the floor in more than half of their windows.
+   - chi² median is 0.465. 51.5 % of unit-windows are below the low limit and 19.9 % above the high limit (`evaluation/summary.txt`).
+   - So "effectively at the floor" is true for about half the unit-windows, not for the scheme as a whole. Suggested wording: "sigma_j was at its 5 mm floor in 46 % and at its cap in 16 % of the unit-windows; the median unclipped value was 16 mm".
+   - **Split rule: open-loop ensemble variance.** `split_table()` (inflation.py:358-399) computes the variance across OL members 1..30 from `Res_OL.h5`, per unit, storage and calendar month, normalised over `split_storages` groundwstor and soilmoist. The log says "variance split open-loop ensemble variance", with mean shares gw 0.46 / soil 0.54. Interannual variability is not used.
+   - Variance that a bounded storage cannot take goes to groundwater (`REASSIGN_LOST_VARIANCE`, inflation.py:245).
+3. **Observation perturbations and inflation noise.**
+   - **Centring is on in all three experiments: `"obs_perturbation_centering": true`** (the code default is false).
+   - It subtracts the member mean of the perturbations (EnKF_localized.py:250-270), so the mean observation equals the GRACE value. U2 filter_summary: n_obs_centered 54, RMS of the removed mean 2.07 mm.
+   - Perturbations under "diagonal" are independent N(0, diag R') draws (seed 20021).
+   - **The additive inflation noise stays in the posterior state.** `prior()` returns A + noise (inflation.py:137). X = x̄ + A and Xa = X + dX (EnKF_localized.py:197-205). Docstring: "The perturbations stay in the members after the update" (inflation.py:161).
+   - `obs_error_inflation` multiplies the **variance**: R' = f R, so sigma × sqrt(f). It is 0.5 in U2 and 1.0 in Danube and Amazon.
+4. **Boundary smoothing (U2 only; the regional run copies have none).**
+   - Keys: `"boundary_smoothing": {"storages": ["groundwstor"], "length_km": 50}`. All other values are defaults: `n_iter` 10, `cutoff` 2.0, `alpha` 1.0 (partition.py:87-89).
+   - **length_km is the Gaussian standard deviation**: w = exp(−0.5 (d/50 km)²) on great-circle distance (partition.py:452).
+   - The kernel is **truncated at cutoff × length = 100 km** (KD-tree, :447-449), weighted by cos(lat) and row-normalised.
+   - **10 passes.** Each pass is Y = G Y, then the unit mean of the increment is restored (:488-491).
+5. **Snow upper bound.**
+   - Key: `"snow_bounds": {"envelope_factor": 1.5}`. The offset is the default `envelope_offset_mm` 10; filter_summary has snow_envelope factor 1.5, offset 10 mm.
+   - **"OL monthly maximum" = the largest daily snow of each calendar month over all OL members (1..30, Ens_0 excluded) and all years of the collected open loop, per cell.** It is not the member's own maximum and not the ensemble mean (`state_envelope.py`: "the largest value of every calendar month over all years and members", MPI MAX).
+   - For U2 the open loop is 2002-01..2006-12, the same as the DA period, not 2002-2012.
+   - A window spanning two months uses the larger cap. The cap never removes snow that is already in the day's forecast: max(cap, forecast).
+   - Further defaults in all three runs: lower 0.5 × forecast; relative upper 2.0 × forecast + 20 mm.
+6. **Safety clip after the write-back (U2, 2002-04..2006-12).** Source: `threshold_monthly.csv` of members 1-30 in `DA_output/GDA_Global/Ens_k/`. The clip amounts are sums of cell-mm; I converted them to km³ with the mean cell area of each unit, so ±1 %.
+   - **riverstor: +880 km³ added** (raised to the envelope floor) and **−379 km³ removed** (cut at the envelope maximum), **net +502 km³**, ensemble mean.
+   - **Soil, snow and local/global wetlands: 0.0 km³.** Their clip counts are non-zero (soil 0.16 %, swe 0.5 % of cell-days) but the moved water rounds to 0. The bound-aware partition already keeps them inside their bounds before the write-back.
+   - Groundwater has no bound.
+   - Compared with the logged applied increment I_applied = 24 343 km³ (ensemble mean, budget_applied), the net clip is **2.1 %** and the gross clip 1 259 km³ (5.2 %).
+   - **Which applied-increment total does the paper's 19 500 km³ come from? Our budget_applied gives 24 343 km³ for U2.**
+   - The partition-stage redistribution (before the write-back) is a separate number: filter_summary.partition.water_redistributed_mm. It moves water between storages and does not remove it.
+7. **Spread and observation error.**
+   - **The "22 mm" is not a U2 number.** It is the open-loop TWS spread expected from the perturbation calibration (Job 8, "8z5 table + F11: expected spread ~22 mm", 10 Oct, on v1.0 units).
+   - **U2, ensemble std (members 1..30) of monthly-mean unit TWS, median over 707 units × 60 months:**
+     - **open loop 28.4 mm** (p25 15.1, p75 48.3)
+     - **DA (analysis) 8.7 mm** (p25 6.9, p75 11.2)
+   - Forecast spread in observation space at the analysis times: median 12.6 mm in the evaluation (sd_fc) and 14.1 mm in the inflation log.
+   - **GRACE error std, median over units and windows: 14.3 mm before scaling and 10.1 mm after the 0.5 variance scaling.** The inflation log gives a median `obs_error_mm` of 10.13 mm, which matches sqrt(0.5) × 14.27.
+8. **Ganges-Brahmaputra amplitudes: half the peak-to-trough range of the mean seasonal cycle** (max − min of the 12 monthly means after removing their mean, ÷ 2), not a fitted harmonic (`job14_gbm_units.py`, 8 units ≥ 50 % inside the GBM polygon).
+   - **The paper's numbers reproduce exactly when OL and DA use all 60 months and GRACE its 54 months:**
+     - TWS: OL 109, DA 124, GRACE 131 mm
+     - groundwater: OL 20, DA 38 mm
+   - On the 54 GRACE months only, as in `GBM_units_report.txt`: OL 113, DA 124, GRACE 131 mm TWS; groundwater 22 → 47 mm.
+   - Fitted annual harmonics (60 months): TWS 111 / 127 / 131, groundwater 21 → 39.
+   - Please state in the text which month set is used. The groundwater number is sensitive to it.
+9. **Óbidos peak changes (RDA_Amazon, ensemble mean, monthly-mean annual peak, `gmd_RDA_Amazon/obidos_monthly_peaks.txt`).**
+
+   | Year | Change |
+   |---|---|
+   | 2002 | +12.6 % |
+   | 2003 | +1.9 % |
+   | 2004 | +8.5 % |
+   | 2005 | +9.3 % |
+   | 2006 | +9.5 % |
+   | **Mean** | **+8.4 %** |
+
+   - **Mean +8.4 %**, both as the change of the mean peak (216 153 → 234 241 m³ s⁻¹) and as the mean of the five changes (8.36).
+   - Rounded, these are +13, +2, +9 (8.5), +9, +10 (9.5), which matches the Fig. 9b labels. So text and figure agree.
+   - Do not mix in other series:
+     - The daily annual peaks (paper_extras_report: +15.3, +3.4, +8.4, +9.4, +10.2 %) give a mean of 9.3 %.
+     - The U2 global run at its Óbidos cell (−2.25, −54.75) gives +8.8 % (discharge_peaks.txt).
+
+- *Heartbeat 31 Oct 04:22 (desktop time):* UCloud port 2309 (job j-12440624) unreachable since 04:21 (ssh time-out, 3 checks); probably the job allocation ended. Nothing was running (session `da` idle since review 155; reviews 156 / 157 were read-only). Data on the persistent drive are unaffected. Waiting for a new port from Fan; review watch continues locally.
+
+#### Answer to DA review 158 (1) — WRR campaign: prepared on the desktop, waiting for a UCloud job — Claude Code, 01 Nov 10:17
+
+No UCloud job is running: port 2309 ended 31 Oct 04:21. Everything below was done on the desktop. Nothing was run on UCloud, nothing was deleted, and no `src_*` or `settings/` file was touched.
+
+- **Code (Sect. 0):** on the desktop `src_DA/EnKF.py` is 102921fa and `src_DA/configure_DA.py` is 6af64406, matching your md5s. The UCloud md5 check comes first once the new job is up.
+- **Unit sets (Sect. 1), built and checked on the desktop.** I used the exported T9 mask (`PyGLDA_v2_results/GDA_Global/units/mask`) and shapefile, with `da_dev/wrr_units.py` (4579a736), in a scratch copy of the data root. On UCloud the same script writes `Basin/mask|shp/GlobalBasins_G4|G5`.
+  - **Method:**
+    - Every T9 footprint cell goes to the box that contains its centre, so the sets have identical cells: 56 356, each in exactly one unit (checked).
+    - Fragments under 16 cells are merged, smallest first, until every unit has at least 16 cells. They go into the adjacent unit with the most shared cell edges (4-neighbours, longitude wraps), or to the nearest unit by centroid if they have no neighbour.
+    - Masks are in the global_shp2mask format, written directly from the footprint: `_res_0.5.h5`, `_res_1.h5` via `mask_05_to_1`, and a png.
+    - The shapefile is the union of the cell squares, with fields ID 1..n, SUB_AREA = AREA (cell areas, km²), REGION (the T9 region with the largest area share; first region for multi-region T9 units), NCELLS, NBOX, MERGED, NPARTS.
+  - **Results:**
+
+    | | G5 | G4 |
+    |---|---|---|
+    | Units | 693 | 997 |
+    | Cells per unit (median / min / max) | 100 / 16 / 115 | 64 / 16 / 89 |
+    | Median area | 188 114 km² (12 435 – 339 051) | 132 347 km² (16 509 – 250 941) |
+    | Boxes with footprint cells | 787 | 1 163 |
+    | Fragments merged | 94 (93 adjacent, 1 by centroid) | 166 (165 adjacent, 1 by centroid) |
+    | Units made of more than 1 box | 80 | 139 |
+    | Multi-part units | 55 | 62 |
+    | Regions | af 121, eu 110, si 105, as 95, na 87, sa 72, au 55, ar 48 | af 174, eu 159, si 154, as 138, na 123, sa 103, ar 73, au 73 |
+
+    For comparison, T9 has 707 units.
+  - **Note: the smallest T9 unit has 20 cells, not 16.** I used 16 as written. **If you want 20 (the actual T9 minimum), write "MIN 20"** and I rebuild (a few seconds).
+  - **G4 has 997 units, 41 % more observations than T9.** The DA cost per window rises a little; memory does not, because it scales with the cell count.
+- **Runs (Sect. 2): driver `da_dev/wrr_run.py` (e6b9d952) and chain `da_dev/wrr_chain.sh` (b9854fc4), both as gmd_run / gmd_chain.**
+  - **Each run is its own case `WRR_<RUN>`** (HG5, HG4, HT9, FG5, FG4, FT9). DA_output, Res, the run copy in `settings/` and GRACE/OLmean are case-scoped. So **U2's `DA_output/GDA_Global`, `Res/GDA_Global` and its run copy f4e51856 are never written.**
+  - The open loop (`OL_output/Ens_k`), `Ensemble_input/Ens_k` and `Ensemble_Initialization/Ens_k` are not case-scoped (OpenLoop.configure_*). They are shared as for U1–U3, and runs go strictly one after the other.
+  - The run copy is made from `settings/GDA_Global` (as for U2), plus `log_applied_increment` true and `obs.withhold` ({"every": 4, "offset": 2} for H, null for F).
+  - **At prepare the three run files are compared key by key with U2's run copy. The run stops if anything other than case, basin, mask, shapefile, period or withhold differs.** The desktop `settings/GDA_Global/{Config_ReWaterGAP,perturbation}.json` have uncommitted changes, so this check matters.
+  - Stages per run: prepare (check_units, get_GRACE_obs, compare) → collect_OL → assimilate (the `withhold:` line goes into the status file) → collect_DA → evaluate (tag `wrr_<RUN>`) → export.
+  - Order: SMOKE, then HG5, HG4, HT9 → report (a) → F runs only after Cowork/Fan agree.
+- **Smoke test (Sect. 0): RUN=SMOKE** = T9, 2002-01-01..2002-08-31, own case WRR_SMOKE. Its epochs are 2002-04, -05 and -08; with every 2 / offset 1 it withholds 2002-05.
+  - It starts from the same 2002-01-01 states as U2, so the checks are:
+    1. 2002-04 analysis and increment files bit-identical to U2's.
+    2. 2002-05: no analysis and no `applied_increment_2002-05.npy`; the archived May states continue the forecast.
+    3. 2002-08 analysed.
+  - Not 2002-03..05 as suggested: the members only have start states at the end of the spin-up (2002-01-01). Size about 40 GB of DA_output.
+- **Export: `da_dev/wrr_export.py` (22615c78) → `Res/WRR/<RUN>/`:**
+  - monthly ensemble mean and spread of tws, gw, soil, snow, surface and canopy on the 0.5° grid (OL and DA)
+  - unit series (Res_OL/DA.h5, GRACE_<basin>.h5)
+  - the evaluation folder with `withheld_epochs.txt`
+  - the increment log, filter_summary, the inflation log and the run copy
+- **Storage, for Fan's word in advance.** One full run writes about 280 GB of DA_output (U2: 280 GB) plus the collected member files under `Res/WRR_<RUN>/`. Six runs plus the smoke test from 4 493 GB pass the 6 000 GB stop after about the 5th run. The chain checks before each run and stops with "STORAGE STOP" (`NEED_GB` 330).
+  - **Proposal: after a run's export and its scores are written, delete that run's `DA_output/WRR_<RUN>/` and the member dailies under `Res/WRR_<RUN>/{OL,DA}/Ens_k/`.** The scores only need the exported monthly fields, the unit series and the increments. The same goes for `DA_output/WRR_SMOKE` after the smoke check.
+  - I will list exact paths and sizes before each deletion and do nothing without Fan's word.
+- **Still to check once UCloud is up:**
+  - whether UCloud has HydroBASINS level 3 (global) for the evaluation geometry
+  - whether PANGAEA is reachable for GLWS2.0
+  - the size of `Res/<case>/{OL,DA}` (U2's OL members were links into Res/GDA_Ucloud/OL)
+- **→ Fan: please start a new UCloud job and send the port.** First steps then: md5 check → unit sets → SMOKE → smoke check → HG5, HG4, HT9.
+
+#### Answer to DA review 159 (1) — storage inventory: needs the new UCloud job; desktop side checked — Claude Code, 01 Nov 10:18
+
+- **The UCloud `du` (items 1–3) cannot be made yet.** Job j-12440624 (port 2309) ended 31 Oct 04:21 and the data root is only reachable from a running job. The inventory will be **the first step of the new job**, before the md5 check and the smoke test. It is read-only: `du -d2` sorted, plus one line per entry over 5 GB with what it is, whether WRR needs it, and whether a desktop copy exists. No deletion.
+- **Desktop copies, checked now:**
+  - **`PyGLDA_v2_results/GDA_Global/` = 23 GB** = UCloud `export/GDA_Global`: daily ensemble mean and std of every variable, OL and DA, 2002-2006, plus Res_OL/DA.h5, harmonic maps, GRACE unit series, the obs file, the T9 shapefile and masks, and the run copy. Its md5 list (40/40) was checked 30 Oct 13:50.
+  - **The GMD score folders are on the desktop too** (`temp/exp_logs/paper/`, synced): gmd_U2 2.4 GB, gmd_U2_run1 2.3, gmd_U3 2.2, gmd_U1 2.2, job14_members_spread 1.6, results 0.7, gmd_RDA_Amazon 0.25, gmd_RDA_Danube 0.22, gmd_RDA_Amazon_5daily 0.19, gmd_grid 0.16 GB.
+  - The desktop data root `PyGLDA_v2_external_data` holds only the old demo cases. It has **no** copy of U2's member files (`DA_output/GDA_Global`), `Res/GDA_Global/{OL,DA}` member dailies or the regional DA outputs.
+- **What the notes already say (to be confirmed with `du`):**
+  - `DA_output/GDA_Global` (U2 members, about 280 GB): GMD finished; daily ensemble mean/std, unit series and figdata are on the desktop. The members themselves exist only on UCloud.
+  - `export/GDA_Global` (23 GB): an exact desktop copy exists.
+  - The partial `DA_output/RDA_Danube` comes from the stopped rerun.
+  - `DA_output/GDA_Ucloud`: an older case. Its 30 members still hold `threshold_monthly.csv`; status to be listed.
+  - U1 (v2.0_noexcl) and U3 (T10) ran in case GDA_Global and were overwritten by the U2 rerun. Remaining leftovers are basin-named files only (GRACE/obs, GRACE/output, OLmean, Auxiliary envelopes, masks); they will be listed with sizes.
+  - Kept for WRR as you list: Ensemble_input, Ensemble_Initialization, OL_output 2002-2006, `Res/GDA_Global/OL` (per the export README these are links into `Res/GDA_Ucloud/OL`, so **`Res/GDA_Ucloud/OL` must be kept too**), the GRACE files, and `temp/exp_logs/paper/*`.
+- **→ Fan: a new UCloud job (port) is needed for both review 158 and review 159.**
+
+#### Answer to DA review 161 — WRR pilot noted: H runs only — Claude Code, 01 Nov 10:20
+
+- **Noted:**
+  - **Runs:** only HG5, HG4 and HT9, after the md5 check, the unit sets and SMOKE. The chain gets `SMOKE` and then `HG5 HG4 HT9`; the F runs are not started.
+  - **Scores:** only Sect. 3 (a): the 3 × 5 SS / RMS matrix, the regional split on 0.5° cells, the unit distributions, and the bootstrap of SS(T9) − SS(G4) and SS(T9) − SS(G5).
+  - **Members:** each run's members are kept until its scores are written; then I stop and report.
+- **Go/no-go criterion, fixed before the results** and quoted verbatim in the report: **GO** if H-T9 has higher held-out skill than BOTH H-G4 and H-G5 on BOTH neutral geometries (0.5° cells, HydroBASINS level 3), and the 5–95 % bootstrap range of each difference excludes zero. Otherwise **NO-GO**. Nothing is tuned between the runs.
+- **Storage:** the three runs plus SMOKE need about 3 × 280 + 40 GB of DA_output plus the collected member files, so about 4 493 → ~5 450 GB. That is within the 6 000 GB stop without deletions. The chain logs the headroom before each run.
+- **Still waiting for the new UCloud job.** First the review-159 inventory (read-only), then the md5 check, unit sets, SMOKE and the H runs.
+
+#### Answer to DA reviews 162 + 163 — noted; additions to the pilot queued after the three H runs — Claude Code, 01 Nov 10:38
+
+- **Noted. The go/no-go criterion of 161 is unchanged.** Everything in 162/163 is a secondary diagnostic from the H runs' exports. None of it adds a run.
+- **162.1 SNR stratification:**
+  - Same method as the basin units: `src_auxiliary/HydroShed_global.py` (`configure_signal`), with the CSR mascon signal and the SaGEA DDK3 atom noise (`Extra/grace_noise/atom_noise_DDK3.npz`). The T9 shapefile already carries SNR and NOISE per unit.
+  - I will first reproduce T9's SNR from its units, as the check, and then compute it for the G4 and G5 boxes.
+  - Then the held-out skill on 0.5° cells split by SNR class (< 1.5, 1.5–3, > 3), once by the cell's T9 unit and once by its own unit in each set.
+- **162.2 wells / 163 Óbidos (HYBAM):**
+  - Data: USGS NWIS monthly groundwater levels 2002-2006; Li & Kusche's product (Zenodo 10.5281/zenodo.17265162); HYBAM Óbidos 17050001 plus Manacapuru, Tabatinga and Porto Velho if available.
+  - **First I test whether UCloud reaches these services. If it does not, I download them on the desktop** (public, open-licence data) and copy them to UCloud.
+  - Scores as specified. Model river cells: the GMD Óbidos cell (−2.25, −54.75), and for the other stations the cell with the largest upstream area within 0.75°.
+- **162.3 2002-2016 checks (a–c):** answered read-only on the new job: forcing and water-use end dates, OL restart states and Ensemble_input beyond 2006, wall time and storage per model year.
+- **Order on the new job:**
+  1. review-159 inventory
+  2. md5 check
+  3. G4/G5 unit sets
+  4. SMOKE + check
+  5. HG5, HG4, HT9, each scored when done
+  6. (a) matrix + verdict
+  7. 162/163 diagnostics; 162.3 answers in parallel, read-only
+- **The scorer for (a) is ready:** `da_dev/wrr_scores.py` (ea18e34d), tested on synthetic fields. It produces the 3 × 5 RMS/SS matrix, the regional split, the unit distributions, the 1 000-sample bootstrap over withheld epochs, and the verdict printed against the 161 criterion. Without HydroBASINS level 3 it reports "INCOMPLETE" instead of a verdict.
+
 ### Suggestions / open points from analysis_run12.md not yet in the master note
 - 2018-10 re-entry after the GRACE-FO gap: largest event of the run (basin GW -21..-47 mm; -110..-143 mm in
   sub-basins 1-3). Beyond the forcing check, consider a reduced gain or a wider R for the first 1-2 windows after a

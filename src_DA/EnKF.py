@@ -42,6 +42,12 @@ class EnKF:
         self._release_left = 0              # days still to release
         self._release_windows = 0
 
+        '''diagnostic log of the increment that enters the model state (method key "log_applied_increment",
+        default off): see _log_increment'''
+        self._inc_log = bool(getattr(self.DA_setting.method, 'log_applied_increment', False))
+        self._inc_month = None              # calendar month being accumulated ('YYYY-MM')
+        self._inc_vec = None                # its summed increment (state vector of this member, float64)
+
         '''daily soil increments within the soil bounds (method key "soil_daily_bounds", default off): see
         _soil_cap_config'''
         self._soil_cap = self._soil_cap_config()
@@ -52,8 +58,12 @@ class EnKF:
         smax.nc x land fraction x this factor, applied with the land fraction in run_mpi'''
         self._smax_multiplier = self._member_smax_multiplier()
 
-        '''obtain info'''
-        self._obs_helper = self.helper_resolve_time(obs.get_obs_aux())
+        '''obtain info; epochs listed by obs "withhold" are not assimilated (held-out validation, see withhold_epochs)'''
+        obs_aux, self._withheld = self.withhold_epochs(obs.get_obs_aux(), getattr(self.DA_setting.obs, 'withhold', None),
+                                                       self.DA_setting.basic.fromdate, self.DA_setting.basic.todate)
+        if self._withheld:
+            print('withhold: %d GRACE epochs are not assimilated: %s' % (len(self._withheld), ', '.join(self._withheld)))
+        self._obs_helper = self.helper_resolve_time(obs_aux)
 
         '''model re-configuration'''
         self._model.unit_converter= self._model.unit_converter.from_basin_mask(local_mask=self._sv.DM.local_mask,
@@ -159,14 +169,59 @@ class EnKF:
         """add the day's share of the withheld increment to today's state (saved file and the model's restart
         vector); only the released storages are re-checked by the threshold"""
         st = self._sv.load_state_dict(date=today)
+        st_before = {v: st[v].copy() for v in self._release['storages'] if v in st} if self._inc_log else None
         st = self._sv.restore_states(old_states=st, new_states=self._release_pending, isdelta=True)
         sub = self.threshold(state={v: st[v] for v in self._release['storages'] if v in st}, date=today)
         st = self._released_part(st, sub)
+        if self._inc_log:
+            self._log_increment(today, before=self._released_part(st, st_before), after=st)
         self._sv.save_to_nc(state=st, date=today)
         _per_contfrac = self._model.vertical_waterbalance._per_contfrac
         internal = self._model.unit_converter.state_dict_to_internal(state=st, per_contfrac=_per_contfrac)
         self._sv.regional2Dstate_transfer_global2Dstate(rs=internal, gs=self._states_predict)
         self._release_left -= 1
+
+    def _inc_dir(self):
+        from pathlib import Path
+        return Path(self.DA_setting.basic.DA_output_temp_dir) / self.DA_setting.basic.case / ('Ens_%d' % self._rank)
+
+    def _log_increment(self, date, before: dict, after: dict):
+        """
+        Diagnostic only (method key "log_applied_increment": true; it changes no result). Adds the water that enters
+        the state the model continues from - after the bounds, at the end of each window and on every day a released
+        share is added - to the sum of the calendar month of `date`, and writes each month to
+        <DA_output_temp_dir>/<case>/Ens_k/applied_increment_YYYY-MM.npy (float32, state vector of the basin mask
+        cells, cell-major, storages in the order of applied_increment_info.json, units of the daily output files).
+        With equal daily increments this equals the window-mean increment; with soil_daily_bounds it is the
+        increment of the last day of the window, and with increment_release the released storages enter day by day.
+        """
+        if not self._inc_log:
+            return
+        d = (np.asarray(self._sv.get_states_by_transfer_single(after), dtype=float)
+             - np.asarray(self._sv.get_states_by_transfer_single(before), dtype=float))
+        month = date[:7]
+        if month != self._inc_month:
+            self._flush_increment()
+            self._inc_month, self._inc_vec = month, np.zeros(d.size)
+        self._inc_vec += d
+
+    def _flush_increment(self):
+        """write the month being accumulated (and, once, the description of the vector)"""
+        if not self._inc_log or self._inc_vec is None:
+            return
+        import json
+        out = self._inc_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        info = out / 'applied_increment_info.json'
+        if not info.exists():
+            with open(info, 'w') as f:
+                json.dump({'storages': list(self._sv.DM.statesnn), 'n_cells': int(self._inc_vec.size // len(
+                    self._sv.DM.statesnn)), 'order': 'cell-major (all storages of cell 1, then cell 2, ...)',
+                           'cells': 'True cells of the basin mask (basin_2d) in row-major order',
+                           'mask': str(self.DA_setting.basic.basin_mask),
+                           'units': 'as the daily output files'}, f, indent=1)
+        np.save(out / ('applied_increment_%s.npy' % self._inc_month), self._inc_vec.astype(np.float32))
+        self._inc_month, self._inc_vec = None, None
 
     def _land_ratio_box(self):
         """land / continental fraction of the model's current day on the regional box (the factor WaterGAP applies
@@ -216,6 +271,7 @@ class EnKF:
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
+        self._rank = rank
 
         '''make sure that each ensemble is given a process'''
         assert size == self.DA_setting.basic.ensemble + 1
@@ -429,6 +485,8 @@ class EnKF:
                 if rank != OL_thread:
                     '''do not update the OL thread'''
                     last_day = his_day_datetime == info[1][-1]
+                    if self._inc_log and last_day:
+                        last_forecast = {v: states_old[v].copy() for v in states_old}
                     if release_now and last_day:
                         restart_forecast = {v: states_old[v].copy() for v in self._release['storages'] if v in states_old}
                     if self._thresholder.snow_cap is not None and 'swe' in states_old:
@@ -462,6 +520,10 @@ class EnKF:
                 #  from land_water_frac here — it has already been updated.)
                 _per_contfrac = self._model.vertical_waterbalance._per_contfrac
 
+                if self._inc_log:
+                    self._log_increment(info[1][-1].strftime('%Y-%m-%d'), before=last_forecast,
+                                        after=restart_state if release_now else new_state)
+                    last_forecast = None
                 '''to assign the last day to the current prediction vector to enable another round of kalman filter'''
                 new_state_internal= self._model.unit_converter.state_dict_to_internal(
                     state=restart_state if release_now else new_state, per_contfrac=_per_contfrac)  # convert to internal units
@@ -481,6 +543,9 @@ class EnKF:
         if self._release is not None and rank == main_thread:
             print('increment_release: %s released over %d days after each of %d windows'
                   % (self._release['storages'], self._release['days'], self._release_windows))
+
+        if rank != OL_thread:
+            self._flush_increment()
 
         '''clipping statistics of this member (printed to the rank log, saved next to its daily output)'''
         if rank != OL_thread:
@@ -502,6 +567,42 @@ class EnKF:
                 print('filter log not written: %s' % err)
 
         pass
+
+    @staticmethod
+    def withhold_epochs(obs_aux: dict, spec, fromdate: str, todate: str):
+        """
+        Remove GRACE epochs from the assimilation (held-out validation). The model still runs through these windows;
+        they are integrated like a gap in the GRACE record, so the archived states of a withheld window are a forecast
+        from the previous analysis and can be scored against the withheld observation.
+        spec (obs block "withhold", default null = assimilate everything):
+            {"every": 4, "offset": 0}  withhold the epochs whose position k (0, 1, 2, ... in time order, counting only
+                                       the epochs whose window lies inside [fromdate, todate]) has k % every == offset
+            {"epochs": ["2003-03", "2005-07-01", ...]}  withhold the epochs whose time_epoch starts with one of these
+        Returns (filtered obs_aux, list of withheld time_epoch strings).
+        """
+        if not spec:
+            return obs_aux, []
+        from datetime import datetime
+        t0, t1 = datetime.strptime(fromdate, '%Y-%m-%d'), datetime.strptime(todate, '%Y-%m-%d')
+        epochs, durations = list(obs_aux['time_epoch']), list(obs_aux['duration'])
+        inside = [k for k, d in enumerate(durations)
+                  if datetime.strptime(d.split('_')[0], '%Y-%m-%d') >= t0 and datetime.strptime(d.split('_')[1], '%Y-%m-%d') <= t1]
+        drop = set()
+        if 'every' in spec:
+            every, offset = int(spec['every']), int(spec.get('offset', 0))
+            assert every >= 2 and 0 <= offset < every, 'withhold: need every >= 2 and 0 <= offset < every'
+            drop = {k for pos, k in enumerate(inside) if pos % every == offset}
+        if 'epochs' in spec:
+            keys = [str(e) for e in spec['epochs']]
+            drop |= {k for k in inside if any(epochs[k].startswith(e) for e in keys)}
+        if not drop:
+            return obs_aux, []
+        keep = [k for k in range(len(epochs)) if k not in drop]
+        assert any(k in inside for k in keep), 'withhold: every epoch of the run period would be withheld'
+        out = dict(obs_aux)
+        out['time_epoch'] = [epochs[k] for k in keep]
+        out['duration'] = [durations[k] for k in keep]
+        return out, [epochs[k] for k in sorted(drop)]
 
     def helper_resolve_time(self, obs_aux: dict):
         """

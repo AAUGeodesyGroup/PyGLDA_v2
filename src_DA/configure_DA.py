@@ -121,6 +121,7 @@ class config_DA:
         def __init__(self):
             self.dir = None
             self.GRACE = {'kind': 'Mascon_monthly'}
+            self.withhold = None        # held-out validation: {"every": 4, "offset": 0} or {"epochs": [...]}, see EnKF.withhold_epochs
 
     class config_method:
 
