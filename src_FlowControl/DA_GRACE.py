@@ -42,10 +42,31 @@ class ensemble_model_daily_step(OpenLoop):
         pp.mkdir(parents=False, exist_ok=True)
         self.configure_Ens_output(output_dir=pp)
         self.configure_Ens_input(input_dir=configDA.basic.Ensemble_input_dir)
-        self.configure_ini_for_resume(save_init_dir=configDA.basic.Ensemble_ini_dir,
-                                      read_init_dir=configDA.basic.Ensemble_ini_dir)
+        save_dir, read_dir = self.restart_dirs(configDA, pp, self.ensemble_id)
+        self.configure_ini_for_resume(save_init_dir=save_dir, read_init_dir=read_dir)
 
         pass
+
+    @staticmethod
+    def restart_dirs(configDA, case_dir, ensemble_id):
+        """
+        Where a DA run reads its start states and saves its end states (2 Nov 2026, DA review 188).
+        Before, both were basic.Ensemble_ini_dir, so every DA run overwrote the ensemble's open-loop restart file of
+        its end date (e.g. restartwatergap_2006-12-31.pickle) with its analysis states. Now:
+          save: basic.DA_restart_dir if set, else <DA_output_temp_dir>/<case>/restart  (never the ensemble folder)
+          read: the save folder if it already holds this member's restart of the day before fromdate (a DA run that
+                continues an earlier DA segment of the same case), else basic.Ensemble_ini_dir (the open loop's).
+        """
+        save_dir = Path(getattr(configDA.basic, 'DA_restart_dir', None) or (Path(case_dir) / 'restart'))
+        if configDA.basic.Ensemble_ini_dir is not None and \
+                save_dir.resolve() == Path(configDA.basic.Ensemble_ini_dir).resolve():
+            raise ValueError('DA_restart_dir must not be the ensemble initialisation folder %s'
+                             % configDA.basic.Ensemble_ini_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        prev = (datetime.strptime(str(configDA.basic.fromdate), '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+        own = save_dir / ('Ens_%s' % ensemble_id) / ('restartwatergap_%s.pickle' % prev)
+        read_dir = save_dir if own.exists() else configDA.basic.Ensemble_ini_dir
+        return save_dir, read_dir
 
     def get_model_instance(self):
         return self.__model_instance

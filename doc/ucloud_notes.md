@@ -11059,6 +11059,2873 @@ No UCloud job is running: port 2309 ended 31 Oct 04:21. Everything below was don
   7. 162/163 diagnostics; 162.3 answers in parallel, read-only
 - **The scorer for (a) is ready:** `da_dev/wrr_scores.py` (ea18e34d), tested on synthetic fields. It produces the 3 × 5 RMS/SS matrix, the regional split, the unit distributions, the 1 000-sample bootstrap over withheld epochs, and the verdict printed against the 161 criterion. Without HydroBASINS level 3 it reports "INCOMPLETE" instead of a verdict.
 
+#### Answer to DA review 159 (2) — UCloud storage inventory (read-only) + a storage problem for the pilot — Claude Code, 01 Nov 10:45
+
+- **New job j-12441289** (port 2058), 32 cores, 96 GB. Mounts ok. md5 on UCloud = desktop for `EnKF.py` 102921fa, `configure_DA.py` 6af64406, `cf_conv.json` and all `wrr_*` scripts.
+- **Data root total 4 493 GB** (`du -d2`, full list in `da_dev/wrr_inventory_du.txt`). Nothing was deleted.
+- **Entries over 5 GB.** "WRR" says whether the pilot needs it; "desktop" says whether a copy exists on the desktop drive.
+
+  | Path | Size | What it is | WRR | Desktop copy |
+  |---|---|---|---|---|
+  | `archive_ensemble_E1/` | **755 GB** | Ensemble E1, archived by move. Ensemble_input 191, Ensemble_Initialization 16, OL_output 277, Res 271. **The production ensemble in the plain folders has the same table and seed (1421d1eb, 2026), and its OL_output is byte-identical in my sample** (Ens_0/7/30, 2002-01-01 and 2006-12-31). E1's Ensemble_input only covers 2000-2006 (84 months; plain: 156). E1's collected Res/GDA_Ucloud/OL is not byte-identical to the plain one (rewritten 29 Oct). | **no** (a duplicate of the plain ensemble) | no |
+  | `archive_ensemble_E3/` | **755 GB** | E3 (smax 0.5/1/1.5), not chosen. Same breakdown as E1. | no | no |
+  | `archive_ensemble_E2/` | **478 GB** | E2 (smax 0.707/1/2.0), rejected 27 Oct. OL_output already deleted; left: Ensemble_input 191, Ensemble_Initialization 16, Res 271. | no | no |
+  | `Ensemble_input/` | 355 GB | Production ensemble inputs, 31 members × 12 GB, forcing 2000-01..2012-12 | **yes** | no |
+  | `OL_output/` | 277 GB | Production open loop 2002-2006, 31 members × 9 GB | **yes** | no |
+  | `Res/GDA_Ucloud/OL` | 256 GB | Collected OL members 2002-2006. **U2's `Res/GDA_Global/OL` files are symlinks to these.** | **yes** | daily ensemble mean/std only |
+  | `DA_output/GDA_Global` | 283 GB | U2 (T9) members 2002-2006, run 29 Oct | no (the SMOKE check compares its 2002-04 increments) | daily mean/std + figdata only |
+  | `Res/GDA_Global/DA` | 262 GB | U2 collected DA members (daily_output_<year>.nc, 31 × 9 GB) + basin_ts | no | daily mean/std only (23 GB export) |
+  | `DA_output/GDA_Ucloud` | 282 GB | DA members of the 21 Oct global run in the old case GDA_Ucloud (v1.0 units), superseded by U2 | no | no |
+  | `Res/GDA_Ucloud/DA` | 266 GB | Collected members of that same 21 Oct run + Res_DA.h5 (4 GB) | no | no |
+  | `GRACE/SaGEA` | 228 GB | DDK3 samples (cov_dir) + mascons | **yes** | no |
+  | `Extra/outlier_ol_cache` | 69 GB | OL cache of outlier_check (v2.0, 2002-2006 / pilot / 2002-2012) | no | no |
+  | `Input_data` | 69 GB | WaterGAP forcing and static input | **yes** | partly |
+  | `Ensemble_Initialization` | 24 GB | Restart states 2001-12-31, 2006-12-31, 2012-12-31 | **yes** | no |
+  | `export/GDA_Global` | 23 GB | U2 export | no | **yes** (md5 40/40, 30 Oct) |
+  | `Res/RDA_Amazon`, `Res/RDA_Amazon_5daily` | 11 GB each | Regional GMD runs | no | figdata in `temp/exp_logs/paper` |
+  | `Res/demo_*` (5 folders) | 9 GB each | Old demo cases | no | no |
+  | `GRACE/Miguel_TUdelft` | 9 GB | TU Delft 5-daily product | no | no |
+  | `Extra/lisfHR3a` | 9 GB | LISFLOOD files | no | yes (`lisfHR3a.zip` on the desktop) |
+
+  - `DA_output/RDA_Danube` (partial rerun) is under 1 GB.
+  - U1/U3 leftovers are only basin-named small files: GRACE/output and obs about 2 GB in total, masks, OLmean.
+- **Storage problem for the pilot (review 161 assumed 3 × 280 GB).** A run writes its members twice:
+  - `DA_output/WRR_<RUN>` ≈ 283 GB
+  - the collected dailies `Res/WRR_<RUN>/DA/Ens_k/daily_output_<year>.nc` ≈ 262 GB, which the export reads
+  - So **about 550 GB per run.**
+  - I avoid a third copy for the OL: `Res/WRR_<RUN>/OL/Ens_k/daily_output_*` become symlinks into `Res/GDA_Ucloud/OL`, exactly as U2's `Res/GDA_Global/OL`. The three unit sets share the same 56 356-cell footprint.
+  - 4 493 + SMOKE about 70 + 3 × 550 ≈ **6 210 GB**, above the 6 000 GB stop. **SMOKE, HG5 and HG4 fit (about 5 660 GB). HT9 does not.** The chain (NEED_GB 560) stops before HT9 with "STORAGE STOP" unless something is deleted first.
+- **Deletion proposal for Fan's word** (nothing done). Any one of these makes room for HT9:
+  - **(A) `archive_ensemble_E1/` 755 GB**: a duplicate of the plain production ensemble (same table and seed; OL_output byte-identical in the sample). I can run a full `cmp` of OL_output and Ensemble_input 2000-2006 against the plain folders first, about 30 min read-only, if you want certainty.
+  - **(B) `archive_ensemble_E3/` 755 GB and/or `archive_ensemble_E2/` 478 GB**: rejected ensembles.
+  - **(C) `DA_output/GDA_Ucloud` 282 GB + `Res/GDA_Ucloud/DA` 266 GB**: the superseded 21 Oct v1.0 run.
+  - **(D)** After each WRR run's export and scores: its `DA_output/WRR_<RUN>` and `Res/WRR_<RUN>/DA/Ens_k/daily_output_*` (about 545 GB each).
+  - My recommendation: (A) or (C) now, so the pilot runs through without stopping; (D) later.
+- **Also checked:**
+  - UCloud reaches PANGAEA, Zenodo, USGS waterservices, HYBAM and hydrosheds.org (HTTP 200).
+  - **HydroBASINS level 3 is on UCloud only for eu and sa** (as has only level 6 unpacked). The af, ar, au, na and si level-3 zips are online (`data.hydrosheds.org`, HTTP 200). I download them (small) into `Extra/hybas_lev03/` for the HB3 geometry.
+  - GRACE grid for the scores: `GRACE/output/<basin>_gridded_signal.hdf5` (tws [54 epochs, 56 356 footprint cells], the same field the unit observations are averaged from).
+- **Next, now:** G4/G5 unit sets on UCloud are built (identical to the desktop numbers above). Then SMOKE starts in tmux da:wrr. It is small (about 70 GB) and its check needs U2's DA_output.
+
+#### Answer to DA review 164 — deletions done as listed (E1 comparison running); smoke test reworked and running — Claude Code, 01 Nov 10:59
+
+- **Script `da_dev/del_164.sh`** (f9500244, tmux da:del, log `da_dev/del_164.log`). Checks before each deletion:
+  - the path resolves inside the data root and is not the root
+  - no `/proc/*/fd` handle is open into it
+  - no symlink from outside points into it (all 12 389 absolute symlinks of the data root and `/work/PyGLDA` were listed first)
+- **Deleted:**
+
+  | Path | Size | Data root before → after | Time |
+  |---|---|---|---|
+  | `archive_ensemble_E2/` | 478 GB | 4 499 → 4 022 GB | 10:56:08 |
+  | `archive_ensemble_E3/` | 755 GB | 4 022 → 3 260 GB | 10:57:08 |
+  | `DA_output/GDA_Ucloud/` | 282 GB | 3 260 → 2 982 GB | 10:58:08 |
+  | `Res/GDA_Ucloud/DA/` | 266 GB | 2 990 → 2 732 GB | 10:58:33 |
+
+  - **`Res/GDA_Ucloud/OL` and the rest of `Res/GDA_Ucloud` are kept.**
+  - The "before" figures include the SMOKE prepare running alongside.
+- **`archive_ensemble_E1/`:** the full `cmp` of OL_output, Ensemble_input and Ensemble_Initialization against the plain folders is running. E1 is deleted only if every file is present and identical; otherwise nothing of E1 is deleted and the differing files are listed in `del_164.log`. Result to follow.
+- **Standing rule (4)** for the WRR runs is noted. It is applied after each run's export and scores are written and checked: only `DA_output/WRR_<RUN>/` and `Res/WRR_<RUN>/DA/Ens_k/daily_output_*`, with the same checks.
+- **Smoke test reworked:**
+  - **First attempt failed.** It was meant to run without a collect (linked OL plus U2's `basin_ts_OL.h5`), but `gather_OLmean` requires the collected OL of exactly the run period ("1826 days, the period … has 243").
+  - **Now:** SMOKE collects its own 8-month OL into `Res/WRR_SMOKE/OL`. Before that I removed my 155 symlinks from the first attempt there, so the collect cannot write through them into the shared `Res/GDA_Ucloud/OL` (Ens_1 there still has its 5 yearly files), and I removed my own copied `basin_ts_OL.h5` / `Res_OL.h5`.
+  - SMOKE0 (same period, nothing withheld) links to SMOKE's OL.
+  - **Check:** 2002-04 bit-identical between SMOKE and SMOKE0; SMOKE without a 2002-05 analysis or increment file; both analyse 2002-08.
+  - prepare reuses U2's T9 obs file (54 epochs, not rebuilt) and passed the key-by-key comparison with U2's run copy: only case, todate and withhold differ.
+  - SMOKE collect_OL is running since 10:57:54.
+
+#### DA review 158 Sect. 0 — smoke test PASSED; H runs started — Claude Code, 01 Nov 11:18
+
+- **SMOKE:** T9, 2002-01-01..2002-08-31, withhold every 2 / offset 1.
+  - collect_OL 121 s; assimilate 364 s, peak tree RSS 58 GB.
+  - Log: "withhold: 1 GRACE epochs are not assimilated: 2002-05-15".
+  - filter_summary: n_applied 2 / n_updates 2.
+- **SMOKE0:** same period, nothing withheld. Assimilate 571 s; n_applied 3 / n_updates 3.
+- **Checks** (`DA_output/WRR_SMOKE{,0}/Ens_k`):
+  - **2002-04:** `applied_increment_2002-04.npy` bit-identical in all 30 members (Ens_0 has no increment file in either run). Daily states of Ens_7 for 2002-01-01..04-30 identical, 120 of 120 files.
+  - **2002-05:** SMOKE has no May analysis.
+    - Its `applied_increment_2002-05.npy` holds **only riverstor**: the 10-day `increment_release` of the April analysis. Sum |inc| 218 956, equal to SMOKE0's river part; gw, soil, wetlands and swe are 0.
+    - SMOKE0's May file also has the May analysis (gw 460 473, soil 559 109, …).
+    - SMOKE has no `applied_increment_2002-06.npy`; SMOKE0 has it (the release of its May analysis).
+    - The May daily states differ from SMOKE0 (0 of 31 identical), as they should: forecast vs analysis.
+  - **2002-08:** analysed in both runs, increments different (3 of 3 sampled members).
+  - → **withhold works as specified:** no analysis in the withheld window, and the run before it is unaffected. Note for the budget readers: the river release from the analysis before a withheld window still enters the withheld month.
+- **Smoke leftovers, not deleted:** `DA_output/WRR_SMOKE`, `DA_output/WRR_SMOKE0` (8 months each), `Res/WRR_SMOKE/OL` (own 8-month collect), `Res/WRR_SMOKE0` (links) and the run copies. I can list sizes for a deletion word.
+- **H runs launched** in tmux da:wrr: `wrr_chain.sh HG5 HG4 HT9` (1dbd932b), order as in review 158.
+  - OL members of each case are linked into `Res/GDA_Ucloud/OL`, as for U2.
+  - Data root at launch about 2 830 GB; about 550 GB per run → about 4 500 GB at the end, within the stop.
+  - Per run: prepare → collect_OL → assimilate → collect_DA → evaluate → export. After the three: `wrr_scores.py`.
+  - Expected wall per run about 2.5–3 h (DA about 1.5–2 h); G4 has 997 units.
+- E1 `cmp` still running (da:del).
+
+- *Note 01 Nov 11:20:* **`GRACE/obs/GlobalBasins_T9_obs_GRACE.hdf5` was rewritten by the SMOKE / SMOKE0 DA at 11:07.** It is now 12.5 MB with the 8-month windows; it was 225 MB (U2, 29 Oct). The obs file is written by `DA_run` itself: the perturbed member observations of the run period, seeded. `get_GRACE_obs` only writes `GRACE/output/<basin>_{signal,cov,gridded_signal}.hdf5`.
+  - **Nothing is lost.** U2's file is on the desktop (`PyGLDA_v2_results/GDA_Global/GRACE_obs/`, md5-checked export). The T9 signal, cov and gridded files in `GRACE/output` are untouched (29 Oct 08:59). HT9's DA rewrites the file for 2002-2006 exactly as U2's run did.
+  - The scores read `GRACE/output/GlobalBasins_T9_gridded_signal.hdf5` (checked: its cos-lat unit means equal `GlobalBasins_T9_signal.hdf5` to 1e-5 mm).
+  - HG5 prepare built `GRACE/output/GlobalBasins_G5_*` (693 units, 56 356 cells, mask area / SUB_AREA 1.00; run copy vs U2: only case, units and withhold differ).
+- HydroBASINS level 3 for all 8 regions is downloaded (`Extra/hybas_lev03/`, 67 MB), and `wrr_scores.py` (37fea268) reads it.
+- Review 165:
+  - The Li & Kusche product (Zenodo 17265162, `JPL_mascon_downscaled-v2.0.nc`, 2.02 GB, CC BY 4.0) is downloading into `Extra/benchmarks/` and will be md5-checked against Zenodo's 7d51f349.
+  - IGRAC GGIS answers from UCloud; export without registration is still to be checked.
+  - **GRACE-SeDA-v1: not found under that name on Zenodo or the web. Cowork, please give the DOI or URL.**
+
+#### Answer to DA review 166 — benchmarks in place; smoke leftovers listed — Claude Code, 01 Nov 11:35
+
+None of this touched the running chain: HG5's collect_OL finished at 11:34:21 (874 s) and its DA is running.
+
+- **(1) GRACE-SeDA-v1** → `Extra/benchmarks/GRACE-SeDA/GRACE-SeDA_v1_2002_2022.nc` (+ readme.txt). Fetched through the ETH Research Collection API (the handle page answers 429/500 to scripts).
+  - **0.45 GB, CC BY 4.0** (dc.rights.license), issued 2023-12-20.
+  - 216 monthly fields 2002-04-17..2022-12-17 (MJD), 0.5° global grid.
+  - Variables: `twsa` (lon, lat, time), `uncertainty`, `twsa_baseline`, `mask`.
+  - md5 of the file: f11112ad (the repository gives no checksum).
+  - **Note for the paper:** its history says "forced by WaterGAP v2.2…", so like GLWS2.0 it is not independent of our model.
+- **(2) Jasechko et al. (2024)** → `Extra/benchmarks/Jasechko2024/`: AquiferSpatialData (14.2 MB), GroundwaterLevelData (30.1 MB) and SupplementaryTables (0.5 MB). **md5 identical to Zenodo** for all three (22d4a408, 13a74882, 718f0f05); CC BY 4.0. Not unpacked yet; nothing computed (for 2002-2016 only).
+- **Li & Kusche (review 165)** → `Extra/benchmarks/JPL_mascon_downscaled-v2.0.nc`, 2.02 GB, **md5 = Zenodo's 7d51f349**.
+- **(3) IGRAC / GRDC:** noted. I will copy `PyGLDA_v2_external_data/validation/{IGRAC,GRDC}/` from the desktop to UCloud `Extra/validation/` with md5 once Fan says they are complete.
+- **(4) Smoke leftovers, kept:**
+
+  | Path | Size |
+  |---|---|
+  | `DA_output/WRR_SMOKE` | 37 GB |
+  | `DA_output/WRR_SMOKE0` | 37 GB |
+  | `Res/WRR_SMOKE` | 35 GB (own 8-month OL collect + Res_OL.h5) |
+  | `Res/WRR_SMOKE0` | < 1 GB (links) |
+  | `settings/WRR_SMOKE{,0}` | 20 kB each |
+  | **Total** | **about 110 GB** |
+
+#### Answer to DA review 167 (1) — GJ needs a JPL file from Fan; resolvability analysis started on the desktop — Claude Code, 01 Nov 11:57
+
+- **The chain is untouched** (HG5 DA running since 11:34). The GO criterion stays on HG4 / HG5 / HT9 only.
+- **(1) GJ tiles: blocked, a file is needed.**
+  - JPL's mascon placement (`JPL_MSCNv04_PLACEMENT.nc`) and the RL06.3Mv04 gridded fields (non-CRI: `GRCTellus.JPL.200204_<end>.GLO.RL06.3M.MSCNv04.nc`) are only on PO.DAAC / GRACE Tellus, behind a NASA Earthdata login. Neither UCloud nor the desktop has credentials (no `.netrc`); grace.jpl.nasa.gov's direct link gives 404.
+  - The Li & Kusche file (`JPL_mascon_downscaled-v2.0.nc`) holds only the downscaled 0.25° field and its uncertainty, no tile geometry.
+  - **→ Fan: please download either the placement file (preferred) or the non-CRI RL06.3Mv04 netCDF from PO.DAAC** (dataset TELLUS_GRAC-GRFO_MASCON_GRID_RL06.3_V4) **into the desktop `PyGLDA_v2_external_data/validation/JPL/`**, or give me an Earthdata token to put into `~/.netrc`.
+  - Then I build GJ with `wrr_units.py` logic: tile of each footprint cell by centre, land part only, the same < 16-cell fragment rule, a PNG beside T9. HGJ is queued after `wrr_scores.py` of the pilot, with the storage check and rule 164 (4) applied.
+- **(3) Resolvability analysis: running on the desktop now (read-only, no UCloud cores)** → `da_dev/wrr_resolvability/`.
+  - **Geometries:** B1 / B2 / B3 (regular 1°, 2°, 3° on the footprint; 2°/3° boxes with < 4 cells merged by the G4/G5 rule; 1° not merged), G4, G5, T9, HB3. GJ is added when it exists.
+  - **Signal:** CSR RL06.3 mascon unit-mean std, reproduced from the T9 builder (`HydroShed_global.configure_signal`, period and debias as there).
+  - **Noise:** the DDK3 Monte-Carlo samples on the desktop copy (`GRACE/SaGEA/sample_DDK3`), the builder's 6 months → SNR.
+  - **Error correlation:** per month; the max neighbour correlation, and N_eff = (Σλ)²/Σλ² computed as trace(C)²/‖C‖²_F (identical, no eigen-decomposition needed).
+  - **Leakage (closed loop):** truth = U2 OL ensemble mean, monthly 2002-2006 (desktop export), ocean = 0. (a) the builder's 300 km Gaussian; (b) SH analysis to d/o 60 + DDK3 + synthesis.
+  - **Caveat on (b): d/o 60 is an assumption.** The degree of the SaGEA L2 input is still undocumented (review 156 item 5); Fan's answer would fix it.
+  - Outputs as specified (per-geometry CSV, summary table, maps for 1°, 3° and T9). GJ follows.
+
+#### DA review 167 (3) — GRACE resolvability analysis: results (desktop, read-only) — Claude Code, 01 Nov 12:12
+
+Everything is in `da_dev/wrr_resolvability/`: scripts, per-unit CSVs `units_<geom>.csv`, `summary.txt` / `summary.csv`, and maps of SNR and leakage (b) for B1, B3 and T9. Thresholds fixed beforehand: SNR ≥ 3, relative leakage < 0.25. "%" = share of the T9 footprint area.
+- (a) = the builder's 300 km Gaussian
+- (b) = spherical harmonics to d/o 60 + DDK3
+- "pass" = SNR ≥ 3 and leakage below 0.25
+
+| geom | units | median area [km²] | median SNR | % area SNR ≥ 3 | median leak (a) / (b) | % area leak < 0.25 (a) / (b) | **% area pass (b)** | % pass (a) | median max neighbour err. corr. | N_eff |
+|---|---|---|---|---|---|---|---|---|---|---|
+| B1 (1°) | 14 911 | 9 116 | 4.07 | 65.4 | 0.43 / 0.62 | 17.0 / 3.8 | **3.5** | 14.3 | 0.986 | 105 |
+| B2 (2°) | 3 837 | 34 970 | 4.11 | 66.4 | 0.31 / 0.53 | 37.6 / 9.1 | **8.7** | 30.1 | 0.949 | 104 |
+| B3 (3°) | 1 860 | 72 262 | 4.16 | 67.2 | 0.23 / 0.48 | 59.2 / 16.0 | **15.5** | 45.6 | 0.904 | 104 |
+| G4 | 997 | 132 347 | 4.20 | 68.6 | 0.17 / 0.39 | 73.3 / 25.6 | **24.6** | 57.2 | 0.849 | 97 |
+| G5 | 693 | 188 114 | 4.36 | 71.2 | 0.14 / 0.37 | 79.9 / 33.8 | **32.3** | 62.0 | 0.803 | 95 |
+| T9 | 707 | 160 644 | 4.99 | 73.4 | 0.15 / 0.33 | 75.5 / 30.1 | **29.6** | 60.7 | 0.807 | 89 |
+| HB3 | 204 | 427 078 | 5.53 | 87.8 | 0.11 / 0.30 | 88.6 / 62.1 | **60.7** | 82.6 | 0.537 | 66 |
+| GJ | pending (JPL file needed) | | | | | | | | | |
+
+- **Reading:**
+  - **Leakage decides, not noise.** The SNR ≥ 3 share barely changes from 1° to T9 (65 → 73 %). The DDK3 noise of a unit mean hardly falls with area (median 17.5 mm for B1, 14.6 mm for T9), because neighbouring errors are almost fully correlated (B1 0.99).
+  - **N_eff stays about 95–105 for all boxes from 1° to 5° (T9 89, HB3 66).** GRACE gives about 100 independent pieces of information over the footprint; units below about 4° add no independent information.
+  - Under (b), the area resolved by both criteria grows from 3.5 % (1°) to about 30 % (G5 / T9) and 61 % (HB3).
+  - The damping gain under (b) is 0.76 (B1) to 0.87 (T9).
+  - **T9 vs G5 at similar size:** T9 is a little better on SNR and leakage (b) (73 vs 71 %; 0.33 vs 0.37) and about equal on the "pass" share (29.6 vs 32.3 %).
+- **Methods and assumptions:**
+  - **Signal:** the builder's `load_grace_mascon`, CSR RL06.3 **2002-04..2024-07** (235 months), 2×2 mean to 0.5°, anomaly about the time mean without detrending (trends included, as in `configure_signal`). Debiased signal = sqrt(raw² − noise²). Unit means are cos-lat weighted over footprint cells (the builder used level-6 atoms).
+  - **Noise:** the builder's 6 DDK3 months (2003-07, 2008-07, 2012-03, 2016-08, 2019-07, 2022-01; confirmed from `atom_noise_DDK3.npz`). Samples are south-first and were flipped; nearest-neighbour onto the 0.5° footprint; std over 2 000 samples, RMS over the months. Check: B1 vs the builder's atoms for 2003-07, 15.4 vs 15.6 mm.
+  - **N_eff = trace(C)²/‖C‖²_F**, the mean over the 6 months (range per geometry e.g. T9 58–103).
+  - **Truth:** U2 OL ensemble-mean tws, monthly 2002-2006 anomalies. Ocean and non-model cells = 0. Greenland non-footprint cells = 0, as in the builder's `configure_leakage` (Iceland kept).
+  - **(a):** the builder's kernel exactly (sigma 127.4 km, cut 2.5 sigma, land-normalised). A variant normalised with ocean zeros is in the CSVs as a0.
+  - **(b):**
+    - **lmax 60 assumed** (the SaGEA input degree is undocumented)
+    - EWH ↔ Stokes with load Love numbers; DDK3 = `Wbd_2-120.a_1d12p_4`
+    - degrees 0/1 kept unfiltered
+    - SH round trip validated (band-limited field: coefficient error 1e-5)
+  - **Fragments:** B2 and B3 merge boxes under 4 cells (B2 240, B3 108); B1 has none. HB3: 640 coastal cells were filled from the nearest basin.
+  - **Desert caveat:** units with a near-constant truth fail the leakage test by construction (relative error on a tiny std). 467 B1 units have a true std < 1 mm; 3 Sahara B1 boxes have std 0 (set to fail).
+- Runtime about 10 min on the desktop, peak 4 GB.
+
+#### Answer to DA review 168 — resolvability follow-ups 1–7 (desktop, read-only) — Claude Code, 01 Nov 12:39
+
+- **(6) Paths:**
+  - Working folder: **`/media/user/My Book/Fan/PyGLDA_v2/temp/exp_logs/da_dev/wrr_resolvability/`** (under `temp/`).
+  - Copied for Cowork to **`/media/user/My Book/Fan/PyGLDA_v2_results/WRR/resolvability/`**: summary.csv / .txt, summary_regions.csv, summary_equal_size.csv and the 6 map PNGs.
+  - New columns are in `units_<geom>.csv` and summary.csv (48 columns); summary.txt has an "ADDITIONS (review 168)" section.
+- **(1) (2) (5) Leakage variants.** "pass" = % footprint area with SNR ≥ 3 and the criterion met.
+  - b′ / a′ = gain-corrected: OLS of the exact unit mean on the processed one, residual RMS / std(exact).
+  - "abs" = leakage RMS < 1.5 × the unit's GRACE noise. k = 1.5 is the builder's v2.0 recipe (the docstring call); the `configure_leakage` default is 1.0.
+  - "kept" = after excluding units with std(exact) < 5 mm.
+
+  | geom | pass (b) | pass (b′) | pass (a′) | pass abs (b) | pass abs (b′) | area with std < 5 mm (units) | pass (b), kept | pass (b, lmax 96) |
+  |---|---|---|---|---|---|---|---|---|
+  | B1 | 3.5 | 9.9 | 25.1 | 24.7 | 36.1 | 11.9 % (1 439) | 4.0 | 3.6 |
+  | B2 | 8.7 | 19.4 | 41.3 | 32.2 | 43.8 | 10.3 % (321) | 9.8 | 8.8 |
+  | B3 | 15.5 | 29.6 | 52.8 | 38.9 | 51.1 | 10.0 % (145) | 17.2 | 15.5 |
+  | G4 | 24.6 | 40.9 | 61.4 | 46.8 | 59.1 | 8.8 % (71) | 26.9 | 24.6 |
+  | G5 | 32.3 | 49.1 | 65.7 | 52.7 | 64.1 | 8.0 % (43) | 35.2 | 32.4 |
+  | T9 | 29.6 | 47.4 | 65.4 | 49.0 | 62.6 | 8.5 % (33) | 32.4 | 29.6 |
+  | HB3 | 60.7 | 76.7 | 84.8 | 71.9 | 84.7 | 7.2 % (14) | 65.4 | 61.5 |
+
+  - **Gain correction about doubles the pass share for small boxes**, but B1 still passes on only 10 %.
+  - **Excluding near-constant units changes little**, so the low shares are not a small-denominator artefact.
+  - **lmax 96 ≈ lmax 60**, because DDK3 already removes the content above degree 60 (round-trip error 8e-5).
+  - Note: the absolute criterion uses the RMS of the monthly leakage error, while the builder applies k to the annual-amplitude leakage. Analogous, not identical.
+- **(3) Independent information** (median over the 6 noise months; exact through the 2000 × 2000 dual):
+
+  | geom | noise PR | noise eigenvalues for 90 % | for 99 % | signal PR | signal eigenvalues for 90 % | for 99 % |
+  |---|---|---|---|---|---|---|
+  | B1 | 108.7 | 218 | 597 | 4.4 | 17 | 48 |
+  | B2 | 108.2 | 212 | 574 | 4.2 | 14 | 46 |
+  | B3 | 110.4 | 208 | 550 | 4.0 | 13 | 43 |
+  | G4 | 102.7 | 192 | 480 | 3.8 | 12 | 41 |
+  | G5 | 102.5 | 182 | 420 | 3.6 | 12 | 40 |
+  | T9 | 93.3 | 168 | 390 | 3.5 | 11 | 39 |
+  | HB3 | 74.3 | 108 | 177 | 3.3 | 10 | 33 |
+
+  - The noise PR equals the earlier trace/Frobenius N_eff exactly.
+  - The 90 % counts are about 2 × PR and also saturate (about 210 from 3° down to 1°).
+  - **Caveat:** the signal PR comes from only 60 monthly fields (rank ≤ 59) and is dominated by the globally coherent seasonal cycle. It is not a spatial-resolution measure like the noise PR.
+- **(4) Equal size.** Boxes interpolated in log10(median area) to T9's median area:
+
+  | criterion | boxes at T9's size | T9 |
+  |---|---|---|
+  | SNR ≥ 3 & (b) | 28.9 | 29.6 |
+  | SNR ≥ 3 & (b′) | 45.4 | 47.4 |
+  | SNR ≥ 3 & (a) | 59.8 | 60.7 |
+  | SNR ≥ 3 & abs (b) | 50.0 | 49.0 |
+  | SNR ≥ 3 only | 70.0 | 73.4 |
+
+  → **At equal size the basin units bring no clear resolvability gain** (−1 to +2 points; +3.4 on SNR alone).
+
+  Per region, T9 vs G5 (cell basis, SNR ≥ 3 & (b); (b′) in brackets):
+
+  | | af | ar | as | au | eu | na | sa | si |
+  |---|---|---|---|---|---|---|---|---|
+  | T9 | 21.9 (33.3) | 20.3 (56.7) | 19.9 (35.8) | 8.0 (31.1) | 42.8 (58.3) | 38.4 (60.9) | 41.8 (58.8) | 39.9 (62.3) |
+  | G5 | 28.1 (38.7) | 8.7 (26.1) | 20.9 (34.2) | 13.4 (29.8) | 42.0 (64.1) | 34.6 (65.3) | 57.2 (70.7) | 36.2 (52.8) |
+
+  T9 is ahead in ar, na and si; G5 in af, au and especially sa.
+- **(7) T9 median area — one number with its definition:**
+  - **159 736 km² = median of the shapefile `AREA`** (the builder's polygon area = sum of its level-6 atoms; p10 96 086, p90 268 712, mean 180 983).
+  - **160 644 km² = median of the footprint-cell area** (the 0.5° cells of the mask, cos-lat areas), as used in the resolvability tables. That is +0.6 %, the effect of the 0.4 area rule and model land.
+  - For the paper I suggest the builder's 159 736 km² ("polygon area"). The resolvability and scorer tables use cell areas.
+- Runtime of the additions about 2 min on the desktop, peak 2.1 GB.
+
+#### WRR pilot progress lines (review 169) — Claude Code
+
+- 01 Nov 14:17 catch-up:
+  - **HG5 COMPLETE** 13:08:36: prepare 100 s, collect_OL 874 s, assimilate 3 439 s, collect_DA 1 017 s, evaluate 60 s, export 1 083 s. Export 9 GB; data root 3 394 GB.
+  - **HG4:** prepare 80 s (13:10), collect_OL 915 s (13:25); assimilate running since 13:25, at 2004-10 by 14:01.
+  - **Expected:** HG4 done about 15:20, HT9 about 17:10, `wrr_scores.py` about 17:20; the chain ends about 17:30.
+
+- 01 Nov 14:30 HG4 assimilate EXIT=0 14:30:24, wall 3 866 s; withheld the same 13 epochs as HG5; data root 3 686 GB. Next: collect_DA, evaluate, export. Expected: HG4 done about 15:10, HT9 about 17:00, scores about 17:10, chain end about 17:20.
+
+#### Answer to DA review 170 — E3 built; HE3 queued after the pilot scores — Claude Code, 01 Nov 14:44
+
+- **GJ and the JPL request dropped.**
+- **E3 = equal-area 3° tiles:** `da_dev/wrr_units.py E3` (095efdfc). Rules:
+  - bands 3° high (edges −90, −87, …)
+  - n = max(1, round(120 cos φ)) tiles per band, equal width, first edge at 0° E
+  - footprint cells by centre; fragments under 4 cells merged by the B2/B3 rule
+- **Built on UCloud** in `Basin/mask|shp/GlobalBasins_E3` (+ png; identical to the desktop test build):
+  - **4 584 tiles globally** (JPL: 4 551)
+  - **1 398 units** on the 56 356-cell footprint
+  - **area p10 / median / p90 = 35 440 / 106 980 / 117 165 km²**
+  - 82 fragments merged (81 adjacent, 1 nearest by centroid); 70 multi-part units
+  - regions af 307, as 215, eu 192, sa 178, na 177, au 132, si 129, ar 68
+  - The refactor leaves G4/G5 bit-identical (G5 rebuilt and compared).
+- **Queued:** `da_dev/wrr_after.sh` (5752d2fa, tmux da:after, armed 14:43:50). It waits for "CHAIN COMPLETE (HG5 HG4 HT9)", then:
+  1. `wrr_scores.py` on HG5 / HG4 / HT9 → `temp/exp_logs/paper/wrr/`. **The verdict (review 161) comes from these three only.** E3 enters there as an extra evaluation geometry.
+  2. `wrr_chain.sh HE3`: HT9's configuration with E3 units; storage check; export; rule 164 (4) after the scores.
+  3. `wrr_scores.py` with HE3 → `temp/exp_logs/paper/wrr/with_E3/`.
+- **Resolvability:** the E3 row (all columns of reviews 167/168) is being added on the desktop. summary.csv / summary.txt / maps are re-copied to `PyGLDA_v2_results/WRR/resolvability/`.
+- **Expected:** pilot scores about 17:10; HE3 about 19:00–19:20 (1 398 units, about 2 × T9's observations); second scoring about 19:30.
+
+- 01 Nov 14:44 HG4 collect_DA EXIT=0 14:44:10 (811 s); data root 3 953 GB. wrr_after.sh armed 14:43:50. Expected chain end (HT9) about 17:00, pilot verdict about 17:10, HE3 about 19:15.
+
+- 01 Nov 14:46 wrr_after.sh false start 14:44:44: its own 'armed' line contained the trigger text, so wrr_scores.py ran on missing exports and stopped (EXIT=1, no files written, pilot chain unaffected). Fixed (f203e5f5: trigger = 'PROD: wrr HT9: CHAIN COMPLETE') and re-armed 14:46:14. HG4 evaluate done, export running since 14:46.
+
+#### DA review 170 (2) — E3 row in the resolvability tables — Claude Code, 01 Nov 14:51
+
+- E3 has been added to every resolvability output: all columns of reviews 167 and 168, the regional table, and the maps `map_SNR_E3.png` / `map_leak_b_E3.png`.
+- Copied to `PyGLDA_v2_results/WRR/resolvability/` (summary.csv / .txt, summary_regions.csv).
+- The rerun with E3 left every value of the 7 existing geometries unchanged (max |diff| 0.0).
+
+| | E3 | T9 |
+|---|---|---|
+| units / median area [km²] | 1 398 / 106 980 | 707 / 160 644 |
+| median SNR; % area SNR ≥ 3 | 4.17; 68.7 | 4.99; 73.4 |
+| median noise [mm]; median max neighbour err. corr. | 16.7; 0.885 | 14.6; 0.807 |
+| N_eff (range); noise eigenvalues for 90 / 99 % | 106 (74–121); 206 / 544 | 89; 168 / 390 |
+| median leak (a) / (b) / (b′) | 0.20 / 0.46 / 0.31 | 0.15 / 0.33 / 0.24 |
+| **% pass SNR & (b)** / (b′) / (a) | **19.0** / 34.0 / 50.4 | **29.6** / 47.4 / 60.7 |
+| % pass SNR & abs (b) / abs (b′) | 42.0 / 54.2 | 49.0 / 62.6 |
+| units with std(exact) < 5 mm (area); pass (b) without them | 9.5 % (124); 21.0 | 8.5 % (33); 32.4 |
+| % pass (b, lmax 96) | 19.0 | 29.6 |
+
+- **Reading:** E3 behaves like a regular box set of its size. Its median area lies between B3 and G4, and so does its main pass share: 19.0 % vs B3 15.5 % and G4 24.6 %. N_eff and the 90 % count are close to B3's.
+- Per region, SNR & (b) with (b′) in brackets:
+
+  | | af | ar | as | au | eu | na | sa | si |
+  |---|---|---|---|---|---|---|---|---|
+  | E3 | 13.7 (24.4) | 6.1 (19.5) | 10.8 (21.9) | 6.3 (20.9) | 38.7 (50.3) | 16.6 (41.2) | 24.7 (45.4) | 28.4 (46.3) |
+
+  T9 and G5 are as in the review-168 table.
+- The equal-size interpolation is unchanged (boxes only, as specified).
+
+- 01 Nov 15:05 HG4 COMPLETE (export EXIT=0 15:05:38, 1 164 s; evaluation folder now included). Data root 3 966 GB. HT9 starting. Expected: HT9 done about 17:05, pilot verdict about 17:10.
+
+- 01 Nov 15:15 Review 171 (IGRAC GGMN) started on the desktop: integrity check of the 50 country zips (re-extract incomplete ones from the outer zip into validation/IGRAC/reextract/), conversion to validation/IGRAC/ggmn_monthly + ggmn_stations; then copy with md5 to UCloud Extra/validation/IGRAC/. The chain is untouched (HT9 collect_OL running).
+
+- 01 Nov 15:19 HT9 prepare EXIT=0 15:06 (U2's T9 obs reused; run copy vs U2: only case / withhold differ); collect_OL EXIT=0 15:18:54 (729 s); assimilate running. Data root 3 973 GB. Expected: HT9 done about 17:05, pilot verdict about 17:10.
+
+- 01 Nov 15:29 **AUS (review 172): NOT complete — Fan, please re-download GGMN for Australia.** (a) The outer 9.66 GB zip itself is complete: CRC test over all 51 members passes (zipfile testzip = None). Its member AUS-ggmn.zip (982 325 bytes) is byte-identical to the extracted copy (md5 71ffed7c) and reads with a correct CRC, so the truncation is already in what IGRAC served, not a broken download. The AUS archive holds 29 top-level local entries, all monitoring/*.ods, and ends right after the last one: no wells.ods, no drilling_and_construction.ods, no central directory of its own (a zip reader finds only the directory of the last embedded .ods, which is why it seems to open). (b) not applicable, no wells.ods so no providers. The other countries are being checked and converted by the review-171 job.
+
+- 01 Nov 15:33 Review 173 noted: the IGRAC repository export (28 countries) is added to the review-171 job (integrity incl. own-directory check, conversion with source GGMN / repository, duplicates within 100 m and the same provider kept once, preferring GGMN; FRA / IND re-extract findings). AUS: the new export will be used once Fan's re-download is there. Copy to UCloud with md5 after the conversion.
+
+- 01 Nov 15:51 Review 174 noted: IGRAC AUS dropped; the BOM Australian Groundwater Explorer (8 states, gdb + level csv, CC BY 4.0) is added to the same desktop job (join on hydroid, one datum per bore RSWL > DTW > SWL, UNKNOWN duplicates dropped, quality flag kept, source = BOM); then copied to UCloud with the IGRAC files.
+
+- 01 Nov 15:59 Review 175 (groundwater validation spec) noted. Starts after the pilot verdict and the combined well table: da_dev/wrr_wells.py on the desktop, read-only, outputs in temp/exp_logs/paper/wrr/wells/. Open input: USGS NWIS monthly levels are not downloaded yet (review 162). I will fetch them on the desktop (waterservices.usgs.gov, CONUS, 2002-2016) after the IGRAC / BOM job, unless Cowork prefers otherwise.
+
+#### Answer to DA reviews 171 / 173 / 174 — well tables (IGRAC GGMN + repository + BOM) done and on UCloud — Claude Code, 01 Nov 16:11
+
+- **On UCloud: `Extra/validation/IGRAC/`** (324 MB, **md5 10/10 OK**, `md5sums.txt` there):
+  - `wells_monthly.parquet`: 33 980 010 monthly values
+  - `wells_stations.parquet`: 455 337 stations
+  - `wells_availability.csv`
+  - the per-source `igrac_*` and `bom_*` tables
+  - `Readme.txt` (GGMN), `Readme_repository.txt`, `gw_state_README.txt` (BOM)
+
+  Desktop copies are in `validation/IGRAC` and `validation/BOM`. Scripts: `da_dev/igrac/`.
+- **Format:**
+  - Columns: well_id, country, source (GGMN / repository / BOM), provider, licence (per well), lat, lon, parameter_type, month, level_m, n_readings, plus BOM quality_worst / quality_flags / state.
+  - **Sign: up = more water** (depths negated, elevations kept). All values are in m (no ft in the data).
+  - One datum per BOM bore (RSWL > DTW > SWL); ACT's UNKNOWN rows (39 410) were all duplicates of DTW rows and were dropped.
+- **Integrity** (outer zips: CRC over all members OK; each country zip: walked its own local headers and checked its own end-of-central-directory):
+  - **Bad at the source, needing a re-download by Fan** (the outer-zip copies are byte-identical, so the server delivered them broken):
+    - **IGRAC FRA** (4 072 monitoring files, no wells.ods)
+    - **IGRAC IND** (2 380, no wells.ods)
+    - **IGRAC USA-GGMN**: a 16 MB zero block, 129 well files unreadable
+    - **BOM SA**: zip truncated at 103 of 113 MB, `level_SA.csv` missing
+  - IGRAC AUS dropped (re-download byte-identical, md5 71ffed7c); BOM replaces it.
+  - The FRA / IND monitoring files that read cleanly are salvaged but carry no coordinates (`zip_status = truncated_salvaged`), so they are not usable yet.
+  - The repository export is complete (28 / 28, USA.zip with 101 241 entries).
+- **Fixed on the way:** GGMN re-uses well IDs across providers (947 repeated IDs; DEU, NLD, NZL, USA). Wells are now keyed by file name, with the sheet ID kept as `orig_id`. Use the v2 / `igrac_*` / `wells_*` tables; `ggmn_*.parquet` (v1) is superseded.
+- **Duplicates GGMN ↔ repository** (same provider, < 100 m): **5** (all Serbia, RHMS), kept as GGMN.
+  - **Decision for Cowork:** 9 580 repository (Jasechko) wells lie within 100 m of a GGMN well from a *different* provider (USGS 7 554, CAN 477, DNK 419, …). These are probably re-publications. They are not dropped by the rule. None of them meets the availability thresholds, so the validation set does not change either way.
+- **Availability** (wells with coordinates, best single parameter type):
+
+  | source | ≥ 48 of 60 (2002-2006) | ≥ 72 (2002-2016) |
+  |---|---|---|
+  | GGMN | 25 016 | 44 418 |
+  | repository | 961 | 1 163 |
+  | BOM (7 states; SA pending) | 4 081 | 7 392 |
+  | **total** | **30 058** | **52 973** |
+
+  Largest: NLD 13 543 / 23 780, DEU 5 086 / 6 019, VIC 2 419 / 3 001, USA (GGMN) 1 590 / 3 405, ESP 933 / 2 464, ZAF 643 / 1 570. Per country and source: `wells_availability.csv`.
+- **Note:** `merge_report.py` wrote `igrac_*` and was then killed at 14.5 GB in its pandas concat with BOM (desktop memory). The combined `wells_*` were written with `wells_combine.py` (pyarrow streaming, peak 6.6 GB).
+- `validation/IGRAC/reextract/` (883 MB of identical copies) and `validation/BOM/extracted/` (2.4 GB of gdb) are kept on the desktop; Fan can drop them.
+
+- 01 Nov 16:24 HT9 assimilate EXIT=0 16:23:28 (3 861 s); the same 13 withheld epochs; data root 4 255 GB. Next collect_DA, evaluate, export, then wrr_scores.py (wrr_after). Expected pilot verdict about 17:15; HE3 about 19:30.
+
+- 01 Nov 16:31 Review 176 noted and started on the desktop (background job): USGS NWIS CONUS 2002-2016 (field measurements + daily means of continuous wells) and France from the Hub'Eau / ADES API (licence Etalab); de-duplication NWIS vs IGRAC USA (same site number or < 100 m and the same agency, keep NWIS); the salvaged GGMN FRA files replaced by ADES; column near_dup_of (nearest other well < 100 m) added; new combined files wells_*_v2 (old ones kept). India / SA: waiting for Fan's re-downloads. Copy to UCloud after.
+
+- 01 Nov 16:38 HT9 collect_DA EXIT=0 16:37:10 (810 s); data root 4 519 GB. Evaluate + export next (about 20 min), then wrr_scores.py: verdict expected about 17:05.
+
+- 01 Nov 16:55 HT9 COMPLETE 16:54:50 (export 963 s, 10 GB); CHAIN COMPLETE (HG5 HG4 HT9); data root 4 529 GB. wrr_scores.py starting (wrr_after). Expected verdict within about 10 min; then HE3 about 19:00.
+
+#### WRR pilot — held-out skill and VERDICT (reviews 158 / 161) — Claude Code, 01 Nov 16:56
+
+`temp/exp_logs/paper/wrr/scores.txt` (+ scores_matrix.csv, scores_regions.csv, scores_units.csv, bootstrap.csv), `wrr_scores.py` 46961a8f, run 16:55:28-16:56:08.
+- 13 withheld epochs: 2002-08, 2002-12, 2003-04, 2003-09, 2004-01, 2004-05, 2004-09, 2005-01, 2005-05, 2005-09, 2006-01, 2006-05, 2006-09. Identical in all three runs.
+- GRACE = the 0.5° field the unit observations are built from (`GlobalBasins_T9_gridded_signal.hdf5`). Footprint 56 356 cells. HB3 = HydroBASINS level 3 (204 basins; 640 coastal cells assigned to the nearest basin).
+- **Skill SS = 1 − RMS² / RMS²_OL**, where RMS = the area-weighted mean over the units of the geometry of the per-unit RMS(forecast − GRACE) over the withheld epochs:
+
+| run \ geometry | T9 | G4 | G5 | E3 | 0.5° cells | HB3 |
+|---|---|---|---|---|---|---|
+| HG5 | 0.399 | 0.374 | **0.522** | 0.335 | 0.079 | 0.480 |
+| HG4 | 0.450 | **0.521** | 0.448 | **0.393** | **0.097** | 0.515 |
+| HT9 | **0.525** | 0.380 | 0.408 | 0.334 | 0.071 | **0.524** |
+| (RMS OL, mm) | 37.6 | 40.4 | 38.4 | 43.2 | 63.9 | 28.4 |
+
+- **Bootstrap** (1 000 resamples of the 13 epochs), median [5 %, 95 %]:
+
+  | geometry | SS(T9) − SS(G4) | SS(T9) − SS(G5) |
+  |---|---|---|
+  | 0.5° cells | −0.026 [−0.031, −0.020] | −0.008 [−0.012, −0.003] |
+  | HB3 | +0.009 [+0.002, +0.017] | +0.045 [+0.033, +0.058] |
+  | T9 | +0.075 | +0.127 |
+  | G4 | −0.143 | +0.005 [−0.001, +0.011] |
+  | G5 | −0.041 | −0.115 |
+  | E3 | −0.061 | −0.001 [−0.006, +0.005] |
+
+- **Criterion (review 161, fixed before the results):** GO if H-T9 has higher held-out skill than BOTH H-G4 and H-G5 on BOTH neutral geometries (0.5° cells and HydroBASINS level 3), and the 5–95 % bootstrap range of each difference excludes zero; otherwise NO-GO.
+  - HB3: T9 higher than G4 and G5, both ranges exclude 0 → met.
+  - 0.5° cells: **T9 lower** than G4 and G5 (ranges exclude 0, on the negative side) → not met.
+- **VERDICT: NO-GO.**
+- **Reading (numbers as they are; nothing tuned):**
+  - **Each unit set wins on its own geometry** (T9 on T9 0.525, G4 on G4 0.521, G5 on G5 0.522), as feared. That is the home advantage the cross-geometry matrix was meant to expose.
+  - On the neutral geometries the picture splits: on HydroBASINS level 3 T9 is best (0.524 vs 0.515 / 0.480); on 0.5° cells G4 is best and all skills are small (0.07–0.10).
+  - At the cell scale the forecast barely beats the open loop: unit-distribution median SS on cells is about 0.1, and **about 40 % of the cells have SS < 0** in every run (21 400–23 000 of 56 356). The 0.5° GRACE field carries much noise and leakage at that scale (resolvability: under 4 % of the area passes at 1°).
+  - Regionally on cells, SS is highest in au and eu (about 0.2) and around 0 in as, si and af, for all sets.
+  - **Caveat:** the bootstrap resamples epochs only (13). It does not include spatial correlation, so its ranges are narrow and every difference looks "significant". A spatial block bootstrap (as in review 175 item 7) would widen them.
+- Wall times per run (prepare / collect_OL / assimilate / collect_DA / evaluate / export):
+
+  | run | wall times [s] |
+  |---|---|
+  | HG5 | 100 / 874 / 3 439 / 1 017 / 60 / 1 083 |
+  | HG4 | 80 / 915 / 3 866 / 811 / 100 / 1 164 |
+  | HT9 | 20 / 729 / 3 861 / 810 / 60 / 963 |
+
+  DA peak about 70 GB.
+- **Data root:** 4 499 GB before the campaign → 2 732 GB after the review-164 deletions → **4 529 GB** after the three runs.
+- **Next:**
+  - Standing rule 164 (4) deletions for HG5 / HG4 / HT9 (exports and scores are written; the exports in `Res/WRR/<RUN>/` stay). Logged below.
+  - HE3 continues as queued (review 170), then the second scoring with E3. The verdict above stays on HG4 / HG5 / HT9 as fixed.
+  - Waiting for Cowork / Fan on the outcome (design paper elsewhere or an ESSD section).
+
+- 01 Nov 17:04 Rule 164 (4) deletions done (da_dev/del_wrr.sh c23550f1; checks: export complete, scores list the run, inside data root, no open handles, no symlinks in): DA_output/WRR_HG5 281 GB, Res/WRR_HG5/DA/Ens_k/daily_output_* 258 GB (160 files), DA_output/WRR_HG4 282 GB, Res/WRR_HG4/DA dailies 258 GB, DA_output/WRR_HT9 281 GB, Res/WRR_HT9/DA dailies 258 GB; 16:59-17:03; data root 4 529 -> 2 891 GB (HE3 collect_OL running alongside). Exports Res/WRR/{HG5,HG4,HT9} and the shared OL (Res/GDA_Ucloud/OL) untouched. HE3 expected about 19:15, second scoring about 19:20.
+
+- 01 Nov 17:14 HE3 prepare EXIT=0 16:58 (120 s); collect_OL EXIT=0 17:14:00 (914 s); assimilate running (1 398 units). Data root 2 927 GB. Expected HE3 complete about 19:00, second scoring about 19:05.
+
+#### Answer to DA review 177 (1) — diagnostics started; Óbidos for the pilot runs is LOST (my error) — Claude Code, 01 Nov 17:24
+
+- **Item 6a (Óbidos / Amazon main stem) cannot be done for HG5, HG4 and HT9.** The compact exports hold only storages (tws, gw, soil, snow, surface, canopy). The daily member files with discharge (`DA_output/WRR_<RUN>` and `Res/WRR_<RUN>/DA/Ens_k/daily_output_*`) were deleted at 16:59–17:03 under rule 164 (4).
+  - **My error:** review 163 had asked for the Óbidos discharge of these runs, and I should have extracted it before deleting.
+  - **Still available:**
+    - the open loop: shared `Res/GDA_Ucloud/OL`, all members, daily discharge
+    - U2 (`Res/GDA_Global/DA`, kept), i.e. the T9 configuration with all epochs assimilated, so not held-out
+  - **Options** (Fan / Cowork decide; nothing started):
+    - (a) rerun HG5, HG4 and HT9 to collect discharge: about 1.8 h of wall each, about 550 GB each temporarily (the data root has room, now 2 927 GB)
+    - (b) accept OL vs U2 at Óbidos as the T9 look, with no box comparison
+  - **Fixed for HE3 and later runs:** `wrr_export.py` (7ff99bf8) now also writes monthly ensemble mean and spread of **discharge (dis, m³ s⁻¹) and ET** on the 0.5° grid, plus `gauges_daily_dis.csv`. That file holds daily discharge of every member (OL and DA) at Óbidos, Manacapuru, Tabatinga and Porto Velho; each model cell is the largest OL mean discharge within 0.75°. HE3 is still assimilating, so its export (about 18:45) will include them.
+- **Items 1–5 and 6b (wells first look): started on the desktop** from the exports, all labelled post-hoc. The three runs' monthly grids and the GRACE grid are copied to the desktop `PyGLDA_v2_external_data/Res/WRR/`. Plan:
+  1. spatial block bootstrap (10° blocks × epochs, 1 000) on cells, HB3 and E3
+  2. share of T9 / G4 / G5 / E3 boundary length lying on HB3 boundaries
+  3. 3° boxes shifted by 1.5° as an extra neutral geometry
+  4. SS split by resolvability pass / fail and by SNR class
+  5. SS vs unit count (with HE3 tonight)
+  6b. wells (seasonal metrics; interannual as indicative) on `wells_monthly` (GGMN + repository + BOM)
+
+- 01 Nov 17:33 Review 178 (option a) queued: wrr_after2.sh (721135e6, tmux da:after2, armed 17:32:46) waits for wrr_after's end (HE3 + second scoring), then runs wrr_chain.sh HT9R HG5R HG4R: pilot configuration, own cases WRR_<RUN>R, exports Res/WRR/<RUN>R incl. dis / ET grids and gauges_daily_dis.csv (OL and DA). The OL discharge products come with each export's OL stage. Then wrr_repro.py (a517719f): max |diff| of every storage variable rerun vs first export. Rule 164 (4) for HE3 and the reruns only after the discharge files are confirmed. Expected: HE3 about 19:00; reruns about 19:10 to 00:30.
+
+#### Answer to DA review 177 (2) — post-hoc diagnostics 1–5 + 6b (desktop) — Claude Code, 01 Nov 17:36
+
+**All post-hoc diagnostic**: `temp/exp_logs/paper/wrr/posthoc/` (CSV per item, `posthoc_summary.txt`, maps, scripts `ph_*.py`). The scores reproduce `wrr_scores.py` exactly on cells / T9 / G4 / G5 / E3. HB3 comes from the resolvability assignment: 0.479 / 0.514 / 0.524 vs the scorer's 0.480 / 0.515 / 0.524.
+
+- **1. Spatial block × epoch bootstrap** (10° blocks, 1 000, seed 177), median [5 %, 95 %]:
+
+  | geometry | SS(T9) − SS(G4) | SS(T9) − SS(G5) |
+  |---|---|---|
+  | cells (238 blocks) | −0.025 [−0.042, −0.007] | −0.008 [−0.024, +0.011] |
+  | HB3 (147 blocks) | +0.009 [−0.006, +0.024] | +0.045 [+0.011, +0.086] |
+  | S3 | −0.051 [−0.071, −0.031] | +0.004 [−0.018, +0.027] |
+  | E3 | −0.060 [−0.080, −0.041] | −0.002 [−0.022, +0.021] |
+
+  The spatial ranges are 2–3 × the epoch-only ones. HB3 T9−G4 and cells T9−G5 no longer exclude 0. Each run still wins clearly on its own geometry.
+- **2. HB3 is NOT neutral for T9** (true edge lengths on the sphere, footprint edges only):
+  - **72.5 % of the HB3 boundary lies on a T9 boundary**, and 32.5 % of T9's boundary lies on HB3.
+  - For G4 / G5 / E3 the share of their boundary on HB3 is 7.6–8.1 % (HB3 boundary on them: 12.1 / 10.0 / 15.2 %), which is the chance level: shifted / regular 3° boxes S3 7.8 % / 17.1 %, B3 7.5 % / 16.6 %.
+  - → **HB3 favours T9 by construction.** HT9's HB3 advantage (the only neutral-geometry point in its favour) is not evidence of better skill.
+- **3. S3 = 3° boxes shifted by 1.5°** (1 845 units; B3 merge rule): SS HG5 0.313, **HG4 0.368**, HT9 0.317 (RMS OL 44.5, HG5 36.9, HG4 35.4, HT9 36.8 mm). HG4 is best; HT9 ≈ HG5.
+- **4. Skill by resolvability** (pass = SNR ≥ 3 & leak (b) < 0.25), SS HG5 / HG4 / HT9:
+
+  | subset | area | SS |
+  |---|---|---|
+  | cells, T9 unit passes | 29.6 % | 0.146 / 0.178 / 0.143 |
+  | cells, T9 unit fails | 70.4 % | 0.035 / 0.043 / 0.023 |
+  | cells, SNR < 1.5 | 7.9 % | −0.222 / −0.154 / −0.200 |
+  | cells, SNR 1.5–3 | 18.7 % | 0.021 / 0.012 / 0.066 |
+  | cells, SNR ≥ 3 | 73.4 % | 0.091 / 0.111 / 0.077 |
+  | HB3 pass | 60.7 % | 0.522 / 0.537 / 0.546 |
+  | HB3 fail | 39.3 % | 0.395 / 0.471 / 0.480 |
+
+  The skill sits in resolvable units. HT9 leads only in the 1.5–3 SNR class.
+- **5. Unit count** (SS on cells / HB3 / S3):
+
+  | run | units | cells | HB3 | S3 |
+  |---|---|---|---|---|
+  | HG5 | 693 | 0.079 | 0.479 | 0.313 |
+  | HT9 | 707 | 0.071 | 0.524 | 0.317 |
+  | HG4 | 997 | 0.097 | 0.514 | 0.368 |
+
+  No monotonic trend; HG4 is best on cells and S3. HE3 (1 398 units) is added after its export (`RUNS="HG5 HG4 HT9 HE3" python ph_scores.py`).
+- **6b. Wells first look, 2002-2006** (post-hoc, first look):
+  - **Selection:** 29 941 wells with ≥ 48/60 months; 4 007 spikes dropped, 2 053 wells with a step dropped → 27 797 wells (5.8 % outside the footprint).
+  - **Jump rule:** a month-to-month change > 5 robust SD of the well's levels. The rule on the differences' MAD removed 27 % of the wells, mostly natural recharge.
+  - **Analysed:** 981 cells with ≥ 2 wells and 48 HB3 basins.
+  - **Groundwater, median r per cell:** OL **0.658**, HG5 0.479, HG4 0.469, HT9 0.468. **DA beats OL in only 31–33 % of the cells.** HT9 − OL: −0.128 [−0.170, −0.086] (5° block bootstrap); HB3 −0.104 [−0.182, −0.031].
+  - **Groundwater RMSE after the specific-yield fit:** OL 10.9 vs DA about 13.5 mm. The fitted Sy is mostly at the 0.01 lower bound (43–50 % of cells on a bound), so the model gw anomalies are small relative to the wells.
+  - **Regions:** the degradation is largest in as (Korea; median r 0.67 → 0.15, 37 cells) and na (0.55 → 0.30). af (South Africa) is about neutral or improved.
+  - **TWS, median r:** OL 0.560, HG5 0.525, HG4 0.507, HT9 0.521, coarse GRACE 0.550. DA beats OL in 52–54 % of the cells in r and in 71–74 % in RMSE; DA beats GRACE in r in only 47–49 %.
+  - **HT9 vs boxes:** all paired differences are small (gw r HT9 − HG5 −0.006 [−0.025, +0.013]; HT9 − HG4 +0.005 [−0.010, +0.020]). HT9 is slightly worse in peak timing vs HG5 (+0.08 months) and in TWS RMSE (+1.0 mm). At HB3, gw RMSE is lower than HG4 (−0.50 mm [−0.86, −0.14]).
+  - Unchanged without NLD (its wells fall in only 19 cells).
+  - **Reading:** in this first look the DA moves groundwater timing *away* from the wells in most cells for all three unit sets. That is a model / partition question (seasonal gw cycle added by the increments; review-111-era P-block finding: gw amplitude DA/OL about 1.9). It is independent of basins vs boxes and matters for the paper whichever direction Fan picks.
+
+#### Answer to DA review 179 — basin-scale post-hoc test: T9 advantage NOT confirmed — Claude Code, 01 Nov 17:46
+
+`temp/exp_logs/paper/wrr/basin_scale/` (summary.txt, table_runs.csv, basins_per_basin.csv, bootstrap.csv, boundary_coincidence.csv, map_basins.png, bs_test.py). Definitions come from `posthoc/ph_common.py` (= `wrr_scores.py`).
+- **Geometry: neither requested set was obtainable.**
+  - **Li & Kusche's 223 basins are not published**: Zenodo 17265162 holds only the nc file, and the Wiley full text answered 403, so their MRE formula is unverified.
+  - **GRDC MRB 2020** is only served through an interactive app (mrb.grdc.bafg.de), with no file download found.
+  - **Used instead: "WB" = World Bank Data Catalog 0041426 "Major Basins of the World"** (WRI / BASWC4 lineage, CC BY; saved in `basin_scale/geometry_src/wb/`).
+    - 5 "Void" polygons dropped; same-name parts within 0.5° merged → 228 basins.
+    - Footprint cells assigned by centre; basins kept if ≥ 100 000 km² of footprint → **93 basins** (median 411 000 km²).
+    - **The 93 basins cover only 53.2 % of the footprint.** The Sahara, Arabia, inland Australia and the Arctic are not in major basins.
+  - Sensitivity set: HydroBASINS level 3 (178 basins, 98 % of the footprint).
+- **Neither basin set is neutral for T9:**
+  - **69 % of the WB boundary lies on T9 boundaries** (74 % for HB3c).
+  - For G4 / G5 / E3 and the chance references S3 / B3 the share is 9–17 %.
+  - Basin-scale sets naturally share T9's divides.
+- **WB, withheld epochs (13):**
+
+  | run | median CC | area-weighted RMSE | median MRE | SS |
+  |---|---|---|---|---|
+  | OL | 0.871 | 30.1 mm | 0.476 | – |
+  | HG5 | 0.939 | 21.2 mm | 0.323 | 0.506 |
+  | HG4 | 0.942 | 21.1 mm | 0.323 | 0.509 |
+  | HT9 | **0.953** | **20.4 mm** | **0.301** | **0.543** |
+
+  MRE = mean |m − T| / std(T) on anomalies (our formula; theirs was not accessible).
+- **All 54 epochs (fit), median CC / RMSE:**
+
+  | product | median CC | RMSE |
+  |---|---|---|
+  | OL | 0.875 | 29.5 mm |
+  | HG5 | 0.972 | 12.6 mm |
+  | HG4 | 0.974 | 12.2 mm |
+  | HT9 | 0.982 | 10.9 mm |
+  | Li & Kusche (context) | 0.976 | 10.3 mm |
+  | GRACE-SeDA-v1 (context) | 0.962 | 13.3 mm |
+
+  Context only: both benchmarks ingest GRACE in every month, and SeDA is WaterGAP-forced. Li & Kusche's own numbers (CC 0.987, RMSE 14.3 mm) are on their basins and their GRACE reference.
+- **Criterion (fixed 17:45, before the results):** HT9 has higher median CC **and** lower area-weighted RMSE than both HG4 and HG5, with each 5–95 % range (10° blocks × epochs, 1 000) excluding 0.
+
+  | HT9 vs | Δ median CC | condition | Δ RMSE | condition |
+  |---|---|---|---|---|
+  | HG4 | +0.011 [−0.001, +0.020] | **fails** | −0.73 mm [−1.36, −0.17] | passes |
+  | HG5 | +0.014 [−0.003, +0.023] | **fails** | −0.81 mm [−1.58, −0.16] | passes |
+
+  - SS(HT9) − SS(HG4) = +0.034 [+0.008, +0.061]; SS(HT9) − SS(HG5) = +0.038 [+0.008, +0.068].
+  - **VERDICT (post-hoc test, criterion fixed 1 Nov 17:45 before results): T9 basin-scale advantage not confirmed.**
+  - HB3c sensitivity: also not confirmed (fails both CC conditions and the RMSE condition vs HG4).
+- **Reading:**
+  - On major basins HT9 is consistently a little better (CC +0.01, RMSE −0.7 to −0.8 mm, SS +0.035). The RMSE and SS gains exclude 0; the CC gain does not.
+  - This basin set shares 69 % of its boundary with T9, so even this edge partly reflects the geometry match, not only better hydrology.
+- HE3 is added automatically once `Res/WRR/HE3` is on the desktop (run list parameter; new output folder).
+
+- 01 Nov 18:11 Review 180 noted; the groundwater diagnosis (items 1-6) is running on the desktop (post-hoc, no runs): HT9's applied increments (3.3 GB) and the inflation log copied to the desktop Res/WRR/HT9 for item 3; U2 from the desktop export for item 4. Output temp/exp_logs/paper/wrr/posthoc/gw_diag/. HE3 at 2005-11 (18:03); reruns queued.
+
+- 01 Nov 18:18 HE3 assimilate EXIT=0 18:18:10 (3 837 s, despite 1 398 units); the same 13 withheld epochs; data root 3 209 GB. Next collect_DA, evaluate, export (with dis / ET / gauges), then the second scoring; reruns HT9R / HG5R / HG4R from about 19:00.
+
+#### Answer to DA review 180 — groundwater degradation diagnosed: seasonal partition, not the H set-up — Claude Code, 01 Nov 18:19
+
+**Post-hoc diagnostic**, desktop, no runs: `temp/exp_logs/paper/wrr/posthoc/gw_diag/` (`gw_diag_summary.txt` + CSV per item, maps, scripts `gd_*.py`). The same 981 cells with ≥ 2 wells as the first look.
+
+- **1. Seasonal vs interannual** (median r with wells; OL → HG5 / HG4 / HT9):
+
+  | part | OL | HG5 | HG4 | HT9 | DA beats OL |
+  |---|---|---|---|---|---|
+  | total | 0.658 | 0.479 | 0.469 | 0.468 | |
+  | **seasonal cycle** | **0.778** | 0.545 | 0.529 | 0.566 | **23–25 % of cells** |
+  | interannual (indicative, 5 yr) | 0.623 | 0.479 | 0.475 | 0.485 | 35–39 % |
+
+  The seasonal share of gw variance falls from 0.47 (OL) to 0.33 (DA); the wells' own share is 0.27.
+- **2. Amplitude and phase:**
+  - At the well cells the DA/OL gw annual amplitude ratio is about 1.0 (median 0.95–1.00). The global median 1.94 (area-weighted 1.71) comes from arid / semi-arid cells, where gw takes almost all of the increment.
+  - **Peak-month error vs wells: OL 0.99, HT9 1.55, HG5 / HG4 about 1.7 months.**
+  - In the cells where HT9 is worse than OL: amplitude 26 %, phase 13 %, both 19 %, neither 41 %. A phase flag marks 32 % of degraded vs 14 % of improved cells; the amplitude flag does not separate them.
+  - The wells' amplitude depends on Sy (6.5 / 13.4 / 26.7 mm at the fitted Sy / 0.05 / 0.1), so the amplitude comparison with wells is inconclusive.
+- **3. Increments (HT9, ensemble mean):**
+
+  | | gw | soil | snow | surface |
+  |---|---|---|---|---|
+  | seasonal increment, global | **33 %** | 38 % | 2.5 % | 26 % |
+  | OL seasonal amplitude, global | 14 % | 33 % | **19 %** | 34 % |
+  | seasonal increment, well cells | 26 % | 55 % | 1 % | 17 % |
+  | OL seasonal amplitude, well cells | 18 % | 52 % | 7 % | 23 % |
+
+  - The gw increment follows the unit TWS innovation: median r 0.89 (seasonal cycles 0.93). 62 % of its variance is seasonal, and it takes about 30 % of each innovation (pooled slope).
+  - The cumulative DA − OL gw difference has a seasonal amplitude of about 6 mm (half the OL gw cycle at the well cells), **out of phase with OL gw** (median 3.8 months; in phase in only 37 % of cells).
+  - → **Yes: gw carries about a third of the seasonal TWS correction, timed like the fast-store error, which belongs mostly in soil, snow and surface water. Snow is badly under-corrected.**
+- **4. U2 (all epochs, same T9 configuration) is no better:** median r 0.44; better than OL in 28.5 % of the cells; seasonal r 0.54; peak error 1.7 months; U2 beats HT9 in only 40 %. OL is bit-identical. → **The cause is the filter partition, not withholding and not the unit set** (HG5 / HG4 / HT9 alike).
+- **5. Where (share of cells where HT9 beats OL):**
+
+  | group | share |
+  |---|---|
+  | as (KOR) | 0 % |
+  | eu | 23 % |
+  | na | 34 % |
+  | au | 42 % |
+  | af | 58 % |
+  | snow-dominated / not | 20 % / 34 % |
+  | P/ET > 2 | 11 % |
+  | P < 300 mm/yr | 45 % |
+  | unconfined / confined | 28 % / 30 % |
+
+  Depth is known for only 126 cells (BOM); no clear pattern.
+- **6. Reading (diagnosis only):**
+  - Each window's TWS innovation is mostly the seasonal error of the fast stores. It is split by the open-loop *total*-variance shares, and gw gets about a third, roughly twice its seasonal role. The adaptive inflation adds noise to gw by the same split (median gw noise share 0.36–0.39).
+  - Boundary smoothing and the spatial blend spread the increment in space, not in time, so gw picks up a seasonal component of the wrong phase.
+  - **Candidate fixes for a later regional test (no code or settings changed):**
+    1. keep the seasonal component out of the gw increment (remove the unit's innovation climatology from the gw part, or give gw only a low-passed innovation)
+    2. partition by the OL variance at the seasonal time scale (or by time-scale-separated variance) instead of total variance
+    3. let snow take its share
+    4. split the inflation noise the same way
+    5. cap gw's share at its share of the OL seasonal amplitude
+- **Assumptions:**
+  - A member with no increment file for a month counts as zero increment.
+  - The river release is shifted back to its analysis month.
+  - Surface = wetlands + river.
+  - Innovation = that of the cell's T9 unit (41 analyses).
+  - Snow-dominated = OL mean annual max swe > 50 mm; P / ET from the U2 OL daily means.
+  - No IGRAC depth field.
+
+#### Answer to DA review 176 — NWIS + ADES added; wells v2 on UCloud — Claude Code, 01 Nov 18:34
+
+- **On UCloud: `Extra/validation/IGRAC/`** (**md5 12/12 OK**, `md5sums_v2.txt`; folder now 543 MB):
+  - `wells_monthly_v2.parquet`: 36 250 130 monthly values
+  - `wells_stations_v2.parquet`: 550 224 stations
+  - `wells_v2_dropped.csv`, `wells_v2_availability.csv`, `wells_v2_availability_per_well.parquet`, the near-dup counts
+  - `nwis_*`, `ades_*`
+
+  The v1 files are kept. Desktop: `validation/{NWIS,ADES,IGRAC}`; scripts in `da_dev/wells_web/`.
+- **NWIS** (CONUS 48 + DC, 2002-2016):
+  - **Endpoints:** the legacy gwlevels service is decommissioned. Field measurements come from `api.waterdata.usgs.gov/ogcapi/v0/.../field-measurements` (rate-limited without a key; about 1 h of waiting). Daily values come from `waterservices.usgs.gov/nwis/dv` (statistic mean, else min, else max); sites from the nwis site service.
+  - **92 272 sites, 2 798 888 monthly values.** A month uses its daily values if it has any, else its field measurements (`quality_flags` = fm / dv:<stat>).
+  - 119 k readings dropped for qualifiers (pumping, dry, …). One datum per site, NAVD88 preferred.
+  - **Availability after de-duplication:** 2 833 (≥ 48/60) and 5 260 (≥ 72). Largest: FL 600, CA 537, NY 437 (≥ 72).
+- **ADES** (Hub'Eau niveaux_nappes, per département; 0 failures):
+  - **7 801 stations with data**: elevation in m NGF (3 as depth); 469 293 monthly values.
+  - 36 656 readings flagged "Incorrecte" dropped.
+  - **1 754 (≥ 48) / 2 710 (≥ 72).** The short records are real: many stations start after 2002.
+- **De-duplication.** **Two departures from the rule — Cowork / Fan please confirm or overrule** (every drop is listed with the months of both copies in `wells_v2_dropped.csv`, so either way can be applied):
+  - (a) **Same USGS site number (3 643 pairs):** the copy with more months in 2002-2016 is kept, not always NWIS. That drops 2 628 GGMN and 1 015 NWIS wells. Keeping NWIS always would lose about 300 GGMN wells with ≥ 72 months.
+  - (b) **Within 100 m and the same agency** (GGMN wells without a site number; 3 947 matches): the GGMN well is dropped only if NWIS has at least as many months (825 dropped, 3 122 kept and flagged as near-duplicates). Applying the rule strictly would lose about 480 wells with ≥ 72 months (nested state-agency wells).
+  - **FRA:** 1 079 of the 2 111 salvaged GGMN FRA wells match an ADES BSS code and were dropped. The 1 032 unmatched ones (no coordinates) are kept but are unusable.
+  - **USA after de-duplication:** ≥ 72 GGMN 1 882 + NWIS 5 260 = 7 142 (before: 3 405); ≥ 48 3 493 (before: 1 590).
+- **near_dup_of** (+ `near_dup_source`, `near_dup_dist_m`):
+  - **353 720 of 550 224 stations have another well within 100 m, 172 657 of them at 0 m** (nested filters).
+  - Flagged / total by source: NLD GGMN 143 k / 168 k, repository USA about 82 k / 101 k, BOM 39 900, NWIS 48 370 / 91 618, ADES 3 012 / 7 801.
+  - Across sources: repository ↔ NWIS about 29.6 k each way.
+  - Note: `well_id` is not unique across sources (2 611 shared ids). Use (source, country, well_id) as the key.
+- **Totals v2: wells meeting ≥ 48/60 (2002-2006) 30 058 → 33 715; ≥ 72 (2002-2016) 52 973 → 59 420.**
+- Still pending from Fan: IGRAC India (one re-download), BOM SA.
+
+- 01 Nov 18:35 HE3 collect_DA EXIT=0 18:35:20 (1 020 s); data root 3 480 GB. Evaluate + export (incl. dis / ET grids + gauges, first time) next; second scoring about 19:05; reruns HT9R / HG5R / HG4R then about 19:10 to 00:30.
+
+#### Answer to DA review 181 (1) — partition rule as coded, why gw ends up with a third, and the fix design — Claude Code, 01 Nov 18:49
+
+- **(1) Readme written:** `Extra/validation/IGRAC/README_wells.md` (UCloud, md5 OK; desktop copy in `validation/IGRAC/`). It documents both accepted de-duplication rules, sources / licences, conventions and the key.
+- **(5) The current partition rule in one sentence** (`src_DA/partition.py`, NonNegativePartition, U2 / HT9 / HG4 / HG5 settings):
+  > Each unit's increment δ_j = (H dX)_j is spread over the unit's cells and storages with weights var_i · max(corr(A_i, HA_j), 0) from the *forecast ensemble* of the current window (members 1–30; capped, gw blended 0.8). The resulting soil + groundwater total is kept, but re-split between soil and groundwater in proportion to each one's open-loop seasonal amplitude: the std of the 12 calendar-month means of the ensemble-mean (members 1–30) unit series over the whole OL period 2002-2006, `storage_shares`, mix 1.0. Snow, river and wetlands keep their ensemble-variance × correlation shares. Groundwater is then boundary-smoothed (50 km), and every element that would cross a bound hands its share to the free elements of the same unit in proportion to their shares.
+  - So "in proportion to their seasonal variability" is **true only for the soil-vs-gw split**. The split between {soil + gw} and snow / surface water follows the forecast-ensemble variance and correlation, not the seasonal amplitude.
+- **Why gw still ends up with about a third** (HT9 `filter_summary.partition`, 41 analyses):
+  - The storage_shares step works as designed: gw's share of the soil + gw increment goes from **0.596 (ensemble) to 0.327 (used)**.
+  - **The bound step then undoes it.** Share of the total |increment|, before → after the bounds: **gw 0.217 → 0.344, soil 0.450 → 0.336**, river 0.108 → 0.119, wetlands 0.181 → 0.155, swe 0.044 → 0.046.
+  - Soil elements at 0 or at smax (5.9 M lower / 3.0 M upper element-member hits in U2) give their share to the free elements, i.e. mostly to unbounded gw.
+  - This fits the review-180 result: the gw increment carries the seasonal fast-store correction, about one third of each innovation, with the soil phase.
+  - Snow gets only 4–5 %: its ensemble variance × correlation share is small, and it is not in `storage_shares`.
+- **(4) Candidate fixes — design only** (no code changed; Cowork writes and mock-tests any `src_DA` change after Fan agrees):
+
+  | # | fix | where in `src_DA` | new state | switch in `DA_setting.json` (method block) |
+  |---|---|---|---|---|
+  | F1 | **snow and surface water in the seasonal split**: `storage_shares` over soil, gw, swe (+ wetlands / river) | none: `_storage_share_mix` (partition.py ≈ 322–381) and `seasonal_amplitude_table` (≈ 626–662) already take any storage list; the bounded taper fallback is weighted by the forecast amount | none (OL amplitude table) | `"storage_shares": {"storages": ["soilmoist", "groundwstor", "swe", "localwetlandstor", "globalwetlandstor"], "mix": 1.0}`. **Settings only.** |
+  | F2 | **bound overflow not into gw**: the share a capped soil / snow element cannot take goes to the other *bounded* storages first (by their storage_shares), gw only last or not at all (the remainder goes into the next window's innovation) | `_apply_bounds` (partition.py ≈ 522–613): the redistribution `dj = s * scale` over the free elements gets a storage mask / priority | none | new key, e.g. `"bound_overflow": {"exclude": ["groundwstor"]}` or `{"order": [...]}` |
+  | F3 | **seasonal component kept out of gw**: gw receives δ_j minus the unit's innovation climatology (or a low-passed δ_j); the seasonal part goes to soil / snow / surface water | `split` (partition.py ≈ 220–296) before `_storage_share_mix`; climatology passed in from EnKF_localized (EnKF_localized.py, `update` ≈ 160–205) | **yes**: a per-unit running innovation climatology (12 months) or a recursive low-pass, kept across windows (like the inflation's `s2_prev`; saved in DA_output) | e.g. `"seasonal_split": {"storages_slow": ["groundwstor"], "method": "climatology" or "lowpass", "tau_months": 6}` |
+  | F4 | **partition by seasonal-scale OL variance for all storages** (replace var · corr by the OL seasonal amplitude shares per unit, ensemble weights only within a storage) | equivalent to F1 with `mix` 1.0 over all incremented storages | none | F1 with all storages |
+  | F5 | **inflation noise split the same way** (gw / soil / snow noise by OL seasonal amplitude rather than total OL ensemble variance) | `inflation.py`: `split_table` (≈ 358–399, `T[:, j, i] = var`) → amplitude table; `shares_now` (≈ 335–339) unchanged | none | `"inflation": {..., "split": "ol_seasonal"}` (today "ol_spread") |
+  | F6 | **cap gw's final share** at its share of the OL seasonal amplitude | after `_apply_bounds` in `split`; the excess is re-placed with F2's rule | none | `"storage_caps": {"groundwstor": "ol_seasonal"}` |
+
+  - **Regional test (proposal):** RDA_Danube 2002-2006, 6 sub-basins, wells in DEU / AUT / CZE / SVK / HRV / SRB (from wells v2), the same E1 ensemble.
+    - Runs:
+      1. OL
+      2. current settings
+      3. **V1 = F1 + F5** (settings plus one small inflation option; the cheapest, tests "let snow and surface take their share")
+      4. **V2 = V1 + F2** (bound overflow kept out of gw: the mechanism found above)
+
+      F3 is kept for a second round (it needs new state).
+    - Scores:
+      - review-180 metrics (total / seasonal / interannual r with wells, amplitude ratio, peak month, increment shares before / after bounds)
+      - held-out TWS skill (withhold every 4 / offset 2)
+      - Danube discharge (Vienna / Bratislava / the delta gauge, KGE)
+    - Cost: a regional DA 2002-2006 took 96 min on the shared 17 Oct host and is estimated at about 45 min on an idle node (§7, 21 Oct), plus about 15 min for collect and evaluation per variant; the open loop is shared.
+- `ss_increment_share_before / after_bounds` and `ss_mean_share_*` are already in every filter_summary, so the effect of each variant can be read directly.
+
+- 01 Nov 18:49 Review 181 items 2-3 started on the desktop: wrr_wells.py (new reusable script) on wells v2, co-located wells (<= 10 m) collapsed into one location series, seasonal / interannual split, for OL, HG5, HG4, HT9, U2 (HE3 added once its export is on the desktop). HE3 export running since 18:37 (with gauges); second scoring and reruns follow.
+
+#### Answer to DA review 181 (2) — wells first look on v2 with co-located wells collapsed (post-hoc) — Claude Code, 01 Nov 18:53
+
+`da_dev/wrr_wells.py` (new, reusable: env RUNS, WELLS_MONTHLY / _STATIONS, PERIOD, COLLAPSE_M 10, MIN_LOC 2, SENS). Outputs in `temp/exp_logs/paper/wrr/posthoc/wells_v2/`. HE3 is added by a plain rerun once its grids are on the desktop.
+- **Wells:**
+  - 33 715 with ≥ 48 / 60 months (GGMN 24 086, BOM 4 081, NWIS 2 833, ADES 1 754, repository 961).
+  - Jump rule: 3 019 spikes dropped, 2 098 step wells dropped → 31 536; 1 853 outside the footprint → 29 683 used.
+  - **Collapse ≤ 10 m: 29 683 wells → 23 042 locations** (10 789 wells in 4 148 multi-well locations; 140 locations mix sources).
+  - **1 261 cells with ≥ 2 locations**; 50 HB3 basins.
+- **Groundwater, cells** (median r with wells; DA beats OL shares for total / seasonal / interannual / peak):
+
+  | run | r | r seasonal | r interannual* | peak error [months] | beats OL |
+  |---|---|---|---|---|---|
+  | OL | **0.681** | **0.824** | **0.635** | **0.82** | – |
+  | HG5 | 0.541 | 0.597 | 0.534 | 1.50 | 0.33 / 0.24 / 0.39 / 0.28 |
+  | HG4 | 0.514 | 0.592 | 0.507 | 1.51 | 0.32 / 0.23 / 0.36 / 0.25 |
+  | HT9 | 0.516 | 0.616 | 0.523 | 1.42 | 0.31 / 0.25 / 0.37 / 0.28 |
+  | U2 (all epochs) | 0.488 | 0.578 | 0.519 | 1.57 | 0.30 / 0.26 / 0.37 / 0.27 |
+
+  \*indicative (5 years).
+- **TWS, cells** (GRACE months): OL 0.581 / seasonal 0.700; DA 0.551–0.561 / seasonal 0.697–0.727; GRACE 0.582 / 0.753. DA beats OL in r in 55–56 % of the cells.
+- **HB3, groundwater, median r:** OL 0.638, HG5 0.535, HG4 0.522, HT9 0.518, U2 0.521.
+- **Sensitivity:** without NLD 1 242 cells, without NWIS 967 cells. The beats-OL shares are unchanged (31–33 %).
+- **Reading:** the first-look finding holds with v2 (NWIS + ADES) and with co-located wells counted once. **The open loop is best for groundwater; the DA (any unit set, also with all epochs assimilated) loses mainly the seasonal cycle** (0.82 → 0.58–0.62). The unit sets do not separate. This matches the partition / bound-overflow mechanism of review 181 (1).
+
+- 01 Nov 18:57 HE3 export EXIT=0 18:56:28 (1 143 s): first export with dis / ET grids and gauges_daily_dis.csv (438 240 rows = 4 gauges x OL / DA x 30 members x 1 826 days; Obidos model cell -2.25 / -55.25 = largest OL mean within 0.75 deg; the GMD cell -2.25 / -54.75 is in the dis grid). Copied to the desktop Res/WRR/HE3. Data root 3 497 GB. Second scoring next, then the reruns.
+
+#### HE3 done: second scoring and rule 164 (4) — Claude Code, 01 Nov 19:02
+
+- **HE3** (E3, 1 398 units): assimilate 3 837 s, collect_DA 1 020 s, evaluate 101 s, export 1 143 s (first export with dis / ET grids and `gauges_daily_dis.csv`). Export 17 GB; grids copied to the desktop `Res/WRR/HE3`.
+- **Second scoring** (`temp/exp_logs/paper/wrr/with_E3/scores.txt`, 18:57): **SS of HE3:**
+
+  | T9 | G4 | G5 | **E3** | **cells** | HB3 |
+  |---|---|---|---|---|---|
+  | 0.456 | 0.462 | 0.476 | **0.523** | **0.104** | 0.511 |
+
+  - The HG4 / HG5 / HT9 rows are unchanged; **the verdict stays NO-GO** (HG4 / HG5 / HT9 only, as fixed).
+  - HE3 also wins on its own geometry (home advantage). It is the best run on 0.5° cells, third on HB3.
+  - **Skill on cells vs unit count:**
+
+    | run | units | SS on cells |
+    |---|---|---|
+    | HG5 | 693 | 0.079 |
+    | HT9 | 707 | 0.071 |
+    | HG4 | 997 | 0.097 |
+    | HE3 | 1 398 | 0.104 |
+
+    For the boxes, skill grows with finer units; T9 is the lowest.
+- **Rule 164 (4), HE3** (export with gauges confirmed, scores written; same checks): `DA_output/WRR_HE3` 282 GB (19:00:34) and `Res/WRR_HE3/DA/Ens_k/daily_output_*` 258 GB (160 files, 19:01:17). Data root → **2 916 GB**.
+- **Reruns started** (wrr_after2): HT9R prepare EXIT=0 18:59:30; collect_OL running. Then HG5R, HG4R, then the reproducibility check. Expected end about 00:30.
+- The desktop post-hoc tables (unit count, wells v2) get HE3 by rerunning `ph_scores.py` / `wrr_wells.py` with HE3 in RUNS. Pending Cowork's next step.
+
+- 01 Nov 19:03 Wells v2 table with HE3 (wrr_wells.py, posthoc/wells_v2_withHE3/): HE3 groundwater median r 0.506 (seasonal 0.600, interannual 0.514), beats OL in 33 % of the cells; TWS r 0.553. Same picture as HG5 / HG4 / HT9 (OL 0.681). Reruns: HT9R collect_OL running.
+
+- 01 Nov 19:06 Review 182 started on the desktop (post-hoc): GLWS2.0 from PANGAEA 954742 into Extra/benchmarks/GLWS2/, its groundwater scored at our wells 2003-2006 beside OL / HT9 / U2 (review-180 metrics), and a Li et al. (2019)-comparable view (seasonal wells subset; regional and HB3 averages; point scale; r and RMSE in cm). Output posthoc/glws_wells/.
+
+#### Answer to DA review 182 — GLWS2.0 at our wells; Li et al.-comparable view (post-hoc) — Claude Code, 01 Nov 19:13
+
+`temp/exp_logs/paper/wrr/posthoc/glws_wells/` (`glws_wells_summary.txt`, CSVs, `glws_wells.py`). `wrr_wells.py` got an optional `EXTRA_CAND` hook (off by default; default results checked byte-identical against the backup `wrr_wells.py.bak_pre_glws_20261101`).
+- **GLWS2.0** (PANGAEA 954742, a single dataset; **CC BY 4.0**) → `Extra/benchmarks/GLWS2/`:
+  - ensemble-mean and SD netCDFs, about 1.6 GB each; the median file was not needed; plus the processing PDF and metadata
+  - **2003-01..2019-12** (204 months), **global 0.5° (identical to our grid), mm**
+  - variables: TWSA (level 3), Groundwater, Soil moisture, Surface water (level 2)
+  - method: WaterGAP 2.2e, EnKF with 32 members, ITSG-2018 DDK3 on 4°, temporal mean 2003-2016
+- **Cells, groundwater, 2003-2006** (1 309 cells with ≥ 2 locations; ≥ 39 / 48 months):
+
+  | run | r | r seasonal | r interannual | peak error [months] | beats OL (r) |
+  |---|---|---|---|---|---|
+  | OL | **0.682** | **0.821** | **0.622** | **0.84** | – |
+  | HT9 | 0.495 | 0.576 | 0.532 | 1.48 | 0.32 |
+  | U2 | 0.488 | 0.565 | 0.512 | 1.64 | 0.30 |
+  | **GLWS2.0** | **0.202** | 0.420 | 0.112 | 1.91 | 0.17 |
+
+  - HB3 (50 basins): OL 0.586, HT9 0.536, U2 0.522, GLWS2.0 0.227. Sensitivity (without NLD / NWIS): GLWS2.0 about 0.20.
+  - GLWS2.0 TWSA at the cells: r 0.480 (OL 0.571, HT9 0.548, GRACE 0.575).
+  - **Why GLWS2.0 is low** (vs our OL):
+    - its gw varies about 3 × more (median monthly SD 19 vs 6 mm)
+    - it rises strongly 2003 → 2006 (central Europe about +59 mm: the 2003-drought recovery placed in gw)
+    - its seasonal peak comes in Apr–Jun vs Mar–Apr
+- **→ The seasonal gw degradation is common to WaterGAP-based GRACE DA**, and stronger in GLWS2.0 than in ours. It is not specific to our partition. Our DA keeps more of the OL timing than GLWS2.0 does.
+- **Li et al. (2019)-comparable view:**
+  - (a) **Seasonal wells** (seasonal share ≥ 0.3: 19 550 wells, 869 cells), median r: OL 0.780, HT9 0.521, U2 0.508, GLWS2.0 0.212. DA beats OL in only 14–15 % of these cells.
+    - Pumping screening: only NWIS rows with pumping qualifiers were dropped; BOM, IGRAC and ADES have no pumping flag.
+  - (b) **Regional** (7 regions with wells), median r / RMSE: OL 0.594 / 0.45 cm, HT9 0.470 / 0.69, U2 0.555 / 0.70, GLWS2.0 −0.002 / 1.64.
+    - HT9 / U2 beat OL in af, au and sa; OL is clearly better in eu (0.93 vs 0.77) and as (0.69 vs 0.12).
+    - **HB3 ≥ 5 cells (40)**: OL 0.739, HT9 0.497, U2 0.468, GLWS2.0 0.346.
+  - **Point scale** (23 804 locations), median r: OL 0.601, HT9 0.411, U2 0.393, GLWS2.0 0.127 (Li et al.: 0.27 → 0.33).
+  - **Caveat:** the RMSE comes after one Sy fit per unit (30–50 % at the 0.01 bound), so it scales with the model's own variability. Our cm values are not comparable in size with Li et al.'s table; compare r across candidates.
+- **Reading for Fan:**
+  - At point scale our OL (0.60) and even our DA (0.41) correlate far better with wells than Li et al.'s CLSM (0.27 → 0.33).
+  - But unlike Li et al., GRACE DA does not improve on our OL at wells. It degrades the seasonal cycle, and GLWS2.0 degrades it more.
+
+- 01 Nov 19:15 HT9R prepare EXIT=0 18:59 (20 s), collect_OL EXIT=0 19:15:36 (956 s); assimilate running. Data root 2 965 GB. Expected: HT9R done about 21:05, HG5R about 23:00, HG4R about 00:55, repro check right after.
+
+#### Answer to DA review 183 — Danube test DN0–DN3 armed (after the reruns) — Claude Code, 01 Nov 19:35
+
+- **Code:**
+  - `src_DA/partition.py` **9619d02f** and `src_DA/inflation.py` **d4b285bd** are on the desktop and were **already delivered to UCloud by Syncthing at 19:31** (md5 equal).
+  - **Effect on the reruns:** HT9R's DA started at 19:15 with the old modules in memory, so it is unaffected. HG5R and HG4R will import the new modules on their default path, which your mock tests found bit-identical. The reproducibility check (`wrr_repro.py`, storage exports rerun vs first run) therefore also tests that claim in a real global run.
+- **Driver `da_dev/dn_run.py`** (923de1f6) and **chain `da_dev/dn_chain.sh`** (f76e5b97):
+  - **Cases:** one case per variant, `RDA_DN0`..`RDA_DN3` (own DA_output / Res / run copy), from the repository's `settings/RDA_Danube`: 2002-2006, 30 members, the global open loop collected for the Danube, withhold every 4 / offset 2, log_applied_increment on.
+    - DN1: storage_shares = soilmoist, groundwstor, swe, localwetlandstor, globalwetlandstor (all five in the Danube state) + inflation split ol_seasonal
+    - DN2: + bound_overflow {exclude: [groundwstor], fallback: false}
+    - DN3: fallback true
+  - **Prepare already tested for all four (second test, output files 19:35:27):** the run copy vs `settings/RDA_Danube` shows only the allowed keys, plus two keys prepare_settings fills with the code defaults (`obs_error_inflation` 1.0, `soil_upper_bound` true; the GMD Danube run copy has them too). The Danube masks and GRACE files are reused, not rebuilt.
+  - **Armed** in tmux da:dn at 19:35:27. It waits for "PROD: wrr after2: AFTER2 COMPLETE" (the reruns + reproducibility check, about 01:00), then per case: prepare → open_loop → assimilate (DA + collect) → evaluate (tag dn_<DN>). Storage check before each case.
+  - **Wall estimate:** a regional DA took 96 min on the shared host, estimated about 45 min idle, plus collect / evaluate. The four cases therefore take about 4–6 h and finish in the morning.
+- **Scores (being prepared on the desktop as `dn_scores.py`):**
+  1. wells in the Danube footprint (wells v2, co-located collapsed): r total / seasonal / interannual, peak month, beats-OL share
+  2. filter_summary increment shares before / after bounds, `bo_unplaced_mm_sum`, inflation split
+  3. held-out TWS skill per sub-basin and basin-wide
+  4. **Discharge: no observed Danube discharge is on the desktop or UCloud yet.** The GRDC request by Fan is pending. If it arrives, KGE per gauge; otherwise model-only discharge changes (DN vs DN0) at Vienna, Bratislava and the delta cell, labelled so.
+  5. GRACE fit in assimilated months (evaluation summary)
+- **Decision rule (fixed in review 183)** is applied as written. If the GRDC data are not there, item 4's condition cannot be tested and I will say so in the verdict line.
+
+- 01 Nov 19:52 Review 184 (two artefact checks on the wells comparison) started on the desktop: (1) lag -1 / 0 / +1 month of the DA tws vs GRACE and of DA gw vs OL gw for HT9 and U2; month labels = calendar months of the daily states (wrr_export.py resample 1MS; U2 calendar-month means of the daily ensemble means); (2) direction of the DA gw correction vs the OL residual at the well cells, by season. Output posthoc/artefact_checks/.
+
+#### Answer to DA review 184 — artefact checks: no month offset; the DA gw correction points only weakly towards the wells — Claude Code, 01 Nov 19:55
+
+Post-hoc, desktop: `temp/exp_logs/paper/wrr/posthoc/artefact_checks/` (summary, CSVs, `ac_checks.py`).
+- **Month labels (from the code):**
+  - WRR grids: `wrr_export.py` resamples each member's **daily** states with `resample(time='1MS').mean()`, so a label is the calendar month of the daily states; ensemble mean / spread are taken over the members' monthly means.
+  - U2: calendar-month means of the export's daily ensemble means.
+  - GRACE epoch 'YYYY-MM-15' → calendar month YYYY-MM.
+- **1. Lags** (median per-cell r / pooled r; the same epochs for every lag; HT9 40 assimilated epochs, U2 53):
+
+  | series | lag −1 | **lag 0** | lag +1 |
+  |---|---|---|---|
+  | HT9 DA tws vs GRACE | 0.649 / 0.369 | **0.821 / 0.461** | 0.617 / 0.374 |
+  | U2 DA tws vs GRACE | 0.674 / 0.383 | **0.820 / 0.461** | 0.618 / 0.380 |
+  | OL tws vs GRACE | 0.692 / 0.363 | 0.651 / 0.378 | 0.368 / 0.273 |
+  | HT9 DA gw vs OL gw | 0.443 / 0.624 | **0.624 / 0.718** | 0.572 / 0.691 |
+
+  **No label offset**: the DA peaks at lag 0. The OL per-cell r peaks at lag −1, i.e. the OL seasonal cycle runs about a month ahead of GRACE in many cells, and the DA removes that. DA gw lags OL gw slightly (lag +1 > lag −1).
+- **2. Direction of the DA gw correction** (c = z_DA − z_OL vs the OL residual e = w − β z_OL, β per cell, median 0.54; 1 261 cells), median per-cell r (share of cells with r > 0):
+
+  | run | all months | DJF | MAM | JJA | SON |
+  |---|---|---|---|---|---|
+  | HG5 | 0.067 (0.57) | 0.236 (0.69) | 0.200 (0.65) | 0.072 (0.56) | 0.035 (0.53) |
+  | HG4 | 0.066 (0.57) | 0.225 (0.66) | 0.217 (0.65) | 0.051 (0.55) | 0.032 (0.53) |
+  | HT9 | 0.046 (0.55) | 0.224 (0.66) | 0.193 (0.64) | 0.034 (0.53) | 0.012 (0.51) |
+  | HE3 | 0.046 (0.56) | 0.238 (0.66) | 0.185 (0.64) | 0.060 (0.54) | 0.025 (0.52) |
+  | U2 | 0.043 (0.54) | 0.200 (0.65) | 0.166 (0.64) | 0.068 (0.57) | 0.022 (0.52) |
+
+  - **Over the year the correction barely relates to what the OL misses** (r about 0.05).
+  - **In winter and spring it points towards the wells** (r about 0.2, about 65 % of the cells). **In summer and autumn it is unrelated** (r about 0).
+  - The unit sets do not differ. The version without β (0.23–0.26) is inflated because w − z_OL still holds OL signal, since β < 1.
+- **Reading:** the comparison is like for like and not a labelling artefact. The DA adds gw variance that is mostly unrelated to the wells' residual, especially in JJA / SON (when the soil is near its bounds and the overflow goes to gw; review 181 (1)), and so lowers r. Its winter / spring part is in the right direction.
+- HE3 in the wells table (rerun in `artefact_checks/wells_v2_rerun/`): gw r 0.506 (seasonal 0.600), beats OL in 33 % of the cells, as in review 181 (2).
+
+- 01 Nov 19:55 Review 185 (is the OL well correlation real?) started on the desktop: permutation null (anywhere / same 10-degree band / > 1 000 km in the band, 200 each), climatology-only sine benchmark, OL r by region and source group with p10 / p50 / p90 and point scale, the same for TWS incl. GRACE. Output posthoc/null_checks/.
+
+#### Answer to DA review 185 — the OL well correlation is real and local; DA gw loses local seasonal skill — Claude Code, 01 Nov 19:58
+
+Post-hoc, desktop: `temp/exp_logs/paper/wrr/posthoc/null_checks/` (summary, CSVs, `nc_checks.py`). The same sample as reviews 181 (2) / 184: 1 261 cells, 23 038 locations, 2002-2006.
+- **1 + 4. Permutation null** (200 per scheme, seed 185): a cell's wells paired with another random well cell's model series. Median r over cells; null median [5–95 %]:
+
+  | candidate | real r | null anywhere | null same 10° band | null band > 1 000 km | real − null (c) |
+  |---|---|---|---|---|---|
+  | gw OL | 0.681 | 0.133 | 0.265 [0.248, 0.287] | 0.130 | **0.55** |
+  | gw HT9 | 0.516 | 0.072 | 0.177 [0.154, 0.198] | 0.028 | 0.49 |
+  | gw U2 | 0.488 | 0.072 | 0.176 | 0.030 | 0.46 |
+  | gw HG5 / HG4 / HE3 | 0.541 / 0.514 / 0.506 | about 0.08 | 0.17–0.18 | 0.01–0.03 | 0.47–0.53 |
+  | tws OL / HT9 / U2 | 0.581 / 0.558 / 0.556 | 0.14–0.16 | 0.27–0.29 | 0.15–0.20 | 0.38–0.41 |
+  | GRACE | 0.582 | 0.172 | 0.332 [0.313, 0.348] | 0.179 | 0.40 |
+
+  - **All candidates, GRACE included, are far above the nulls**: the skill is local, not a common climate signal.
+  - **Seasonal r, real vs same-band null:** gw OL 0.82 vs 0.66; gw HT9 0.62 vs 0.43; gw U2 0.58 vs 0.42; GRACE 0.75 vs 0.66; tws OL 0.70 vs 0.60. Much of the seasonal r is shared within a latitude band: the local seasonal skill is 0.16–0.19 for gw and 0.09–0.13 for TWS / GRACE.
+  - **Interannual r:** gw OL 0.635 vs nulls 0.03 / 0.14 / −0.03, so the interannual signal is almost entirely local. The DA runs score 0.51–0.53.
+- **2. Pure annual sine with the region's well phase** (leave-cell-out): median total r 0.39 (gw months) / 0.41 (GRACE months); seasonal r 0.80 / 0.78.
+  - **gw OL beats the sine in 80 % of the cells** (seasonal 0.82 vs 0.80). The DA gw runs beat it in only 62–65 %.
+  - **The DA's gw seasonal cycle (seasonal r about 0.6) is worse than a generic regional sine (0.80).**
+  - GRACE beats the sine in 77 %.
+- **3. By region / source** (median total r, gw OL → HT9 → U2):
+
+  | group | n cells | gw OL → HT9 → U2 |
+  |---|---|---|
+  | eu | 585 | 0.77 → 0.66 → 0.65 |
+  | na | 440 | 0.58 → 0.35 → 0.32 |
+  | au | 136 | 0.46 → 0.39 → 0.36 |
+  | as | 37 | 0.67 → 0.15 → 0.05 |
+  | af | 56 | 0.31 → 0.30 → 0.36 |
+  | NLD | 30 | 0.81 → 0.59 → 0.51 |
+  | DEU | 131 | 0.84 → 0.72 → 0.70 |
+  | rest of Europe | 424 | 0.73 → 0.64 |
+  | NWIS | 251 | 0.67 → 0.39 → 0.35 |
+  | BOM | 121 | 0.42 → 0.38 |
+  | others | 304 | 0.52 → 0.25 |
+
+  - Point scale, median (p10 / p90): gw OL 0.60 (−0.03 / 0.86), HT9 0.45, U2 0.42, GRACE 0.51 (0.03 / 0.79).
+  - TWS by region: DA and GRACE close to OL in eu and au; OL best in as and na.
+- **Reading:**
+  - The OL's high r is genuine local skill, not an artefact of the period, the averaging or a shared climate signal: real − null is about 0.55 in total r, and the interannual signal is local.
+  - It is highest in humid Europe (DEU 0.84, NLD 0.81) and lower in au / af.
+  - The DA loses most in the USA (NWIS), Korea / non-European GGMN and NLD, and least in DEU and the rest of Europe.
+
+- 01 Nov 20:15 HT9R assimilate EXIT=0 20:15:39 (3 592 s); the same 13 withheld epochs; data root 3 246 GB. Collect / evaluate / export next (export with dis / ET / gauges). Expected: HT9R done about 20:55, HG5R about 22:50, HG4R about 00:45, repro check, Danube DN0-DN3 from about 01:00.
+
+- 01 Nov 20:56 HT9R COMPLETE 20:53:32 (export 1 143 s, 10 GB, gauges_daily_dis.csv 438 240 rows). **Reproducibility: HT9R vs HT9 BIT-IDENTICAL** (all 12 storage mean / spread variables, max |diff| 0.0). Rule 164 (4) for HT9R (del_wrr.sh 390c098c: for reruns it requires gauges complete + bit-identical instead of a scores entry): DA_output/WRR_HT9R 281 GB (20:56:03), Res/WRR_HT9R/DA dailies 258 GB (20:56:40); data root -> 2 964 GB. HG5R prepare EXIT=0 20:54.
+
+- 01 Nov 21:05 Amazon gauge item (reviews 163 / 178.5) started on the desktop: observed daily discharge from SO-HYBAM / ANA (Obidos 17050001, Manacapuru 14100000, Tabatinga 10100000, Porto Velho 15400000) fetched into validation/HYBAM/; scorer (KGE + r / alpha / beta, bias, peak timing; all and withheld months) in temp/exp_logs/paper/wrr/amazon/. HT9R and HE3 exports are on the desktop; HG5R / HG4R are added when done.
+
+#### Amazon discharge (reviews 163 / 178.5) — first results for OL, HT9R, HE3 — Claude Code, 01 Nov 21:09
+
+`temp/exp_logs/paper/wrr/amazon/` (`amazon_summary.txt`, `amazon_scores.csv`, 4 hydrograph PNGs, `fetch_ana.py`, `score_amazon.py`). HG5R / HG4R are added by rerunning the scorer when their exports are there.
+- **Observations:** **ANA HidroWeb** (public telemetry web service `HidroSerieHistorica`, daily discharge, consistency level 2 for 2002-2006). These are the same ANA station codes SO-HYBAM uses. The HYBAM site itself has no scriptable API (it points to the AERIS catalogue, login not tried).
+  - Stations: Óbidos 17050001, Manacapuru 14100000, Tabatinga 10100000, Porto Velho 15400000; files in `validation/HYBAM/`.
+  - Attribution: "Agência Nacional de Águas e Saneamento Básico (ANA), HidroWeb/SNIRH"; free public data. **The licence wording is to be confirmed on HidroWeb.**
+  - Gaps: Manacapuru 9–30 Nov 2003 (that month missing); otherwise complete.
+- **Monthly ensemble mean, all 60 months, KGE (bias %):**
+
+  | gauge | OL | HT9R | HE3 |
+  |---|---|---|---|
+  | Óbidos (−2.25, −55.25) | 0.853 (−2.7) | **0.882** (+2.1) | 0.814 (+1.8) |
+  | Manacapuru | 0.694 (−4.8) | **0.928** (−0.0) | 0.851 (−0.0) |
+  | Tabatinga | **0.709** (+12.9) | 0.650 (+15.3) | 0.605 (+16.3) |
+  | Porto Velho (Madeira) | **0.888** (+8.0) | 0.818 (+10.9) | 0.799 (+11.3) |
+  | Óbidos, GMD cell (−2.25, −54.75) | **0.923** (+5.4) | 0.832 (+10.4) | 0.867 (+10.4) |
+
+  - The 13 withheld months follow the same pattern: Manacapuru OL 0.687 → HT9R 0.931 / HE3 0.797; Tabatinga and Porto Velho worse with DA; Óbidos about equal.
+  - Daily KGE is similar.
+- **Peaks** (median timing error / mean size error):
+  - DA enlarges the annual peaks (Óbidos HT9R +7 to +18 %, Manacapuru +10 to +26 % vs OL). That removes OL's peak deficit at Manacapuru (−11 % → +4 %) but overshoots at Óbidos (+9 %).
+  - DA delays the Óbidos peak by about 2 weeks (OL +5 d, HT9R +14 d, HE3 +21 d).
+  - Tabatinga 2004 is a calendar-year artefact (the observed max falls on 14 Jan), so the median / MAE and a 31-day-mean peak are reported too.
+- **Reading:**
+  - The DA improves discharge clearly only at Manacapuru (lower Solimões; KGE +0.23 with HT9R, also on withheld months). It is about neutral at Óbidos (cell-dependent: in the GMD cell OL is best, and DA is about 10 % too high there).
+  - It is worse upstream at Tabatinga and on the Madeira, where it adds to a high bias OL already has.
+  - **HT9R (basins) is better than HE3 (equal-area 3° tiles) at all four gauges.** The box runs HG5R / HG4R are still to come and decide the basins-vs-boxes question for discharge.
+
+- 01 Nov 21:10 HG5R prepare EXIT=0 20:54, collect_OL EXIT=0 21:09:44 (916 s); assimilate running. Data root 2 989 GB. Expected: HG5R done about 22:50, HG4R about 00:45, Danube from about 01:00.
+
+- 01 Nov 21:31 Review 186 (does GRACE carry gw information beyond the OL?) started on the desktop (post-hoc): innovation d = GRACE - OL TWS vs the OL well residual e, seasonal / remainder / total, cell and T9-unit smoothed, and with the OL fast-store seasonal cycle removed from d. Output posthoc/innovation_test/.
+
+#### Answer to DA review 186 — GRACE's gw information beyond the OL is interannual; its seasonal innovation points away from the wells — Claude Code, 01 Nov 21:33
+
+Post-hoc, desktop: `temp/exp_logs/paper/wrr/posthoc/innovation_test/` (summary, CSVs, `it_test.py`). 1 256 of the 1 261 cells (5 lack enough GRACE months or a calendar month); GRACE months only; median β 0.522.
+- **Innovation d = GRACE − OL TWS vs the OL residual at the wells e = w − β z_OL(gw)**, median per-cell r (share of cells with r > 0):
+
+  | innovation | seasonal | remainder (interannual, indicative) | total |
+  |---|---|---|---|
+  | d, cell | **−0.111** (0.43) | **+0.105** (0.60) | +0.026 (0.52) |
+  | d, T9 unit | −0.103 (0.44) | +0.111 (0.60) | +0.009 (0.51) |
+  | d′ (OL fast-store seasonal cycle removed), cell | −0.129 (0.43) | +0.105 (0.60) | −0.015 (0.49) |
+  | d′, T9 unit | −0.149 (0.41) | +0.111 (0.60) | −0.036 (0.45) |
+
+  - Fast stores = OL soil + snow + surface. Removing a climatology changes only the seasonal part, so the remainder column is identical.
+- **Reading:**
+  - **GRACE carries groundwater information beyond the OL only in the interannual (deseasonalized) part** (r about +0.11, 60 % of the cells).
+  - **Its seasonal innovation is anti-related to what the OL misses at the wells** (r −0.10 to −0.15, 41–44 % of the cells), even after the OL fast-store timing is removed.
+  - So putting the seasonal innovation into gw moves gw away from the wells. This explains the DA's seasonal gw loss.
+  - **For the fix design:** this supports **F3**, the seasonal part of the innovation kept out of gw, so that gw takes only the interannual part.
+  - In the running Danube test, DN1–DN3 change *how much* of the seasonal correction gw takes (more to snow / surface, overflow kept out of gw), not *which time scale*. F3 would be the next step if DN1 / DN2 do not pass the review-183 rule.
+
+- 01 Nov 22:12 HG5R assimilate EXIT=0 22:12:19 (3 743 s; first global run on the new partition.py / inflation.py default path); the same 13 withheld epochs; data root 3 270 GB. Expected: HG5R done about 22:50 (then repro vs HG5), HG4R about 00:45, Danube from about 01:00.
+
+- 01 Nov 22:48 HG5R COMPLETE 22:47:01 (export 1 203 s, 10 GB, gauges 438 240 rows). **Reproducibility: HG5R vs HG5 BIT-IDENTICAL** (12 / 12 storage variables, max |diff| 0.0). HG5R ran on the new src_DA default path (partition.py 9619d02f, inflation.py d4b285bd), which confirms the default path is bit-identical in a real global run. Export copied to the desktop; Amazon scorer rerun (HG5R monthly KGE: Obidos 0.810, Manacapuru see amazon_summary.txt). Rule 164 (4) for HG5R running (del_wrr.sh). HG4R prepare EXIT=0 22:47; collect_OL running.
+
+- 01 Nov 22:50 Rule 164 (4) HG5R done: DA_output/WRR_HG5R 281 GB (22:48:37), Res/WRR_HG5R/DA dailies 258 GB (22:49:15); data root -> 2 960 GB.
+
+- 01 Nov 23:00 HG4R collect_OL EXIT=0 22:59:43 (708 s); assimilate running. Data root 3 015 GB. Expected HG4R done about 00:40, repro check, then the Danube DN0-DN3 about 01:00 to 05:00.
+
+#### Answer to DA review 187 — DN4 / DN5 added; Danube chain re-armed with six cases — Claude Code, 01 Nov 23:09
+
+- **md5 on UCloud** = desktop: `src_DA/partition.py` **01c2b30a** (delivered by Syncthing), `inflation.py` d4b285bd. HG4R imported the old file at its start (22:47), as you note.
+- **`dn_run.py` (9683dad5):**
+  - DN4 = DN2 + `"seasonal_split": {"storages_slow": ["groundwstor"], "method": "climatology", "memory_years": 3}`
+  - DN5 = DN0 + the same `seasonal_split` only
+  - **Prepare tested for DN4 and DN5:** only allowed keys differ from `settings/RDA_Danube`.
+- **Chain re-armed** (tmux da:dn, 23:09:39): `dn_chain.sh DN0 DN1 DN2 DN3 DN4 DN5`. It still waits for the reruns' final line (after2: HG4R + reproducibility check, about 00:45). Expected end: about 6 × 1 h → mid-morning.
+- **Scores** as in review 183 for all six, with the decision rule unchanged; order of simplicity DN1, DN5, DN2, DN4, DN3. For DN4 / DN5 also the review-186 test on their increments (seasonal / interannual r of the gw increment with the OL residual at the wells). The scorer `dn_scores.py` is written once DN0's outputs exist.
+
+- 01 Nov 23:16 E1 cmp (review 164 (3)): OL_output done 23:16:05, 56 606 files, 0 differing / missing. Ensemble_input and Ensemble_Initialization next; E1 is deleted only if all of them are identical too.
+
+#### Review 164 (3) E1 result: NOT deleted — and the DA runs overwrite the open-loop restart states — Claude Code, 01 Nov 23:38
+
+- **Full `cmp` of archive_ensemble_E1 vs the plain production folders** (`da_dev/del_164.log`):
+  - OL_output: 56 606 files, all identical.
+  - Ensemble_input: 2 635 files, all identical.
+  - Ensemble_Initialization: **34 differ**.
+  - → **Per your rule nothing of E1 was deleted** (DONE 23:37:45; data root 3 187 GB).
+- **The 34 files:**
+  - **30 × `restartwatergap_2006-12-31.pickle` (every member):** the plain copies were written **today 22:11 by HG5R's DA** (E1's are from 24 Oct, also from a DA run). **Every DA run saves its end-of-period analysis states into `Ensemble_Initialization/Ens_k/restartwatergap_<todate>.pickle`** (`configure_ini_for_resume(save_init_dir=Ensemble_ini_dir)` in DA_GRACE; the WaterGAP RestartState writes at the run end). SMOKE likewise left `restartwatergap_2002-08-31.pickle` (11:16).
+  - **4 × `restartwatergap_2001-12-31.pickle`** (Ens_10, 18, 23, 24): production (25 Oct) vs E1 (11 Oct). The OL output of all 31 members is byte-identical, and HT9R / HG5R reproduce HT9 / HG5 bit for bit from these start states, so the difference does not change the trajectory. Most likely it is in the pickle serialisation (not inspected further).
+- **Consequences:**
+  - (a) The production ensemble's **2006-12-31 restart states are no longer the open loop's**; they hold DA analysis states, and after HG4R they will be HG4R's. **They must not be used to continue the open loop to 2007-2016** (review 162.3 (b)). A 2002-2016 OL needs either a rerun of the 2002-2006 OL (about 40 min, 31 ranks; it rewrites only OL_output and 2006-12-31) or a different restart path.
+  - (b) The Danube DN runs will write their (regional) end states into the same files. That is harmless for runs starting 2002-01-01, but it is the same contamination.
+  - (c) E1 can only be deleted after a decision. Its 2006-12-31 states are also DA states (24 Oct), so they are not a clean open-loop restart either.
+- **Proposal (Fan / Cowork decide; nothing done):**
+  - (i) delete `archive_ensemble_E1/` anyway (755 GB). Its only unique content is DA end states and 4 serialisation-different start states.
+  - (ii) for future DA runs set a separate `Ensemble_ini_dir` in the run copy (e.g. `DA_output/<case>/restart`), so a DA can never overwrite the ensemble's restart files. This is settings-only, if the key is honoured for the save path. The read path (2001-12-31) must stay the ensemble's, which needs a check in `DA_GRACE.configure_ini_for_resume` (read = save there today).
+
+- 02 Nov 00:05 HG4R assimilate EXIT=0 00:04:06 (3 852 s); the same 13 withheld epochs; data root 3 296 GB. Expected: HG4R done about 00:40 + repro check, then the Danube DN0-DN5 (about 6 h).
+
+#### Reruns done (review 178) — all bit-identical; Amazon discharge for OL and all four DA runs — Claude Code, 02 Nov 00:41
+
+- **Reruns** (wrr_after2, AFTER2 COMPLETE 00:38:32): HT9R / HG5R / HG4R each **BIT-IDENTICAL** to HT9 / HG5 / HG4 in all 12 storage variables (`wrr_repro.out`).
+  - HG5R and HG4R ran on the new `src_DA` default path (HG4R: partition 9619d02f, imported 22:47), so the default path is confirmed bit-identical in real global runs.
+  - Every rerun export has dis / ET grids and `gauges_daily_dis.csv` (438 240 rows).
+  - **Rule 164 (4)** for HT9R, HG5R and HG4R (gauges + bit-identity confirmed first): 3 × (281–282 GB DA_output + 258 GB dailies). The HG4R dailies are being deleted now.
+- **Amazon discharge** (ANA observations; `temp/exp_logs/paper/wrr/amazon/`, rerun with all runs), **monthly KGE, all 60 months (withheld 13 months in brackets):**
+
+  | gauge | OL | HT9R | HG5R | HG4R | HE3 |
+  |---|---|---|---|---|---|
+  | Óbidos (gauge cell) | 0.853 (0.866) | **0.882** (0.863) | 0.810 (0.781) | 0.837 (0.798) | 0.814 (0.776) |
+  | Óbidos (GMD cell) | **0.923** (0.871) | 0.832 (0.781) | 0.863 (0.856) | 0.857 (0.844) | 0.867 (0.862) |
+  | Manacapuru | 0.694 (0.687) | **0.928** (**0.931**) | 0.878 (0.875) | 0.846 (0.762) | 0.851 (0.797) |
+  | Tabatinga | **0.709** (0.666) | 0.650 (0.591) | 0.695 (0.643) | 0.660 (0.586) | 0.604 (0.536) |
+  | Porto Velho | **0.888** (0.845) | 0.818 (0.788) | 0.818 (0.763) | 0.810 (0.748) | 0.799 (0.772) |
+
+  Bias %: all DA runs about 0 at Manacapuru (OL −4.8), +1.8 to +2.1 at Óbidos (OL −2.7), +15 to +17 at Tabatinga (OL +12.9), +11 to +14 at Porto Velho (OL +8.0).
+- **Reading (basins vs boxes for discharge):**
+  - **HT9R (T9 basins) is the best DA run at Manacapuru** (KGE 0.928 vs boxes 0.85–0.88; on withheld months 0.931 vs 0.76–0.88) **and at the Óbidos gauge cell** (0.882 vs 0.81–0.84).
+  - **The box runs are slightly better at the GMD Óbidos cell and at Tabatinga** (HG5R 0.695 vs HT9R 0.650). Porto Velho is a tie.
+  - **The DA improves on OL clearly only at Manacapuru.** Upstream (Tabatinga, Madeira) every DA run increases OL's high bias.
+- **Next:** the Danube test DN0–DN5 is running (DN0 prepare EXIT=0 00:39:23; src_DA partition 01c2b30a, inflation d4b285bd).
+
+- 02 Nov 01:28 Danube DN0 COMPLETE 01:26 (open_loop 142 s, assimilate + collect 2 599 s, evaluate 20 s). Scorers ready and tested on DN0: da_dev/dn_scores_uc.py (c3f5afdf; UCloud) and da_dev/dn_wells.py (desktop, via the wrr_wells.py EXTRA_CAND hook). **DN0:** held-out TWS SS basin 0.735 (RMS OL 33.2 -> DA 17.1 mm), sub-basins 0.41-0.81; fit reduction 0.819; discharge DA/OL 1.00 (Vienna, Bratislava) / 1.03 (delta); increment share gw 0.145 before -> 0.218 after the bounds (soil 0.625 -> 0.511). **Wells (76 Danube cells):** gw median r OL 0.770 / DN0 0.755, seasonal 0.837 / 0.819, interannual 0.787 / 0.757; DN0 beats OL in 57 % of the cells (r); TWS r 0.591 -> 0.649 (beats OL in 91 %). In the Danube the DA barely degrades gw (unlike globally), so the review-183 rule (+0.05 seasonal r over DN0) is a high bar. DN1 running (prepare 01:26).
+
+- 02 Nov 02:15 Danube DN1 COMPLETE 02:12:49, scored 02:14 (autoscore). DN1 vs DN0: held-out SS basin 0.732 vs 0.735; fit reduction 0.819 vs 0.819; wells gw (76 cells) median r 0.752 vs 0.755, seasonal 0.825 vs 0.819 (+0.006), interannual 0.746 vs 0.757. Increment shares before -> after the bounds: DN1 snow 0.199 -> 0.078 and gw 0.119 -> 0.209 (DN0: snow 0.056 -> 0.055, gw 0.145 -> 0.218). The snow share F1 asks for is cut by the snow bounds, and the overflow again goes to gw, which is what DN2 (bound_overflow, gw excluded) tests. DN2 running.
+
+- 02 Nov 03:02 Danube DN2 COMPLETE 02:59:38, scored 03:02. **The bound_overflow mechanism works:** gw share 0.121 before -> 0.110 after the bounds (DN0 0.145 -> 0.218, DN1 0.119 -> 0.209); the overflow goes to river (0.163 -> 0.252) and soil; bo_unplaced 65 mm (summed), fallback 0. Scores vs DN0: held-out SS basin 0.707 vs 0.735 (**-0.028, outside the 0.02 tolerance of the review-183 rule**); fit reduction 0.809 vs 0.819; wells gw median r 0.766 vs 0.755, seasonal 0.828 vs 0.819 (+0.009, short of +0.05), peak error 0.68 vs 0.73 months. DN3 running.
+
+- 02 Nov 03:50 Danube DN3 COMPLETE 03:48:05, scored 03:49. DN3 (DN2 with fallback true): gw share after the bounds 0.120, river 0.26; bo_unplaced 0 mm, 271 fallbacks. Vs DN0: held-out SS basin 0.728 vs 0.735 (-0.007, within tolerance); fit reduction 0.819; wells gw median r 0.767 vs 0.755, seasonal 0.828 vs 0.819 (+0.009, short of +0.05). DN4 running.
+
+- 02 Nov 04:38 Danube DN4 COMPLETE 04:36:08, scored 04:37. DN4 (DN2 + seasonal_split climatology): gw share after the bounds 0.075; sp_fast_share_of_mean_increment 0.738. Vs DN0: held-out SS basin 0.703 vs 0.735 (-0.032, outside the 0.02 tolerance); fit reduction 0.807; **wells gw median r 0.772 (above OL 0.770), seasonal 0.853 vs 0.819 (+0.034; first variant above OL's 0.837), beats OL in 63 % of the cells (r)**, peak error 0.64 months. Still short of +0.05 and fails the TWS tolerance. DN5 (seasonal_split only) running.
+
+#### Danube storage-split test DN0–DN5 (reviews 183 / 187): results and VERDICT — Claude Code, 02 Nov 05:25
+
+- **Runs** (`dn_chain.sh`, CHAIN COMPLETE 05:23:30; src_DA partition 01c2b30a, inflation d4b285bd): each case about 47 min (prepare 20 s, open_loop 2–3 min, assimilate + collect about 43 min, evaluate 20 s).
+- **Scores:** `dn_scores_uc.py` (UCloud, autoscore) + `dn_wells.py` (desktop). Files: `temp/exp_logs/paper/wrr/danube/` (`scores_DN*.json`, `dn_monthly_DN*.npz`, `wells/dn_wells_summary.{csv,txt}`).
+  - Wells: v2, co-located collapsed, **76 Danube cells** with ≥ 2 locations, 2002-2006.
+  - Held-out TWS skill: 13 withheld epochs, target GRACE anomaly + OL mean (as `wrr_scores.py`).
+
+| case | gw seasonal r (Δ vs DN0) | gw r total | gw interannual r* | peak error [months] | held-out TWS SS basin (Δ) | fit reduction | gw share before → after bounds | swe share before → after |
+|---|---|---|---|---|---|---|---|---|
+| OL | 0.837 | 0.770 | 0.787 | 0.69 | – | – | – | – |
+| DN0 current | 0.819 | 0.755 | 0.757 | 0.73 | 0.735 | 0.819 | 0.145 → 0.218 | 0.056 → 0.055 |
+| DN1 F1+F5 | 0.825 (+0.006) | 0.752 | 0.746 | 0.71 | 0.732 (−0.003) | 0.819 | 0.119 → 0.209 | 0.199 → 0.078 |
+| DN2 +F2 | 0.828 (+0.009) | 0.766 | 0.752 | 0.68 | 0.707 (**−0.028**) | 0.809 | 0.121 → 0.110 | 0.197 → 0.089 |
+| DN3 F2 fallback | 0.828 (+0.009) | 0.767 | 0.756 | 0.68 | 0.728 (−0.007) | 0.819 | 0.120 → 0.120 | 0.199 → 0.089 |
+| **DN4** F2+F3 | **0.853 (+0.034)** | **0.772** | **0.769** | **0.64** | 0.703 (**−0.032**) | 0.807 | 0.084 → 0.075 | 0.207 → 0.092 |
+| DN5 F3 only | 0.825 (+0.006) | 0.755 | 0.747 | 0.73 | 0.735 (0.000) | 0.819 | 0.100 → 0.216 | 0.057 → 0.055 |
+
+\*indicative (5 years). TWS at the wells: DN0 r 0.649 vs OL 0.591.
+
+- **Sub-basin held-out SS** (6 sub-basins): DN0 0.41 / 0.47 / 0.48 / 0.81 / 0.69 / 0.54; DN4 0.37 / 0.47 / 0.42 / 0.80 / 0.63 / 0.54; the others in between.
+- **Discharge (model only)**, DA / OL mean ratio at Vienna / Bratislava / the delta: DN0 1.00 / 1.00 / 1.03, all variants ≤ 1.008 / 1.006 / 1.045. **No observed Danube discharge is available** (the GRDC request is pending), so **the discharge condition cannot be tested.**
+- **Mechanisms:**
+  - **F1** gives snow a 0.20 pre-bound share, but the snow bounds cut it to about 0.08–0.09. The overflow goes to gw (DN1) or, with F2, to river and soil.
+  - **F2** stops the bound overflow into gw (gw 0.12 → 0.11 instead of → 0.21) at the cost of 0.028 held-out skill. **F3** removes 74 % of the ensemble-mean increment's seasonal part from gw (sp_fast_share 0.74).
+  - **F3 alone (DN5) has no effect:** the seasonal split lowers gw's pre-bound share (0.145 → 0.100), but the bound overflow refills it (→ 0.216). **F3 works only together with F2 (DN4).**
+- **VERDICT (review-183 rule, fixed):** a variant is "better" if the gw seasonal r rises by ≥ 0.05 over DN0, the held-out TWS skill stays within 0.02 of DN0, and no gauge's discharge KGE drops by more than 0.05.
+  - **No variant passes.** The seasonal-r gains are +0.006 to +0.034 (DN4 is closest, and the first to exceed OL's seasonal r). DN2 and DN4 also lose more than 0.02 of held-out skill.
+  - The discharge condition is untestable (no observations; the model discharge changes are ≤ 4.5 %).
+  - → **Keep the current settings for the Danube.**
+- **Reading:**
+  - In the Danube the DA barely degrades gw in the first place (DN0 0.819 vs OL 0.837, unlike the global 0.82 → 0.6). The +0.05 bar is therefore close to the ceiling here.
+  - DN4 is the only variant that turns the gw comparison in favour of the DA (it beats OL in 63 % of the cells; peak error 0.64 vs OL 0.69), for −0.03 of held-out TWS skill.
+  - A test region where the global degradation is large (e.g. NWIS-dense USA or Korea, review 185) would be a fairer test of F2 + F3.
+- The review-186 test on the DN0 / DN4 / DN5 increments is running on the desktop and will be appended.
+
+- *Addendum 02 Nov 05:26 (review 187, last item): review-186 test on the Danube gw increments* (`danube/increment_test/`, `dn_inc_test.py`). Ensemble-mean gw increment g vs the OL residual at the wells e = w − β z_OL; 76 cells, 2002-04..2006-12, median β 0.631. Median per-cell r (share > 0):
+
+  | case | seasonal | interannual* | total | gw increment seasonal amplitude, well cells / all 376 cells [mm] |
+  |---|---|---|---|---|
+  | DN0 | **−0.215** (0.30) | +0.128 (0.84) | +0.031 (0.58) | 2.27 / 4.03 |
+  | **DN4** | **+0.145** (0.61) | +0.092 (0.70) | +0.095 (0.66) | **0.85 / 0.90** |
+  | DN5 | −0.202 (0.29) | +0.139 (0.82) | +0.034 (0.58) | 2.17 / 3.95 |
+
+  - **As in review 186:** DN0's (and DN5's) seasonal gw increment points away from what the OL misses at the wells, and the interannual part points towards it.
+  - **DN4 (F2 + F3) reverses the sign of the seasonal relation** and cuts the seasonal gw increment by about 2.5–4.5×, consistent with its better gw scores.
+  - **DN5 is identical to DN0 in this test too:** F3 without F2 is undone by the bound overflow.
+
+#### Answer to DA review 188 — HT9S running; E1 deletion blocked on my side (Fan please run it) — Claude Code, 02 Nov 08:07
+
+- **Code verified** (desktop = UCloud): `src_FlowControl/DA_GRACE.py` **c2a7cd08**, `src_DA/configure_DA.py` **d8a31fce**, `partition.py` 01c2b30a, `inflation.py` d4b285bd.
+- **(1) HT9S** (`wrr_run.py` 83d98999):
+  - **Configuration:** HT9's configuration plus exactly the DN4 options:
+    - storage_shares = soilmoist, groundwstor, swe, localwetlandstor, globalwetlandstor
+    - inflation split ol_seasonal
+    - bound_overflow {exclude groundwstor, fallback false}
+    - seasonal_split {groundwstor, climatology, 3 years}
+  - **Prepare test:** the run copy vs U2's differs only in case, withhold and these four options.
+  - **Launched** in tmux da:ht9s via `ht9s_chain.sh` (709c1a90), start 08:06:43. It:
+    1. records the md5 of all `Ensemble_Initialization/Ens_*/restartwatergap_*.pickle` before the run;
+    2. runs `wrr_chain.sh HT9S` (export with dis / gauges);
+    3. compares the md5s after the run;
+    4. lists `DA_output/WRR_HT9S/restart/Ens_k/restartwatergap_*` (expected: 2006-12-31 for every member).
+  - Whether the model reads restarts once or per window will be checked in the assimilate log; if per window, I stop and report.
+  - **Expected:** HT9S complete about 10:00. Then the scores of the fixed rule:
+    - (a) `wrr_wells.py` with HT9S
+    - (b) held-out skill on WB 93 basins (`bs_test.py`) and HB3 (`wrr_scores.py`)
+    - (c) `score_amazon.py` with HT9S
+    - plus the review-186 test on HT9S's increments
+- **(3) E1 deletion: NOT done.** My call to start `da_dev/del_e1.sh` (450a7a77: checks inside the data root, open handles, symlinks; then `rm -rf archive_ensemble_E1`) was **refused by the auto-mode permission classifier** ("Irreversible Deletion"), despite Fan's word relayed here. I do not work around that.
+  - **→ Fan, please run it yourself on UCloud:** `bash /work/PyGLDA/temp/exp_logs/da_dev/del_e1.sh` (it logs size and data root before / after to `da_dev_status.txt`). Alternatively, add a permission rule for it in Claude Code.
+- **(2) OL rerun** after HT9S, as ordered. I will identify the OL driver (the production ensemble's OL stage) and post the exact command and checks before starting.
+
+- 02 Nov 08:08 Review 188 (2) prepared: OL rerun driver da_dev/ol_rerun.py (a50217d2) = run_prod_stage.py STEP=OL but on a run copy of settings/GDA_Ucloud (prepare_settings; the original driver resolved the repository settings in place) and end 2006-12-31. md5 snapshot of all OL_output daily files + restart files started (da_dev/ol_md5.sh 05a2db8d -> ol_md5_before.txt; read-only, 8 readers), so the rerun can be checked file by file. The rerun starts after HT9S.
+
+- 02 Nov 08:22 HT9S prepare EXIT=0 08:08, collect_OL EXIT=0 08:22:23 (812 s); assimilate running. Data root 3 097 GB. Expected HT9S complete about 09:45.
+
+- 02 Nov 08:37 Review 189 noted. partition.py 019e6315 (seasonal_split init / save) is on the desktop; HT9S imported 01c2b30a at its start. Init builder da_dev/seasonal_init.py written: m_j(M) = member mean of DM_basin_average(dX), with H = cos-lat weights normalised over the unit's cells, all layers summed (as src_DA/ObsDesignMatrix), dX = non-river part of file M + river part of file M+1 (release shifted back); clim = calendar-month mean over the years; count = years with an analysis; keys clim (707, 12) / count (12,) as _load_climatology expects. It runs on UCloud after HT9S's assimilate and before any rule-164 (4) deletion; output Res/WRR/HT9S/seasonal_split_init_T9.npz + desktop copy. HT9S: the assimilate log shows one restart load (2002-01-01) so far.
+
+- 02 Nov 09:21 HT9S assimilate EXIT=0 09:20:52 (3 492 s). 'Restart data loaded' appears once in its log (2002-01-01) over all windows, so restarts are read once at the start (the review-188 read-path logic holds). **seasonal_split_init_T9.npz built** (seasonal_init.py e1d01f8e) from HT9S's increments before any deletion: 41 analysis months 2002-04..2006-12, 707 units; count per calendar month [1, 4, 4, 4, 2, 3, 4, 4, 1, 5, 5, 4] (withheld months fewer); median |clim| per month 8.4, 9.8, 8.1, 15.1, 17.1, 22.5, 9.4, 7.6, 13.3, 13.6, 7.4, 7.1 mm; it explains 70.9 % of the mean-increment variance pooled (median per unit 61.5 %). Res/WRR/HT9S/seasonal_split_init_T9.npz + desktop copy (md5 equal).
+
+#### HT9S (global DN4 settings, review 188): results and VERDICT; restart fix verified — Claude Code, 02 Nov 10:09
+
+- **Run:** `ht9s_chain.sh`. prepare 08:08, collect_OL 812 s, assimilate 3 492 s, collect_DA 980 s, evaluate 60 s, export 1 283 s; COMPLETE 10:00:38 (export 10 GB, with dis / gauges).
+- **Restart fix verified in the run** (review 188 (2)):
+  - **all 124 `Ensemble_Initialization/Ens_*/restartwatergap_*.pickle` unchanged** (md5 before / after identical)
+  - `DA_output/WRR_HT9S/restart/Ens_k/restartwatergap_2006-12-31.pickle` present for all 31 members
+  - "Restart data loaded" appears once (2002-01-01) in the assimilate log, so restarts are read once, as assumed
+- **Partition** (filter_summary):
+  - increment share before → after the bounds: gw 0.099 → 0.105, soil 0.459 → 0.419, swe 0.231 → 0.111, river 0.105 → 0.192, wetlands 0.107 → 0.172
+  - `sp_fast_share_of_mean_increment` **0.843**
+  - `bo_unplaced_mm_sum` 79 708 (summed over cells, members and windows); fallback 0
+  - (HT9: gw 0.217 → 0.344 in its own filter_summary)
+- **Scores vs HT9 / HT9R:**
+
+  | criterion | HT9 / HT9R | **HT9S** | threshold | |
+  |---|---|---|---|---|
+  | (a) gw seasonal r at wells (1 261 cells) | 0.616 | **0.817** | ≥ 0.666 | **pass** |
+  | (b) held-out TWS SS, WB 93 basins | 0.543 | 0.464 (−0.079) | drop ≤ 0.03 | **fail** |
+  | (b) held-out TWS SS, HydroBASINS L3 (`wrr_scores.py`) | 0.524 | 0.461 (−0.063) | drop ≤ 0.03 | **fail** |
+  | (c) Amazon monthly KGE, Manacapuru | 0.928 | 0.926 | drop ≤ 0.05 | pass |
+  | (c) Amazon monthly KGE, Óbidos gauge cell | 0.882 | 0.880 | drop ≤ 0.05 | pass |
+
+  - **More gw at the wells** (OL in brackets): total r 0.626 (0.681; HT9 0.516); interannual 0.566 (0.635; HT9 0.523); peak error 0.86 months (0.82; HT9 1.42). HT9S beats OL in 38 % (r) / 45 % (seasonal) / 45 % (peak) of the cells (HT9: 31 / 25 / 28 %). TWS at the wells is unchanged (0.555 vs HT9 0.558).
+  - **Held-out TWS on the other geometries:**
+
+    | run | T9 | G4 | G5 | E3 | cells |
+    |---|---|---|---|---|---|
+    | HT9 | 0.525 | 0.380 | 0.408 | 0.334 | 0.071 |
+    | HT9S | 0.467 | 0.304 | 0.326 | 0.249 | **−0.030** |
+
+  - **Fit to GRACE in the global land series:** RMS reduction 0.438 vs HT9 0.58; corr 0.990 vs 0.992. WB all 54 epochs: CC 0.976 / RMSE 13.3 mm vs HT9 0.982 / 10.9.
+- **VERDICT (review-188 rule, fixed before the run): NOT PASSED** — (b) fails on both basin sets, while (a) and (c) pass. → The DN4 settings do **not** become the 2002-2016 configuration under this rule.
+- **Reading:**
+  - The fix does what it was built for. The gw seasonal cycle at the wells is restored almost to the OL level (0.817 vs 0.824), and the peak timing too.
+  - But keeping the seasonal correction out of gw and routing the bound overflow to river / wetlands costs about 0.06–0.08 of held-out TWS skill. A likely reason (not tested): the fast stores carry the correction less persistently into the next (withheld) month than gw does.
+  - The trade-off is the same as in the Danube (DN4: +0.034 seasonal r, −0.032 SS), but much larger globally on both sides.
+  - Discharge at the Amazon gauges is unaffected.
+- **seasonal_split init:** `Res/WRR/HT9S/seasonal_split_init_T9.npz` is built (see above). With it, a future run would avoid the first-year leak; that would raise HT9S's gw score further but not its TWS loss.
+- **Next (as ordered):**
+  - rule 164 (4) for HT9S (export with gauges + scores written; the init file is built)
+  - **then the OL rerun** (`ol_rerun.py`; check OL_output against `ol_md5_before.txt`, 56 606 files)
+  - review-186 test on HT9S's increments (running on the desktop)
+
+- 02 Nov 10:10 Review-186 test on the global gw increments (posthoc/increment_test_HT9S/; 1 256 cells, median beta 0.521), median per-cell r (share > 0) seasonal / interannual* / total: **HT9** -0.065 (0.45) / +0.039 (0.58) / +0.010 (0.53), gw increment seasonal amplitude 6.5 mm (well cells) / 6.6 mm (footprint); **HT9S** +0.028 (0.54) / -0.006 (0.49) / -0.002 (0.50), amplitude 1.15 / 1.00 mm. Globally HT9's gw increment is only weakly related to the OL's error at the wells (same signs as the Danube and review 186, but weaker). HT9S cuts the seasonal gw increment about 6x and leaves an increment unrelated to the OL residual. The better gw scores of HT9S come from not degrading the OL seasonal cycle, not from adding information.
+
+- 02 Nov 10:13 Rule 164 (4) HT9S: DA_output/WRR_HT9S 289 GB (10:10:57, incl. its verified restart folder), Res/WRR_HT9S/DA dailies 258 GB (10:11:39); data root -> 3 114 GB. OL rerun (review 188 (2)) started: ol_rerun_chain.sh (b0c8651b) -> ol_rerun.py, 31 ranks, then md5 of all OL_output files and restarts vs ol_md5_before.txt.
+
+- 02 Nov 10:17 OL rerun: first start 10:12 failed at once (settings/GDA_Ucloud was removed from the repository in c113357 on 27 Oct; prepare_settings found no DA_setting.json); the hung ranks were stopped with tmux kill-window. The three files are restored from commit df8a03b into da_dev/ol_rerun_settings/GDA_Ucloud (Config 56a3dcbf, DA_setting 1ba40766, perturbation 1421d1eb = the E1 / production table); ol_rerun.py f492a8f3 uses that folder as the source of its run copy. Relaunched 10:15:09; simulation 2002-01-01..2006-12-31 running (31 ranks; expected about 40 min). The md5 comparison of OL_output then shows whether this reconstruction reproduces the production OL bit for bit (the production DA_setting may have differed, but OL_run reads only paths / ensemble size from it, and the existing Ensemble_input).
+
+#### Answer to DA review 190 — HT9F armed after the OL rerun; HT9S skill-loss diagnostic started — Claude Code, 02 Nov 10:20
+
+- **`partition.py` 019e6315** on UCloud = desktop (confirmed).
+- **HT9F** (`wrr_run.py` b320542b) = HT9S plus:
+  - `bound_overflow` fallback **true**
+  - `seasonal_split` init `<data root>/Res/WRR/HT9S/seasonal_split_init_T9.npz` (b95a95c5) and save `<data root>/DA_output/WRR_HT9F/seasonal_split_state.npz`
+  - **Prepare test (output file 10:20):** only allowed keys differ from U2's run copy.
+- **Armed:** `ht9f_after_ol.sh` (d17a7c68, tmux da:ht9f, 10:20:22).
+  - It waits for the OL rerun's DONE line and **starts only if the rerun's OL_output is BIT-IDENTICAL** to the snapshot; otherwise it stops and reports.
+  - It also checks that `Ensemble_Initialization` is unchanged after the run and that `seasonal_split_state.npz` was written.
+  - Then the same scores as HT9S + `bo_n_fallback`, gw share after the bounds, review-186 test, rule 164 (4).
+- **HT9S skill-loss diagnostic** (post-hoc, desktop, `posthoc/ht9s_skill_loss/`):
+  - ΔSS per WB basin vs snow share, aridity and an unplaced-overflow proxy (the filter log holds only a global sum)
+  - withheld-month errors of the global land series by month
+  - persistence of the DA − OL TWS anomaly by storage (fast-store memory)
+- **OL rerun:** running since 10:15:09.
+
+#### Review 190 — HT9S skill-loss diagnostic result (post-hoc, desktop) — Claude Code, 02 Nov 10:23
+
+Files: `temp/exp_logs/paper/wrr/posthoc/ht9s_skill_loss/` (summary, per-basin csv, `sl_test.py`).
+
+- **Reproduces the scores:**
+  - WB: 0.5426 → 0.4640; median ΔSS −0.045; 71 % of basins lose.
+  - HB3: 0.5236 → 0.4600; 63 % of basins lose.
+- **What the per-basin ΔSS goes with** (Spearman ρ, WB):
+  - snow share: +0.14 (p 0.19). Low-snow basins lose most (tercile medians −0.073 / −0.031 / −0.026), so snow is **not** the driver.
+  - aridity P/ET: +0.28 (p 0.006). The driest tercile loses most (−0.129 vs −0.022).
+  - unplaced proxy, slope of HT9S on HT9 applied increment: +0.51 (p < 0.001). The least-placed tercile loses −0.167.
+  - mean |inc HT9S − inc HT9|: −0.67.
+  - The unplaced overflow itself is a single global sum (`bo_unplaced_mm_sum` 79,708) and **cannot be mapped per basin**; the increments are a proxy only.
+- **Global land, withheld months:**
+  - Global-mean |error| OL 5.06 / HT9 2.98 / HT9S 3.01 mm, so HT9S is as good as HT9.
+  - Mean |cell error| OL 53.3 / HT9 50.9 / HT9S 53.7 mm, so HT9S is about as bad as OL in 12 of 13 months.
+  - "1 vs 2 months after an analysis" cannot be derived: all withheld months but 2002-08 follow an assimilated month.
+- **Persistence of DA − OL** (lag-1 autocorrelation, median per cell, HT9 → HT9S):
+  - TWS 0.75 → 0.72; gw 0.80 → 0.91; soil 0.58 → 0.61; snow 0.53 → 0.51; surface 0.70 → 0.53.
+  - RMS of DA − OL: surface 95 → 133 mm, gw 24 → 20 mm.
+- **Reading:** the loss is mostly **unplaced or capped water in dry, low-snow basins** (fallback off, gw excluded from the overflow). The shorter memory of corrections moved into surface water is secondary. HT9F (fallback on) tests the first explanation directly.
+
+#### Review 188 item 2 — OL rerun result: OL_output BIT-IDENTICAL; HT9F started — Claude Code, 02 Nov 11:01
+
+- **OL rerun** (`ol_rerun.py` f492a8f3; GDA_Ucloud 2002–2006 settings from git df8a03b):
+  - OL_run EXIT=0 at 10:57:53, wall 2,564 s, peak RSS 56.3 GB.
+  - `git status settings/` clean.
+- **`OL_output` BIT-IDENTICAL:** 56,606 files, md5 after (10:59:59) = before (08:11).
+- **`Ensemble_Initialization`:** 124 restart files.
+  - Changed: exactly 30, all `Ens_1..30/restartwatergap_2006-12-31.pickle`.
+  - Unchanged: the other 94, including `Ens_0` 2006-12-31 (c78c77cd).
+  - So the 2006-12-31 member restarts were DA end states (written before the restart fix c2a7cd08) and are now the OL end states again.
+  - Example: Ens_1 67de2547 → cd24254a.
+  - Before / after / diff lists: `temp/exp_logs/paper/wrr/ol_rerun/ol_md5_{before,after}_restart.txt`, `ol_md5_restart_diff.txt`.
+- **HT9F (review 190)** started at 11:00:23 via `ht9f_after_ol.sh` (partition.py 019e6315, DA_GRACE.py c2a7cd08, init b95a95c5).
+  - The scores (wells, WB/HB3 held-out SS, Amazon KGE, `bo_n_fallback`, gw share, review-186 test) and rule 164 (4) follow when the chain completes.
+
+#### Answer to DA reviews 191 / 192 — HT9F stopped, FT9F running, gw validation and fit scorer started, forcing beyond 2012 — Claude Code, 02 Nov 11:25
+
+1. **HT9F stopped** at 11:22 with `tmux kill-window da:ht9f`, during assimilate.
+   - Nothing restarted; no HT9F process left.
+   - `Ensemble_Initialization`: 124 restarts unchanged against the 10:59 snapshot.
+   - `git status settings/` clean.
+   - Partial output kept, not deleted. It needs your word (Fan) or your own deletion:
+     - `<data root>/DA_output/WRR_HT9F`: **32 GB**, 6,633 entries
+     - `<data root>/Res/WRR_HT9F`: **8 GB**, 227 entries; these are OL links plus the collected OL/`Res_OL.h5`, no DA dailies
+   - Data root 3,153 GB.
+2. **FT9F running** since 11:24:13 (tmux da:ft9f, `ft9f_chain.sh` 72522604).
+   - `wrr_run.py` 4473772b: FT9F = HT9F's options with **no withhold** (all 54 epochs).
+   - `seasonal_split` init `Res/WRR/HT9S/seasonal_split_init_T9.npz` (b95a95c5); save `DA_output/WRR_FT9F/seasonal_split_state.npz`.
+   - Restart folder `DA_output/WRR_FT9F/restart` (fix c2a7cd08); restart md5 before/after; export with gauges.
+   - partition.py 019e6315, DA_GRACE.py c2a7cd08.
+   - Expected about 3–4 h for prepare, collect_OL, assimilate, collect_DA, evaluate and export.
+   - **Acceptance rule of review 192 noted as fixed before any result.** The report will carry the line "FT9F accepted / not accepted", with all numbers beside U2 and OL.
+   - Fit scorer `paper/wrr/fit_scores/fit_test.py` is being written now (desktop):
+     - assimilated months, T9 units vs U2 and OL: median and area-weighted RMSD, global land-mean RMSD, CC
+     - units worse than U2 by > 5 mm: count, area share and a map; the same on WB 93 and HB3
+     - It is checked first on HT9 / HT9S against Cowork's numbers (34.8 / 4.4 / 6.0 mm median; 164 units, 21 %).
+3. **Groundwater validation upgrade** started (desktop, `paper/wrr/gw_validation/`) for OL, U2, HT9, HT9S and GLWS2.0, as Li et al. (2019):
+   - non-seasonal r as headline, at points, cells (≥ 2 locations) and regions
+   - specific-yield RMSE: PCR-GLOBWB Sy if openly downloadable, else GLHYMPS
+   - Li-style subset; confined / unconfined; sampling statistics; main table restricted to ≥ 2 readings per month
+   - FT9F is added when its export is in.
+4. **Forcing beyond 2012 (162.3), checked read-only now:**
+   - **Raw inputs reach 2019:**
+     - monthly forcing `Input_data/monthly_climate_forcing` 1981-01 … 2019-12 (468 files, 2013–2016 complete)
+     - daily GSWP3-W5E5 `Input_data/climate_forcing/*` to 2011–2019
+     - water use (histsoc) monthly 1901–2019
+   - **The perturbed member forcing `Ensemble_input/Ens_k/monthly_climate_forcing` ends in 2012-12 for all members** (Ens_0/1/15/30 checked: 2000-01 … 2012-12, 156 files).
+   - **A 2002–2016 ensemble therefore needs the perturbation step run for 2013-01 … 2016-12 (31 members) before the OL can go past 2012.** It reads the existing raw files; no new download is needed.
+   - The 2006-12-31 member restarts are OL states again since the rerun, so the OL can be continued from 2007.
+
+#### DA review 193 — WB-93 benchmark fit table started (desktop, post-hoc) — Claude Code, 02 Nov 11:29
+
+- **New script:** `paper/wrr/basin_scale/bench_fit.py`. It uses the same 93-basin construction as `bs_test.py`; `bs_test.py` and its outputs are not touched.
+- **Products:** OL, U2, HT9, HT9S, Li & Kusche (`JPL_mascon_downscaled-v2.0.nc`), GRACE-SeDA-v1, GLWS2.0 (2003+ epochs, flagged); FT9F once its export is in.
+- **Month blocks:** 41 assimilated / 13 withheld / all 54 epochs.
+- **Metrics:** median CC, median RMSE and area-weighted RMSE, with the anomaly taken against each product's own mean over the block. HB3 as a sensitivity set.
+- **Output:** `bench_fit.csv`, a summary, and the reconciliation with `wb_fit.py`: bs_test's exact definitions, and which choice explains 10.9 vs 11.9 and 20.4 vs 22.0 mm.
+- **FT9F** (review 191/192): prepare passed at 11:25:52.
+  - `obs.withhold` None; fallback true; init from HT9S.
+  - Run copy vs U2: only the allowed keys differ.
+  - collect_OL running.
+
+#### DA review 193 — WB-93 fit table with benchmarks (assimilated months only) — Claude Code, 02 Nov 11:34
+
+- **Files:** `paper/wrr/basin_scale/`
+  - `bench_fit.py`, `bench_fit.csv` (WB)
+  - `bench_fit_hb3.csv` (HB3c 178 and HB3 204)
+  - `bench_fit_reconcile.csv`
+  - `bench_fit_summary.txt`
+- **Definitions:**
+  - Anomalies are taken about each product's own mean over the scored epochs.
+  - Cells are weighted by cell area (= cos-lat for 0.5° cells); basins by footprint area.
+  - The table gives both aggregations: **aw RMSE** = area-weighted mean of the basin RMSEs (bs_test style); **√aw MSE** = √(Σ a·MSE / Σ a) (Cowork style).
+  - Benchmarks are scored on the same epochs as the run beside them, on cells valid in every epoch. They **ingest GRACE in every month**.
+  - No withheld or all-54 blocks for the H runs.
+- **WB 93 basins, 41 assimilated epochs** (median CC / median RMSE / aw RMSE / √aw MSE, mm):
+
+  | product | median CC | median RMSE | aw RMSE | √aw MSE |
+  |---|---|---|---|---|
+  | OL | 0.877 | 31.44 | 29.24 | 32.85 |
+  | U2 (same 41 epochs) | 0.997 | 5.42 | 4.15 | 5.50 |
+  | HT9 | 0.997 | 5.26 | 4.11 | 5.45 |
+  | HT9S | 0.993 | 8.08 | 7.00 | 9.31 |
+  | Li & Kusche | 0.975 | 13.07 | 10.32 | 11.61 |
+  | GRACE-SeDA v1 | 0.962 | 19.84 | 13.27 | 16.10 |
+
+- **U2 on all its 54 epochs:** U2 0.997 / 5.54 / 4.33 / 5.65; OL 31.51 / 33.19 (median / √aw MSE); Li & Kusche 13.37 / 11.64; SeDA 19.08 / 16.11.
+- **GLWS2.0** (flagged; 2003+ only, 36 of the 41 epochs): 0.811 / 36.06 / 31.59 / 34.26, i.e. about the OL level (OL on the same epochs 30.06 / 31.84).
+- **HB3 sensitivity:** same ranking, HT9 ≈ U2 < HT9S ≪ Li & Kusche < SeDA ≪ OL. HT9S on HB3c: 0.988 / 7.67 / 7.60 / 9.40.
+- **Reconciliation with `wb_fit.py`:**
+  - Cowork's numbers are reproduced to within 0.04 mm with block-own anomalies, cell-area weights, footprint-area basin weights and **√(Σ a·MSE / Σ a)**: OL 31.44 / 32.85, HT9 5.26 / 5.45, HT9S 8.08 / 9.31; CC 0.877 / 0.997 / 0.993.
+  - The gap was the aggregation, not the anomaly reference or the cell weights.
+  - bs_test's headline "RMSE" (10.9 for HT9, 29.5 for OL in the all-54 table) is the **area-weighted mean of basin RMSE against the raw target** (G′ + mean₅₄(OL)). Its medians are 11.97 and 31.51, so Cowork's 11.9 vs "10.9" compared a median with an area-weighted mean.
+  - Basins contain T9-footprint land cells only (centre-in-polygon). No ocean, Greenland or Antarctica cells; no coastal fill.
+  - Both aggregations are now in the csv; Cowork to pick one.
+- **Sources:**
+  - U2 = `PyGLDA_v2_results/GDA_Global/{OL,DA}/daily_mean_<yr>.nc` (monthly cache `posthoc/gw_diag/u2_monthly_foot.npz`)
+  - Li & Kusche: `Extra/benchmarks/JPL_mascon_downscaled-v2.0.nc` (cm → mm; 0.25° → 0.5° block mean)
+  - SeDA: `GRACE-SeDA_v1_2002_2022.nc`
+  - GLWS2: `GLWS_2_0_2003-2019.nc`
+- **FT9F:** added with `bench_fit.py --runs OL U2 HT9 HT9S FT9F --out <new dir>` once its export is in.
+
+#### Answer to DA review 194 — FT9H prepared (not launched); partition.py bab39fd0 already on UCloud — Claude Code, 02 Nov 11:39
+
+- **Decision tree noted** as fixed before FT9F's results. Fit is scored on T9 units, assimilated months only.
+- **partition.py bab39fd0 is already on UCloud** (Syncthing, file time 11:37:59). There is only one synced checkout, so a separate one is not possible.
+  - FT9F's prepare (11:25) and collect_OL ran on 019e6315; the chain's start line says so.
+  - Its **assimilate stage will import bab39fd0.**
+  - FT9F sets no `fraction`, so the default 1.0 applies, and `c = 1.0 · c` is exact in floating point (`partition.py` line 421).
+  - So FT9F's arithmetic is identical to 019e6315. I log it as "FT9F assimilated with bab39fd0 at its default"; the md5 will also be in the report.
+  - I did not stop the run. Cowork / Fan: say if FT9F must be rerun on 019e6315.
+- **(a) FT9H prepared, not launched:**
+  - `wrr_run.py` f193b754: FT9H = FT9F + `seasonal_split.fraction 0.5`; save `DA_output/WRR_FT9H/seasonal_split_state.npz`; own case and restart folder.
+  - FT9F's code path is unchanged.
+  - `ft9h_chain.sh` b74ee421 refuses to start if `partition.py` has no `fraction` key.
+  - `wrr_scores.py` knows FT9H.
+  - It is launched only on branch 2 (FT9F fails the fit rule).
+- **(b) and (c)** follow when FT9F's export is in:
+  - the review-192 verdict first (OL / U2 / FT9F; HT9 and HT9S for reference)
+  - the WB-93 table with FT9F (`bench_fit.py --runs ... FT9F`)
+  - the groundwater validation with FT9F
+- **(d)** started (desktop): every product of the review-193 table scored again against a GRACE solution that none of them assimilated. **Stopped at 11:44: Fan dropped (d) at 13:20; review 193 stays on the SaGEA reference.**
+  - Left on disk, not deleted: a **truncated** GSFC RL06 v2.0 half-degree mascon file, 448 MB of 537 MB, unusable. It is an open download from earth.gsfc.nasa.gov, at `<data root>/Extra/benchmarks/GSFC_mascons/`. Delete it or complete it later (Fan's choice).
+  - For a later (d):
+    - The runs assimilated CSR RL06.03 mascons (SaGEA), so CSR is not independent of the runs.
+    - JPL mascons are not independent either: GRACE-SeDA ingests them and Li & Kusche is downscaled JPL. JPL also needs an Earthdata login.
+    - **GSFC is the only open solution that none of the products used.**
+  - CSR RL06 mascons preferred, since Li & Kusche is downscaled JPL mascons; JPL RL06.3 as well if on disk.
+  - Output `basin_scale/bench_fit_indep.*`.
+- **(e) GRDC:** noted as fixed before the data.
+  - Floor: median KGE ≥ OL − 0.05; no region where most gauges degrade without a stated reason; Óbidos at least at OL level.
+  - Scored on OL / U2 / the frozen run once Fan's GRDC download arrives (still pending).
+
+#### Reviews 191.2 / 191.3 / 192 — FT9F fit scorer ready (validated); groundwater validation à la Li et al. (2019) — Claude Code, 02 Nov 11:44
+
+**A. Fit scorer** `paper/wrr/fit_scores/fit_test.py`
+- **Months:** the epochs assimilated by every compared run (41 for HT9 vs HT9S; FT9F vs U2 will use 54).
+- **Target:** G′ + mean₅₄(OL). **Primary metric:** RMSD of anomalies (each series' mean removed); area-weighted = quadratic, √(Σ a·MSE / Σ a).
+- **U2 source:** `PyGLDA_v2_results/GDA_Global/{OL,DA}/daily_mean_*.nc`; U2's OL = HT9's OL to 0.023 mm.
+- **Cowork's numbers reproduced** (T9, 41 months, OL / HT9 / HT9S):
+  - median 34.78 / 4.45 / 6.03 mm
+  - area-weighted 44.15 / 4.62 / 10.14 mm
+  - global land mean 5.49 / 0.750 / 1.549 mm
+  - 164 HT9S units (20.6 % of area) worse than HT9 by > 5 mm
+- **Rule 1 test vs U2** (41 months; U2 median / area-weighted 4.50 / 4.63 mm):
+  - HT9 **passes** (4.45 / 4.62; 0 % of area worse).
+  - HT9S **fails** all three conditions (6.03 / 10.14; 20.0 % of area worse).
+  - WB 93: U2 5.42 / 5.50, HT9S 8.08 / 9.31 (26 basins worse). HB3: U2 5.51 / 7.41, HT9S 8.54 / 10.49.
+  - Maps of the worse units are written. FT9F is scored with `fit_test.py U2 HT9 HT9S <data root>/Res/WRR/FT9F`.
+
+**B. Groundwater validation** `paper/wrr/gw_validation/` (`gw_validation.py`; copy of the `wrr_wells.py` logic; FT9F to be added)
+- **Specific yield:** PCR-GLOBWB 2 input 2017_11_beta_1 (Sutanudjaja et al. 2018; Zenodo 10.5281/zenodo.1045339; **CC BY 4.0**), `groundwaterProperties.nc` `specificYield`, 0.5°.
+  - Only this file (561 KB) was extracted from the 45 GB archive while streaming; the stream was stopped after about 7.9 GB.
+  - Footprint Sy median 0.05 (p5 0.01, p95 0.23).
+  - Files in `<data root>/Extra/specific_yield/`. The PCR-GLOBWB-RF `data.rar` (535 MB, Sy at stations only) is unused and kept.
+- **Sampling, 2002–2006** (29,683 wells; median readings per month): 1: 30 %, 2–3: 37 %, 4–24: 15 %, daily: 18 %.
+  - NWIS and ADES are mostly daily; BOM is half monthly.
+  - **Main sample: ≥ 2 readings per month** = 20,710 wells, 15,295 locations.
+- **Main table, 2002–2006, ≥ 2 readings/month.** Median non-seasonal r / seasonal r / peak error (months):
+
+  | scale | OL | HT9 | HT9S | U2 | GLWS2 |
+  |---|---|---|---|---|---|
+  | points (15,283) | 0.53 / 0.82 / 0.91 | 0.36 / 0.68 / 1.23 | 0.45 / 0.84 / 0.81 | 0.34 / 0.63 / 1.39 | 0.04 / 0.35 / 1.98 |
+  | cells ≥ 2 loc. (854) | 0.68 / 0.87 / 0.74 | 0.58 / 0.68 / 1.26 | 0.61 / 0.85 / 0.74 | 0.57 / 0.65 / 1.40 | 0.08 / 0.41 / 1.98 |
+  | HB3 regions (29) | 0.75 / 0.80 / 0.85 | 0.61 / 0.69 / 1.27 | 0.70 / 0.79 / 0.82 | 0.54 / 0.63 / 1.44 | 0.34 / 0.50 / 1.76 |
+
+  - RMSE at cells (fitted Sy / PCR-GLOBWB Sy, cm): OL 1.09 / 2.97, HT9 1.30 / 3.54, HT9S 1.11 / 3.13, U2 1.32 / 3.52, GLWS2 3.63 / 5.18.
+  - Share of cells beating OL in non-seasonal r: HT9 0.34, HT9S 0.36, U2 0.34.
+- **Li-style subset** (seasonal variance share ≥ 0.3, ≥ 5 years; **no pumping flag exists in the v2 tables**), cells, non-seasonal / seasonal r: OL 0.73 / 0.91, HT9 0.58 / 0.70, HT9S 0.65 / 0.90, U2 0.57 / 0.65, GLWS2 0.10 / 0.35.
+- **All wells, cells:** OL 0.64 / 0.82, U2 0.52 / 0.58, HT9S 0.57 / 0.82.
+- **Confined / unconfined** (cells; non-seasonal / seasonal r):
+  - confined (65 cells): OL 0.52 / 0.84, U2 0.31 / 0.43, HT9S 0.38 / 0.76
+  - unconfined (77 cells): OL 0.60 / 0.81, U2 0.51 / 0.60, HT9S 0.55 / 0.83
+- **2003–2006** (879 cells): OL 0.65 / 0.86, U2 0.56 / 0.62, HT9S 0.61 / 0.84, GLWS2 0.09 / 0.40.
+- **Reading:**
+  - OL has the best non-seasonal r at every scale and in every subset.
+  - Among the DA runs, HT9S is best in non-seasonal r and keeps OL's seasonal r; U2 and HT9 lose both.
+  - GLWS2.0 is far behind.
+  - The PCR-GLOBWB Sy RMSE is 2–3 × the fitted-Sy RMSE, because the fitted Sy mostly sits at the 0.01 lower bound.
+- **Rule 2 of review 192** for FT9F compares FT9F with U2 in cell non-seasonal r (U2 0.57) and seasonal r (U2 0.65), main sample, 2002–2006.
+
+#### DA review 195 — groundwater comparability additions started (desktop) — Claude Code, 02 Nov 11:54
+
+- **Started** in `paper/wrr/gw_validation/` (new `gwval195_*` files) for OL, U2, HT9, HT9S and GLWS2.0; FT9F once exported:
+  1. point non-seasonal r
+  2. detrended vs not-detrended non-seasonal r
+  3. lag-1 autocorrelation, n_eff and the share significant at 5 %
+  4. region-balanced median (eu / na / au / as / af) beside the pooled median
+  5. seasonal r beside the review-185 benchmarks (regional sine 0.80, same-band null 0.66)
+  6. Li-style subset vs all wells
+  - plus the table "comparability with Li et al. 2019"
+- **Note on (1):** the point non-seasonal r is already in the 191.3 table above: **OL 0.53 at points** (≥ 2 readings/month; 15,283 locations), 0.68 at cells, 0.75 for HB3 regions. The "0.60" was total r at points.
+- **FT9F:** assimilating since 11:42.
+
+#### DA review 196 — step 0 inventory; category A deletions starting — Claude Code, 02 Nov 11:59
+
+- **UCloud data root:** about 3,160 GB (hold 6,000). **Desktop drive** `/media/user/My Book`: 16,764 GB, **12,559 GB free**.
+- **Inventory** (GB from `du`, 11:58).
+  - "Desktop" = what is under desktop `PyGLDA_v2_external_data/Res/WRR/<RUN>`. Only a partial export pull exists there; no md5 manifest yet, so md5 = n for everything until the B transfer.
+
+  | folder | GB | on desktop | category |
+  |---|---|---|---|
+  | archive_ensemble_E1 | 755 | – | A (Fan's script `del_e1.sh`, not run by me) |
+  | Ensemble_input | 355 | – | C |
+  | DA_output/GDA_Global (U2) | 283 | U2 daily means in `PyGLDA_v2_results/GDA_Global` | C (review 196) |
+  | OL_output | 277 | – | C |
+  | Res/GDA_Global (U2) | 274 | same | C |
+  | Res/GDA_Ucloud (OL members) | 261 | – | C |
+  | GRACE | 243 | – | C |
+  | Res/WRR (compact exports) | 88 | partly: HT9 3.7 / HT9S 3.8 / others 0.3–0.4 of 10–17 GB | B |
+  | DA_output/WRR_FT9F | 86 (running) | – | C until verdict |
+  | Extra | 83 | – | C |
+  | Input_data | 69 | – | C |
+  | DA_output/WRR_SMOKE, WRR_SMOKE0 | 37 + 37 | – | A |
+  | Res/WRR_SMOKE (+ SMOKE0 links) | 35 + 0 | – | A |
+  | DA_output/WRR_HT9F + Res/WRR_HT9F | 32 + 8 | – | A |
+  | Ensemble_Initialization | 32 | – | C |
+  | Res/WRR_HE3, HG4, HT9S, HT9, HG5 (remnants: Res_DA/OL.h5, basin_ts, harmonics, evaluation) | 28 / 20 / 15 / 15 / 14 | n | B |
+  | Res/WRR_HG4R, HT9R, HG5R (remnants of the bit-identical reruns) | 20 / 15 / 14 | – | A |
+  | export | 23 | ? | to check |
+  | Res/RDA_Amazon, RDA_Amazon_5daily, demo_* | 11 + 11 + 47 | partly (desktop Res/demo_*) | outside A/B: needs Fan's word |
+  | DA_output/RDA_DN0..5 | 6 × 7 | summaries on desktop (`paper/wrr/danube/` scores, monthly npz, wells) | A |
+  | Res/RDA_DN0..5 (DA dailies 160 files each, plus OL/Res/harmonics) | 6 × 3 | same | A (DA dailies only) |
+  | Ensemble_input, settings, envs, pkgs, Basin, Auxiliary, Benchmark | small | – | C |
+
+- **Category A:** `del_196a.sh` (2682ed91), about 280 GB, one line per target in the status file and here.
+  - Order: SMOKE0 → SMOKE → HT9R / HG5R / HG4R remnants → HT9F → DN0–5 DA_output → DN0–5 DA dailies.
+  - Checks per target:
+    - inside the data root, not itself a symlink
+    - no open handles
+    - no symlink into it from outside (one `find` pass)
+    - `rm -rf` never follows links, so the 155 OL links per case (→ `Res/GDA_Ucloud/OL`, category C) only lose the links.
+  - E1 stays for your `del_e1.sh` (Fan).
+  - The truncated GSFC mascon file (desktop, 448 MB) is deleted as part of A.
+- **Category B** (transfer, md5, then delete on UCloud) comes next, one folder at a time, into desktop `PyGLDA_v2_external_data/Res/`.
+
+#### DA review 195 — groundwater comparability results (desktop, 2002–2006) — Claude Code, 02 Nov 12:00
+
+- **Files:** `paper/wrr/gw_validation/gwval195_2002_2006_*` (summary, regions, li2019_comparability, units, sampling) and `gwval195.py`.
+  - Wells, locations and subsets are the same as in 191.3.
+- **Definitions:**
+  - non-seasonal = 12-month climatology of the common months removed
+  - detrended = least-squares linear trend also removed
+  - n_eff = n(1 − r1x·r1y)/(1 + r1x·r1y) (Bretherton et al. 1999), limited to [3, n]
+  - significance: two-sided t test with df = n_eff − 2, positive r only
+  - region = first token of the T9 unit's REGION
+- **Points** (location vs its cell; OL / HT9 / HT9S / U2 / GLWS2):
+
+  | sample | non-seasonal r | detrended | region-balanced non-seasonal |
+  |---|---|---|---|
+  | MAIN, ≥ 2 readings/month (15,283) | 0.53 / 0.36 / 0.45 / 0.34 / 0.04 | 0.52 / 0.30 / 0.43 / 0.29 / 0.05 | 0.52 / 0.22 / 0.31 / 0.19 / 0.21 |
+  | all wells (22,977) | 0.51 / 0.36 / 0.44 / 0.34 / 0.04 | 0.49 / 0.29 / 0.41 / 0.27 / 0.05 | 0.39 / 0.24 / 0.32 / 0.23 / 0.16 |
+  | Li-style (9,417) | 0.57 / 0.36 / 0.47 / 0.32 / 0.10 | 0.56 / 0.32 / 0.47 / 0.29 / 0.07 | 0.50 / 0.27 / 0.39 / 0.27 / 0.18 |
+
+  - Cowork's "0.60" is the total r at points for all wells (0.601).
+  - Point residuals are highly autocorrelated (median r1: wells 0.80, OL 0.86), so **n_eff is about 11 of 60 months**.
+  - Share of OL point r significant at 5 % (non-seasonal / detrended): MAIN 0.43 / 0.53, Li-style 0.59 / 0.67. HT9S: MAIN 0.32 / 0.42.
+- **Cells, MAIN (854):**
+  - non-seasonal r 0.68 / 0.58 / 0.61 / 0.57 / 0.08; detrended 0.69 / 0.51 / 0.59 / 0.50 / 0.15
+  - region-balanced (non-seasonal / detrended): OL 0.66 / 0.68, HT9S 0.49 / 0.45
+  - significant: OL 0.48 / 0.64
+- **Detrending barely changes OL** (points 0.53 → 0.52). It costs the DA runs more (HT9 0.36 → 0.30, U2 0.34 → 0.29), so a single multi-year swing does not carry OL's r.
+- **Regions, MAIN, point non-seasonal r** (OL / HT9 / HT9S / U2):
+  - eu 0.55 / 0.40 / 0.47 / 0.37 (12,161)
+  - na 0.49 / 0.28 / 0.37 / 0.26 (1,654)
+  - au 0.33 / 0.16 / 0.25 / 0.12 (1,426)
+  - af 0.70 / −0.20 / −0.29 / −0.22 (19 points, 3 cells: indicative only)
+  - **No "as" region has wells with ≥ 2 readings per month** (Korea is monthly), so the MAIN balanced median uses eu / na / au / af.
+- **Seasonal r beside the benchmarks** (review-185 null checks, all wells, 1,261 cells):
+  - OL 0.824
+  - regional wells annual sine (cell left out) 0.797
+  - OL gw of another well cell: same 10° band 0.660 [0.639–0.680], same band and > 1,000 km 0.531, anywhere 0.494
+  - **In text, OL's seasonal r of about 0.82 is a phase check, not skill.**
+- **Comparability with Li et al. 2019** (median non-seasonal r; Li CLSM OL: 0.27 at points, 0.56 regionally):
+
+  | scale | OL | HT9 | HT9S | U2 | GLWS2 |
+  |---|---|---|---|---|---|
+  | point, MAIN | 0.53 | 0.36 | 0.45 | 0.34 | 0.04 |
+  | point, Li-style | 0.57 | 0.36 | 0.47 | 0.32 | 0.10 |
+  | regional HB3, MAIN (29) | 0.75 | 0.61 | 0.70 | 0.54 | 0.34 |
+  | regional HB3, Li-style (24) | 0.78 | 0.59 | 0.69 | 0.58 | 0.29 |
+
+  - Differences from Li:
+    - period: 5 years here
+    - wells: v2, Europe-heavy, no pumping flag
+    - model: WaterGAP 0.5° vs CLSM 0.25° with EnKS and CSR mascons
+    - Sy does not enter r
+  - **Reading:** OL's lead survives the point scale, detrending, n_eff, region balancing and the Li-style subset. It is real for this sample but Europe-weighted and on 5 years only, which is why 2002–2016 matters (review 196).
+- FT9F is added with `RUNS="HT9 HT9S U2 GLWS2 <FT9F export>"` once exported.
+
+#### DA review 196 — progress: A deletions, B transfer, perturbed forcing 2013–2016, GRACE and wells 2002–2016, U2 coverage — Claude Code, 02 Nov 12:11
+
+- **Category A (`del_196a.sh`), deleted so far** (status file, each with data root before → after):
+  - `Res/WRR_SMOKE0` 1 GB; `DA_output/WRR_SMOKE0` 37; `DA_output/WRR_SMOKE` 37; `Res/WRR_SMOKE` 35
+  - `Res/WRR_HT9R` 15; `Res/WRR_HG5R` 14; `Res/WRR_HG4R` 20
+  - `DA_output/WRR_HT9F` 32; `Res/WRR_HT9F` 8
+  - `DA_output/RDA_DN0` 7; `RDA_DN1` 7
+  - Data root 3,258 → 3,096 GB, while FT9F grows meanwhile. DN2–DN5 and the DN DA dailies follow.
+  - The truncated GSFC file on the desktop (448 MB) is deleted.
+- **Category B:** pulling `Res/WRR` and the remnants `Res/WRR_{HT9,HT9S,HG5,HG4,HE3}` to desktop `PyGLDA_v2_external_data/Res/`.
+  - Existing desktop files are not overwritten; md5 of every file is compared with UCloud.
+  - Deletion on UCloud only after md5 OK; one line per folder here.
+- **U2 coverage:** `Res/GDA_Global` and `DA_output/GDA_Global` cover **2002–2006 only** (last daily file 2006). No longer U2 exists.
+- **Step 1, perturbed forcing 2013-01 … 2016-12:**
+  - The existing 2000–2012 files came from **one** call with seed 2026, with per-(member, variable) generators and an AR(1) state running over the call.
+  - A call starting at 2013-01 would restart the generators and repeat the 2000 noise.
+  - `pert_ext.py` (19a9e4fd) therefore **replays** the call from 2000-01 with the same settings (`perturbation.json` 1421d1eb, seed 2026) and draws every day, but writes only the chosen months.
+    - Its method is a copy of `_forcing_spatiotemporal_correlated` with one "write?" condition; `src_` is unchanged (`perturbation_forcing.py` e871b0e9).
+  - **Test, 2000-01 … 02:**
+    - MPI with 31 ranks (24 s) vs serial (213 s): **BIT-IDENTICAL** (248 fields)
+    - both vs the existing `Ensemble_input`: **BIT-IDENTICAL**
+  - **Production running** since 12:11 (`pert_prod.sh` e8b97e3b, tmux da:pertprod):
+    - replay 2000-01 … 2016-12; write 2012-12 and 2013-01 … 2016-12
+    - check 2012-12 against the existing file (continuity after 156 months)
+    - only if bit-identical, move the 1,488 new files into `Ensemble_input/Ens_k/monthly_climate_forcing/` (new files only, nothing overwritten); about 117 GB
+    - Test outputs `DA_output/pert_ext/t1_mpi`, `t2_serial` (9 GB) stay until the move is verified, then I delete them (my own scratch).
+- **Step 3, GRACE 2007–2016:**
+  - CSR RL06.03 mascons (`GRACE/SaGEA/signal_Mascon`) run to 2024. DDK3 covariance samples exist for **103 of the 120 months**.
+  - Missing: 2011-01, 2011-06, 2012-05, 2012-10, 2013-03, 2013-08, 2013-09, 2014-02, 2014-07, 2014-12, 2015-05, 2015-06, 2015-10, 2015-11, 2016-04, 2016-09, 2016-10 (battery-management gaps).
+  - **The T9 observation and covariance files (`GRACE/obs/GlobalBasins_T9_obs_GRACE.hdf5`, `output/...`) hold only the 54 epochs of 2002–2006.**
+    - They must be rebuilt for 2002–2016, which rewrites files that FT9F reads.
+    - So the rebuild only after FT9F finishes, or under a new basin name (Cowork: which?).
+- **Step 4, wells 2002–2016** (`paper/wrr/gw_validation/wells_2002_2016/`; T9 footprint, co-located wells collapsed):
+
+  | | locations | cells ≥ 2 locations |
+  |---|---|---|
+  | ≥ 120 months | 25,730 | 1,554 |
+  | ≥ 120 months and ≥ 2 readings/month | 16,740 | 1,037 |
+  | ≥ 72 months | 42,026 | 2,123 |
+  | ≥ 72 months and ≥ 2 readings/month | 24,000 | 1,334 |
+
+  - About 75 % of the ≥ 2-readings locations are in Europe (≥ 120 months: eu 13,184, na 2,157, au 1,363). Africa and Asia have almost none read twice a month.
+  - **Jasechko 2024** (`validation/Jasechko/`; Zenodo 10003697; CC BY 4.0 plus provider attribution): annual series.
+    - Usable for 2002–2016 trends: 40,730 depth sites in the footprint with ≥ 12 of 15 years.
+    - But **about 94 % are North American**, so it needs region- or aquifer-balancing.
+- **Step 5 (GB per model year):** from FT9F when it is collected.
+
+#### UCloud job unreachable since about 12:18 (port 2058) — FT9F, forcing production and A deletions in unknown state — Claude Code, 02 Nov 12:20
+
+- **What happened:**
+  - At **12:18:23** the B transfer's rsync lost its connection and ssh to port 2058 was refused.
+  - Since then every attempt times out (3 retries 20 s apart, latest 12:20).
+  - Probably the job ended or was restarted. Fan manages the allocation.
+- **Last state seen in the status file:**
+  - **FT9F:** assimilating since 11:42:04. Partition bab39fd0 at default; restart fix active.
+  - **Forcing production** (`pert_prod.sh`): replay running since 12:11:12. Files are moved into `Ensemble_input` only after the 2012-12 check, and that line had not appeared, so **nothing was moved**.
+  - **del196a:** last line DELETED `DA_output/RDA_DN4` (12:17:17). Still pending: `DA_output/RDA_DN5` and the DN0–DN5 DA dailies.
+  - **B transfer:** `Res/WRR` partly copied (rsync without overwrite); nothing verified, nothing deleted on UCloud.
+- **When a new job / port is up (Fan):**
+  1. Check `Ensemble_Initialization` against the 10:59 restart md5 list. Check `Ensemble_input` has no 2013–2016 files, or only complete verified ones.
+  2. Save FT9F's rank logs and the members' state (DA_output/WRR_FT9F) before anything else.
+  3. Restart FT9F from scratch: same chain, own case; its partial DA_output is replaced, and that is my own run output.
+  4. Rerun `del_196a.sh` (it skips missing targets).
+  5. Rerun `pert_prod.sh`.
+  6. Resume the B pull.
+
+#### Answer to DA review 197 — GlobalBasins_T9_0216 build script ready; waiting for the UCloud job — Claude Code, 02 Nov 12:27
+
+- **UCloud is still unreachable** (port 2058 times out). A check retries every minute. The recovery order of the 12:20 entry is unchanged; FT9F restarts from scratch.
+- **Item 2:** `obs0216.py` (f924fc4f, not run yet).
+  - Builds `GlobalBasins_T9_0216_{signal,cov,gridded_signal}.hdf5` for 2002-01 … 2016-12 with `GDA.get_GRACE_obs`'s processing (`GRACE_CSR_mascon`, unchanged) and U2's run-copy settings.
+  - Mask: the frozen T9 mask copied byte for byte (md5 checked) to `Basin/mask/GlobalBasins_T9_0216/`; T9 shapefile.
+  - It stops if any target file exists and never writes a `GlobalBasins_T9_*` file.
+  - It then compares the 2002–2006 epochs of each new file with the old T9 file (BIT-IDENTICAL or max |diff|) and lists the months without an epoch.
+  - The code's `basin_COV` asserts that every covariance month matches a mascon epoch, so a mascon month without DDK3 samples would stop the build. Then I report it, and nothing is filled.
+- **Item 3** noted: the 17 months without DDK3 samples are gaps (no update, ensemble runs on, counted missing). They will be listed in the run summary.
+- **Items 4–7** noted:
+  - the 2012-12 gate stays before any move into `Ensemble_input`
+  - wells main sample ≥ 120 months and ≥ 2 readings/month; ≥ 72 months as sensitivity; region-balanced beside pooled
+  - Jasechko for trends only
+  - no U2 2002–2016 run
+
+#### Cause of the 12:18 loss: the job was OOMKilled — my error (forcing replay started beside the FT9F DA) — Claude Code, 02 Nov 12:45
+
+- **Fan:** "[12:18] Job exceeded its memory limit (OOMKilled)."
+- **Cause:**
+  - FT9F's DA alone needs about 66–70 GB of the job's ~89 GB cgroup (see the 21 Oct OOM).
+  - At 12:11 I started the forcing replay `pert_prod.sh` beside it: 31 MPI ranks with raw `mpiexec`, not through `memrun.sh`'s memory gate. `del_196a.sh` and an rsync ran as well.
+  - I had read the node's `free` (754 GB host RAM) instead of the cgroup limit.
+  - The 12:03 test (31 ranks, 2 months) had survived beside the DA. The 204-month replay, at about 7 minutes in, did not.
+- **Consequences:**
+  - FT9F is lost and restarts from scratch.
+  - `pert_prod` was killed before its 2012-12 gate, so nothing was moved into `Ensemble_input`; to be checked.
+  - `del196a` stopped after RDA_DN4; the remaining targets are rerun idempotently.
+- **New rule for me:** nothing MPI or heavy beside a running DA; such jobs run before or after it, or through `memrun.sh` with a measured peak. I check `/sys/fs/cgroup/memory.max` and anon, not `free`.
+- **Recovery order when the new job is up:**
+  1. Checks: restarts vs the 10:59 md5 list; `Ensemble_input` without 2013–2016 files; `git status settings/`.
+  2. **FT9F alone**, from scratch.
+  3. Only light work beside it: rerun `del_196a.sh` (rm only) and the B pull (rsync + md5).
+  4. After FT9F's chain: `pert_prod.sh` through `memrun.sh`, and `obs0216.py` (serial, light; could also go in the gaps between stages).
+  - Cowork: say if the forcing / obs work should go first instead, since FT9F's verdict decides the frozen run anyway.
+
+#### New job (port 2730, cgroup 96 GB): checks passed, FT9F restarted alone — Claude Code, 02 Nov 12:48
+
+- **Memory record of the killed job** (`mem_wrr_FT9F_assimilate`): FT9F tree RSS 68.4 GB, cgroup anon 93.7 GB at 12:18:17. So the forcing replay beside it added about 25 GB, and the job hit the 96 GB limit.
+  - FT9F had reached 2004-08.
+  - The replay had written only its 2012-12 check file into its scratch folder (`DA_output/pert_ext/prod`). It never reached the gate, so nothing was moved.
+- **Checks on the new job:**
+  - `Ensemble_Initialization` 124 restarts **unchanged** vs the 10:59 list
+  - `Ensemble_input` **unchanged** (2000-01 … 2012-12, 156 months, Ens_0/1/30 checked)
+  - `git status settings/` clean; env present
+- **Logs of the killed FT9F saved:** `da_dev/failed_FT9F_oom1218/` (35 files: rank logs, chain outputs, memory samples).
+- **Restart from scratch** (review 197 item 1):
+  - The partial output of the killed run was deleted: `DA_output/WRR_FT9F` 148 GB, `Res/WRR_FT9F` 8 GB. No links pointed into them.
+  - **`ft9f_chain.sh` restarted at 12:47:19** in a new tmux session `da`, unchanged: partition bab39fd0 (default fraction), DA_GRACE c2a7cd08, `wrr_run.py` f193b754, init b95a95c5.
+  - **Nothing heavy runs beside it.**
+- **Light work beside it:**
+  - `del_196a.sh` rerun (rm only; skips targets already gone): `RDA_DN5` and the DN DA dailies.
+  - The B pull resumed (rsync + md5 from the desktop).
+- **After FT9F's chain:** `pert_prod.sh` through the memory gate, then `obs0216.py`.
+  - `pert_prod` will not need to be reworked: its scratch output is rewritten and the gate stays.
+
+#### DA review 196 — category A complete — Claude Code, 02 Nov 12:52
+
+- **Second pass of `del_196a.sh`** on the new job: the 14 targets deleted before the OOM were skipped as missing.
+  - Deleted: `DA_output/RDA_DN5` 7 GB, and `Res/RDA_DN0…DN5/DA/Ens_k/daily_output_*` 160 files and 2 GB each.
+  - DONE at 12:51:53; data root **2,889 GB**, with FT9F's collect_OL writing meanwhile.
+- **Category A in total:** about 235 GB.
+  - SMOKE 110, rerun remnants 49, HT9F 40, DN DA_output 42, DN DA dailies 12; plus the desktop GSFC file of 0.45 GB.
+  - Not counted: the partial output of the OOM-killed FT9F (156 GB), deleted before its restart.
+- **Not deleted:** E1 (755 GB) stays for your `del_e1.sh` (Fan).
+
+#### E1 deleted (Fan's word in the session, 2 Nov 12:53) — Claude Code, 02 Nov 12:56
+
+- **Fan:** "you can run the script to delete E1".
+- **`del_e1.sh`** (450a7a77, unchanged; md5 equal on desktop and UCloud) ran in tmux da:dele1 at 12:54:25.
+  - Checks passed: inside the data root, no open handles, no symlink into it.
+- **Result:** **DELETED `archive_ensemble_E1`: 755 GB, data root 2,894 → 2,170 GB**, 52 s (12:55:42). The folder no longer exists.
+- FT9F (collect_OL) was running meanwhile and was not affected; E1 is not read by any chain.
+
+#### Answer to DA review 198 — order acknowledged; FT9F assimilating alone — Claude Code, 02 Nov 13:07
+
+- **FT9F:**
+  - prepare EXIT=0 (12:48:39)
+  - collect_OL EXIT=0, 727 s (13:00:56)
+  - **assimilate running since 13:00:56, alone.** Beside it only the desktop rsync/md5 pull runs.
+  - A watch reports when cgroup anon goes above 85 GB.
+- **Order:**
+  1. FT9F chain
+  2. `pert_prod.sh` through `memrun.sh`
+  3. `obs0216.py`. Between FT9F stages only with a measured peak and ≥ 10 GB to spare; otherwise after `pert_prod`.
+- **When FT9F is exported:**
+  1. review-192 verdict (`fit_test.py` vs U2, T9 units, assimilated months; then wells per 191.3 / 195 with FT9F)
+  2. the WB-93 table (`bench_fit.py` with FT9F)
+  3. the review-194 tree; FT9H immediately if branch 2, alone on the job
+- **B pull:** running. UCloud copies are deleted only after md5 OK; one line per folder.
+
+#### FT9F assimilate done; obs0216 queued under the memory gate — Claude Code, 02 Nov 13:54
+
+- **FT9F assimilate:** EXIT=0, wall 3,136 s (13:00:56 → 13:53:22).
+  - Peak anon 70.7 GB, tree 69.8 GB (alone).
+  - Data root 2,473 GB; FT9F's `DA_output` adds about 290 GB for 5 years.
+  - collect_DA running since 13:53:22.
+- **`obs0216.py`** (f924fc4f) started through `memrun.sh` (key obs0216, tmux da:obs0216). Its peak is measured there.
+  - The gate (`gate.sh`: anon + expected < 78 GB; collect reserved at 59, an unknown key at 20) lets it start only when that fits. So it waits for collect_DA and does not run beside it.
+  - It starts before evaluate / export if the gate allows; neither is MPI.
+- **`pert_prod.sh`** follows after FT9F's chain, through the gate.
+
+#### Review 197 item 2 — GlobalBasins_T9_0216 built; 2002–2006 epochs BIT-IDENTICAL to the T9 files — Claude Code, 02 Nov 14:21
+
+- **`obs0216.py`** (f924fc4f) through `memrun.sh`: EXIT=0 at 14:20:54.
+  - It waited 660 s at the gate for collect_DA. Peak tree RSS **4.2 GB**, peak cgroup anon 9.5 GB (`peaks.txt` key obs0216).
+- **Settings:** U2's run copy (Mascon_monthly, `resample block_mean`, earthquake correction with significance test, CSR RL06.03 mascons, DDK3 samples).
+  - Mask: the T9 mask copied to `Basin/mask/GlobalBasins_T9_0216/`, md5 equal (0.5° 63260044, 1° 59e82a40).
+- **New files** (`GRACE/output/`):
+  - `GlobalBasins_T9_0216_signal.hdf5` 89c0e33d
+  - `_cov.hdf5` 0ed46bbd
+  - `_gridded_signal.hdf5` 0bbb375d
+  - **157 epochs, 2002-04 … 2016-12.** No `GlobalBasins_T9_*` file was written.
+- **2002–2006 vs the old T9 files: all 711 compared arrays BIT-IDENTICAL** (max |diff| 0):
+  - signal 707 units
+  - cov (54, 707, 707)
+  - gridded tws (54, 56356)
+  - sub_basin_area
+- **Months without an epoch, 2002–2016** (gaps per review 197.3: no update, the ensemble runs on, counted missing):
+  - 2002-01, 2002-02, 2002-03, 2002-06, 2002-07, 2003-06 (as before)
+  - 2011-01, 2011-06, 2012-05, 2012-10, 2013-03, 2013-08, 2013-09, 2014-02, 2014-07, 2014-12, 2015-05, 2015-06, 2015-10, 2015-11, 2016-04, 2016-09, 2016-10
+  - The mascon file has no epoch in exactly the 17 months without DDK3 samples, so nothing had to be skipped or filled.
+- **The obs file `GRACE/obs/GlobalBasins_T9_0216_obs_GRACE.hdf5`** is written by the DA run itself, with this basin name.
+- **Note:** FT9F's export waited at the memory gate while `obs0216` held it (14:06–14:21), so the export only started then.
+
+#### FT9F chain complete; pert_prod started through the gate; scoring as soon as the export is on the desktop — Claude Code, 02 Nov 14:49
+
+- **FT9F:**
+  - export EXIT=0, 1,902 s
+  - **CHAIN COMPLETE 14:38:13**; `git status settings/` clean
+  - **RESTART CHECK: Ensemble_Initialization unchanged**
+  - `seasonal_split_state.npz` written (68 kB, 13:52)
+  - `Res/WRR/FT9F` 10 GB; data root 2,749 GB
+  - Wall times: prepare 20 s, collect_OL 727 s, assimilate 3,136 s (peak anon 70.7 GB), collect_DA 687 s, evaluate 60 s, export 1,902 s
+- **Step 5 of review 196** (GB per model year, from FT9F): about 290 GB of `DA_output` for 5 years (≈ 58 GB per year), plus the collected DA member dailies. Exact split follows after the B pull and rule 164 (4).
+- **`pert_prod.sh`** started through `memrun.sh` (key pert) at 14:39, alone on the job; the 2012-12 gate is unchanged.
+- **B pull:**
+  - `Res/WRR`: 14,383 files, **md5 OK** (14:22).
+  - FT9F's export was still being written then, so `Res/WRR/FT9F` is being pulled again with md5 now.
+  - The remnants `Res/WRR_{HT9,HT9S,HG5,HG4,HE3}` follow.
+- **Next:**
+  1. review-192 verdict (`fit_test.py` U2 vs FT9F, then wells)
+  2. WB-93 table
+  3. review-194 tree
+
+#### Review 192 verdict: **FT9F accepted** — review-194 tree, branch 1: freeze FT9F — Claude Code, 02 Nov 15:02
+
+- **Export on the desktop:** `PyGLDA_v2_external_data/Res/WRR/FT9F`, 1,828 files, **md5 OK**. Withhold: none (all 54 epochs).
+- **Rule 1, fit to GRACE vs U2** (`fit_scores/fit_test.py`; T9 units, the 54 assimilated months; anomaly RMSD, area-weighted = quadratic):
+
+  | T9 units (707) | OL | U2 | FT9F | rule | result |
+  |---|---|---|---|---|---|
+  | median RMSD [mm] | 35.15 | 4.78 | **4.84** | ≤ U2 + 1 = 5.78 | pass |
+  | area-weighted RMSD [mm] | 44.31 | 4.90 | **5.07** | ≤ 1.25 × U2 = 6.12 | pass |
+  | units worse than U2 by > 5 mm | – | – | **0.3 % of area** | ≤ 5 % | pass |
+  | global land-mean RMSD [mm] | 5.57 | 0.82 | 0.82 | – | – |
+  | median CC | 0.806 | 0.997 | 0.997 | – | – |
+
+  - WB 93: U2 5.54 / 5.65, FT9F 5.67 / 6.38. HB3: U2 5.58 / 7.68, FT9F 5.84 / 8.23 (median / area-weighted).
+  - **RULE 1 PASSED.** Files: `fit_scores/fit_vs_U2_FT9F_vs_U2_*` and maps.
+- **Rule 2, groundwater at wells** (`gw_validation/ft9f/gwval_withFT9F_2002_2006_*`; MAIN sample ≥ 2 readings/month, 2002–2006):
+
+  | | OL | U2 | HT9 | HT9S | **FT9F** | GLWS2 |
+  |---|---|---|---|---|---|---|
+  | **cells (854): non-seasonal r** | 0.679 | 0.565 | 0.575 | 0.613 | **0.628** | 0.084 |
+  | **cells: seasonal r** | 0.867 | 0.646 | 0.680 | 0.854 | **0.853** | 0.407 |
+  | cells: peak error [months] | 0.74 | 1.40 | 1.26 | 0.74 | 0.72 | 1.98 |
+  | points (15,283): non-seasonal / seasonal r | 0.530 / 0.821 | 0.336 / 0.630 | 0.364 / 0.676 | 0.453 / 0.837 | 0.443 / 0.833 | 0.042 / 0.348 |
+  | HB3 regions (29): non-seasonal / seasonal r | 0.745 / 0.804 | 0.540 / 0.632 | 0.610 / 0.689 | 0.699 / 0.788 | 0.668 / 0.844 | 0.335 / 0.504 |
+  | cells beating OL, non-seasonal / seasonal | – | 0.34 / 0.26 | 0.34 / 0.25 | 0.36 / 0.45 | 0.43 / 0.48 | 0.16 / 0.16 |
+
+  - FT9F ≥ U2 in non-seasonal r (0.628 vs 0.565) and in seasonal r (0.853 vs 0.646) → **RULE 2 PASSED**.
+  - OL remains best in non-seasonal r at every scale.
+- **VERDICT: FT9F accepted.** Review-194 tree branch 1: **freeze FT9F**. FT9H is not needed and was not launched.
+- **WB-93 table with FT9F** (`basin_scale/bench_fit_FT9F/`; median CC / median RMSE / aw RMSE / √aw MSE, mm):
+
+  | product | 41 assimilated epochs (like-for-like) | U2 / FT9F on all their 54 epochs |
+  |---|---|---|
+  | OL | 0.877 / 31.44 / 29.24 / 32.85 | 0.875 / 31.51 / 29.52 / 33.19 |
+  | U2 | 0.997 / 5.42 / 4.15 / 5.50 | 0.997 / 5.54 / 4.33 / 5.65 |
+  | HT9 | 0.997 / 5.26 / 4.11 / 5.45 | – |
+  | HT9S | 0.993 / 8.08 / 7.00 / 9.31 | – |
+  | **FT9F** | **0.997 / 5.70 / 4.43 / 6.29** | **0.997 / 5.67 / 4.58 / 6.38** |
+  | Li & Kusche | 0.975 / 13.07 / 10.32 / 11.61 | 0.976 / 13.37 / 10.30 / 11.64 |
+  | GRACE-SeDA | 0.962 / 19.84 / 13.27 / 16.10 | 0.962 / 19.08 / 13.31 / 16.11 |
+
+  - The benchmarks ingest GRACE in every month.
+- **Amazon (ANA, monthly KGE, 60 months)** (`amazon/FT9F/`), OL / HT9R / FT9F:
+  - Óbidos 0.853 / 0.882 / 0.872
+  - Manacapuru 0.694 / 0.928 / **0.947**
+  - Tabatinga 0.709 / 0.650 / 0.628
+  - Porto Velho 0.888 / 0.818 / 0.811
+  - Óbidos GMD cell 0.923 / 0.832 / 0.815
+  - Óbidos is at least at OL level, as the review-194 (e) floor requires.
+- **Filter summary FT9F:**
+  - `bo_n_fallback` 444,718; `bo_unplaced_mm_sum` **484** (HT9S: 79,708)
+  - increment share before / after bounds: gw 0.111 / **0.151**, soil 0.445 / 0.397, snow 0.229 / 0.108, river 0.110 / 0.185, wetlands 0.105 / 0.158
+  - seasonal split: fast share of the mean increment 0.86; init from HT9S (12 months known)
+- **Open:**
+  - **FT9F's `DA_output` (~290 GB) and DA dailies are kept** (category C until the verdict; FT9F is now the frozen run). Cowork / Fan: keep them, or apply rule 164 (4) now that the export is verified on the desktop?
+  - The review-186 increment test for FT9F on request.
+  - `pert_prod` (forcing 2013–2016) is running through the gate; next is the 2002–2016 run of FT9F with `GlobalBasins_T9_0216` and yearly pruning (review 196).
+
+#### Answer to DA review 199 — freeze record done; FT9F rule 164 (4); OL extension 2007–2016 running; LT9F: the 2002–2006 bit-identity cannot hold by design (question) — Claude Code, 02 Nov 15:13
+
+1. **Freeze record** `paper/wrr/frozen_v1.0/` (desktop; synced to UCloud by Syncthing; `MANIFEST.md5` ee538fe3, 11 files):
+   - README with one line per non-default option
+   - the run copy of `settings/WRR_FT9F` (3 files)
+   - `code/` with `wrr_run.py` f193b754, `wrr_chain.sh`, `ft9f_chain.sh` 72522604, `wrr_export.py`
+   - **md5 of all 145 `src_*` .py files, identical on desktop and UCloud**: partition **bab39fd0**, inflation d4b285bd, configure_DA d8a31fce, DA_GRACE c2a7cd08, EnKF 102921fa, EnKF_localized 538cc2e9
+   - inputs: init b95a95c5, T9 mask 63260044 / 59e82a40, shapefile, GRACE T9 files, obs file, U2 run copy f4e51856
+   - The FT9F vs U2 settings diff has exactly the 4 option groups (storage_shares, inflation split, bound_overflow, seasonal_split) besides the case name.
+   - Code base: git f99e5f7 plus the uncommitted changes to configure_DA / inflation / partition / DA_GRACE. **Fan: a commit of these four files would make v1.0 reproducible from git.**
+2. **FT9F, rule 164 (4) with keeps** (`del_ft9f.sh` 9c1923ae):
+   - logs copied to `DA_output/WRR_FT9F/logs` (72 files)
+   - **DELETED `DA_output/WRR_FT9F/Ens_*` (283 GB)**, data root 2,839 → 2,562 GB
+   - the `Res/WRR_FT9F/DA` dailies are being deleted
+   - kept: `restart/`, `seasonal_split_state.npz`, `filter_summary.json`, `adaptive_inflation_log.csv`, `logs/`
+3. **LT9F prerequisites:**
+   - **(a) done:** `pert_prod` 14:39–14:44 (257 s replay, peak anon 28 GB, alone).
+     - **2012-12 gate BIT-IDENTICAL** (124 fields).
+     - **1,488 files moved; `Ensemble_input` now 2000-01 … 2016-12 (204 months) for all 31 members.**
+     - Scratch `DA_output/pert_ext` (12 GB) deleted.
+   - **(b) running:** `ol_ext_chain.sh` (3e357769; `ol_ext.py` c666a5e3 = `ol_rerun.py` with sim 2007-01-01 … 2016-12-31), started 15:11:31 through the gate, alone.
+     - It resumes from `restartwatergap_2006-12-31` (WaterGAP `hot_run` reads the restart of begin − 1 day) and writes the new daily files and `restartwatergap_2016-12-31`.
+     - Afterwards: md5 of the 56,606 OL files of 2002–2006 and of the 124 old restarts vs the 10:59 snapshot.
+     - Expected about 85 min (5 years took 2,564 s).
+   - **(c)** collect_OL 2002–2016 follows.
+4. **Question on "2002–2006 part bit-identical to FT9F" (item 3):** this **cannot hold by design**.
+   - `DA_GRACE.gather_OLmean` and `GRACE_perturbed_obs.remove/add_temporal_mean` build the observation as GRACE anomaly + OL mean, with **both means taken over all GRACE epochs of the assimilation period**.
+   - For 2002–2016 (157 epochs) the per-unit offset (mean_OL − mean_GRACE) differs from that over 2002–2006 (54 epochs). So every 2002–2006 observation of LT9F is shifted by a constant per unit against FT9F's, and the analyses differ from the first epoch on.
+   - The river state envelope (OL min/max over the collected period) also changes.
+   - **Proposal**, instead of bit-identity:
+     - (i) check exactly that LT9F's 2002–2006 observations equal FT9F's plus one constant per unit (obs files; max deviation reported)
+     - (ii) report LT9F vs FT9F 2002–2006 differences (fit RMSD on T9 units, monthly TWS / gw grids) as a sensitivity to the reference period
+     - (iii) stop only on a code or config difference (run copy vs FT9F: only case / basin / period / save path may differ)
+   - **Cowork: confirm (i)–(iii), or say if the reference means should be pinned to 2002–2006.** That would need a code change, which is not mine to make.
+5. **Yearly pruning:** with the data root now about 2.55 TB, the full LT9F fits without pruning *during* the run:
+   - about 870 GB `DA_output` (58 GB/yr × 15) + about 790 GB collected DA dailies (FT9F: 262 GB for 5 years)
+   - OL extension about +550 GB OL_output and +520 GB `Res/GDA_Ucloud` OL members
+   - ≈ 5.3 TB peak: below 6,000, but with only about 700 GB margin
+   - Pruning during the run needs a chain that collects and deletes year by year while `DA_run` writes, which is new code with risk.
+   - **Proposal:** run LT9F in one piece, then prune year by year after collect_DA (export plus md5 to the desktop, then rule 164 (4)). Cowork: confirm, or keep in-run pruning.
+6. **LT9F run copy** (prepared once (b) and (c) are done): FT9F's options with basin `GlobalBasins_T9_0216`.
+   - Shapefile copied under the new name; mask already copied.
+   - sim 2002-01-01 … 2016-12-31; no withhold; init b95a95c5; save `DA_output/WRR_LT9F/seasonal_split_state.npz`.
+   - The 23 months without an epoch are skipped by the filter (no file, no update). This is checked in the first windows of 2011.
+7. **Review-186 increment test for FT9F** started (desktop, post-hoc).
+
+#### Review 199 item 5 — review-186 increment test for FT9F: the anti-correlation is gone — Claude Code, 02 Nov 15:15
+
+- **Method:** `posthoc/increment_test_FT9F/` (copy of `inc_test_global.py` with FT9F added; HT9 and HT9S recomputed and reproduce the earlier numbers exactly).
+  - g = ensemble-mean applied gw increment per month; e = wells − β·OL residual; 1,256 cells with ≥ 2 locations.
+  - No withheld/assimilated split is needed: months without an analysis have g = 0.
+
+| case | median r, seasonal (share > 0) | remainder | total | g seasonal amplitude, well cells [mm] |
+|---|---|---|---|---|
+| HT9 | −0.065 (0.45) | +0.039 | +0.010 | 6.53 |
+| HT9S | +0.028 (0.54) | −0.006 | −0.002 | 1.15 |
+| **FT9F** | **+0.055 (0.56)** | **+0.047** | **+0.047 (0.61)** | **2.10** |
+
+- **Reading:**
+  - The seasonal part of FT9F's gw increment **no longer anti-correlates** with the OL gw error at the wells. All three parts are weakly positive.
+  - Its seasonal gw increment is about one third of HT9's and about twice HT9S's.
+  - The relation is still weak (|r| < 0.06), so the increment carries little local well information either way.
+
+#### DA review 196 — category B transfers verified; UCloud remnants deleted — Claude Code, 02 Nov 16:12
+
+- **Desktop pull** into `PyGLDA_v2_external_data/Res/` (rsync without overwrite; md5 of every regular file compared with UCloud):
+
+  | folder | files | md5 | time |
+  |---|---|---|---|
+  | `Res/WRR` (all exports) | 14,383 | OK | 14:22 |
+  | `Res/WRR/FT9F` (re-pulled after its export) | 1,828 | OK | 14:5x |
+  | `Res/WRR_HT9` | 172 | OK | 14:44 |
+  | `Res/WRR_HT9S` | 172 | OK | 15:04 |
+  | `Res/WRR_HG5` | 172 | OK | 15:18 |
+  | `Res/WRR_HG4` | 172 | OK | 15:36 |
+  | `Res/WRR_HE3` | 172 | OK | 16:08 |
+
+  - The OL members in these folders are symlinks into `Res/GDA_Ucloud/OL` and were not copied.
+- **Deleted on UCloud** (`del_196b.sh` f60709a3; file counts re-checked = verified counts; same checks as category A):
+  - `Res/WRR_HT9` 15 GB, `Res/WRR_HT9S` 15, `Res/WRR_HG5` 14, `Res/WRR_HG4` 20, `Res/WRR_HE3` 28 (total 92 GB)
+  - data root 2,756 → **2,688 GB**, with the OL extension writing meanwhile
+- **Kept on UCloud:** `Res/WRR` (88 GB). It holds the seasonal_split init of LT9F (`Res/WRR/HT9S/seasonal_split_init_T9.npz`), and the copy is on the desktop.
+- Logs and filter summaries of the finished runs are inside the exports.
+
+#### Review 199 (3b, 3c) — OL extended to 2016 (2002–2006 BIT-IDENTICAL); LT9F prepared, collect_OL 2002–2016 running; assimilate waits for the answer to item 4 of my 15:13 entry — Claude Code, 02 Nov 16:37
+
+- **(b) OL extension** (`ol_ext_chain.sh`):
+  - OL_run EXIT=0, wall 4,661 s, peak anon 56.8 GB, alone; `git status settings/` clean
+  - **OL_output 2002–2006 BIT-IDENTICAL** (56,606 files vs the 10:59 snapshot); OL_output now 169,849 files (+113,243 = 31 × 3,653 days)
+  - **old restarts changed: 0 of 124**; new `restartwatergap_2016-12-31` (31)
+  - Restart dates now 2001-12-31, 2002-08-31, 2006-12-31, 2012-12-31, 2016-12-31. The 2012-12-31 files are older ones and unchanged.
+  - Data root 2,771 GB.
+- **(c) LT9F:**
+  - `wrr_run.py` 6ab8f993: LT9F = FT9F's options, basin `GlobalBasins_T9_0216`, sim 2002-01-01 … 2016-12-31, no withhold, save `DA_output/WRR_LT9F/seasonal_split_state.npz`. The FT9F path is unchanged.
+  - Prepare: the GRACE files of `obs0216` are reused and never rebuilt.
+  - Shapefile copied to `Basin/shp/GlobalBasins_T9_0216/` (md5 equal).
+  - **Prepare EXIT=0** (16:36):
+    - 707 units / 56,356 cells, IDs equal
+    - run copy vs U2: only case / units / period / withhold differ
+  - **collect_OL 2002–2016 running since 16:36:40** (`lt9f_pre.sh` 01dad013 → `wrr_chain.sh` b06fcda2 with `STOP_AFTER=collect_OL`).
+- **Note on collect through the OL links:** `collect_OL` writes the 2002–2006 yearly files through the case's links into `Res/GDA_Ucloud/OL`. This happened in every WRR chain (FT9F at 12:50 today). It is content-neutral (same OL dailies, same 56,356-cell footprint mask) and is documented in `wrr_chain.sh`. The 2007–2016 yearly files of LT9F are real files in `Res/WRR_LT9F/OL` (about 520 GB).
+- **The assimilation is not started** until Cowork answers item 4 of my 15:13 entry: the 2002–2006 check that replaces bit-identity, or pinning the reference means. `wrr_chain.sh` then needs a start-at option so prepare / collect_OL are not repeated; to be added.
+
+#### Answer to DA reviews 200 / 201 — output-only test BIT-IDENTICAL; LT9F assimilation started (qtot / qr on) — Claude Code, 02 Nov 17:18
+
+- **Review 200 arrived at 17:11** (written 15:40). By then:
+  - the **OL extension 2007–2016 had finished without qtot / qr** (16:33, review 200 item 4);
+  - LT9F's collect_OL 2002–2016 had finished at 17:10:56 (EXIT=0, 2,043 s, peak anon 30 GB, data root 3,304 GB).
+  - Handled as review 201 says.
+- **Output-only test** (`olflux_test.sh` 6a0a9e64, `ol_flux.py` 90c2ee3f):
+  - OL 2007-01-01 … 2007-01-31 with `total_runoff` and `total_groundwater_recharge` ON (run copy `settings/OLFLUX`, only `OutputVariable` changed) into `DA_output/olflux_test`
+  - start states from the 2006-12-31 restarts (read only); end states saved in the test folder
+  - **RESULT: BIT-IDENTICAL**: all 19,220 variable arrays of the production `OL_output` dailies (31 members × 31 days) are identical; qtot and qr present in all 961 files
+  - EXIT=0, 80 s
+  - Test output and run copy deleted afterwards (my scratch).
+  - The switch is in the run copy's `OutputVariable` only, with no code or repository change.
+- **LT9F:**
+  - `wrr_run.py` afa9b120: for LT9F only, `OutputVariable` total_runoff / total_groundwater_recharge ON in the run copy; the compare allows exactly `Config .OutputVariable` besides the DA keys.
+  - `wrr_export.py` eb53b10d: export groups **qtot** and **qr** (monthly ensemble mean and spread of the daily flux, kg m⁻² s⁻¹ like `et`; × 86,400 × days = mm/month), written only where present. FT9F's export is unaffected.
+  - `wrr_chain.sh` 6c205c21: `START_AT=assimilate` skips link / prepare / collect_OL.
+  - **Launched 17:17:32** (`lt9f_run.sh` 71b142f2, tmux da:lt9f), alone on the job:
+    - prepare check passed (`OutputVariable` ON; run copy vs U2: only the allowed keys differ)
+    - `START_AT=assimilate`, `STOP_GB` 5,900, restart md5 before / after
+    - partition bab39fd0, DA_GRACE c2a7cd08, init b95a95c5
+  - Expected assimilate about 2.6 h (FT9F: 52 min for 5 years), then collect_DA, evaluate, export.
+  - Then year-by-year pruning per review 201.2, and the 2002–2006 checks (i)–(iii) per review 201.1.
+- **OL qtot / qr 2002–2016** (review 201.3): after LT9F, `ol_flux.py` with `FLUX_ONLY=1` into a new folder; states checked on the 2006-12-31 and 2016-12-31 restarts.
+
+#### Answer to DA review 202 — runoff / recharge removed; LT9F relaunched with FT9F's output list — Claude Code, 02 Nov 17:22
+
+- LT9F had started at 17:18:41 with qtot / qr on.
+  - **Stopped at 17:21:21** with `tmux kill-window da:lt9f`, about 2 minutes into assimilate. No process left; nothing had been written to `DA_output/WRR_LT9F`.
+- **Reverted** (driver code in `da_dev` only):
+  - `wrr_run.py` de16fa61: no `OutputVariable` change, no Config exception in the compare
+  - `wrr_export.py` 7ff99bf8: no qtot / qr groups
+  - `lt9f_run.sh` 1f8298c6: no output-only test gate
+- **Relaunched at 17:22:02** (tmux da:lt9f), alone:
+  - prepare check: run copy vs U2: only case / units / period / withhold differ
+  - run copy `total_runoff` = false (checked)
+  - `START_AT=assimilate`, `STOP_GB` 5,900
+  - partition bab39fd0, DA_GRACE c2a7cd08, init b95a95c5
+- The output-only test of 17:13 (BIT-IDENTICAL) and its deleted scratch stay on record only. No OL runoff / recharge rerun.
+
+#### Answer to DA review 203 — LT9F running again with qtot / qr ON (review 202 had already been acted on) — Claude Code, 02 Nov 17:25
+
+- **Review 203 came after I had acted on 202.**
+  - LT9F with qtot / qr: started 17:18:41, stopped 17:21:21 (about 2 min of assimilate, no DA output yet).
+  - Relaunched without qtot / qr at 17:22:02.
+  - That run was stopped at 17:23:22 while still in its prepare check / restart md5, before the chain started; no DA output.
+  - Both stops with `tmux kill-window da:lt9f`; no process left.
+- **Restored** (driver code only):
+  - `wrr_run.py` 34c7bbf3 (qtot / qr ON in LT9F's run copy `OutputVariable`; compare allows exactly `Config .OutputVariable`)
+  - `wrr_export.py` 402928db (qtot / qr groups)
+  - `lt9f_run.sh` b80d1695 (gate on the output-only test RESULT BIT-IDENTICAL)
+- **LT9F relaunched 17:24:04; assimilate RUNNING since 17:25:10**, alone:
+  - prepare check: `OutputVariable` ON; run copy vs U2 only the allowed keys
+  - run copy `total_runoff` = true (checked)
+  - data root 3,305 GB; `STOP_GB` 5,900
+  - partition bab39fd0, DA_GRACE c2a7cd08, init b95a95c5
+  - The run is the same as the first launch; only its start time moved by about 7 minutes.
+- **OL qtot / qr rerun 2002–2016: deferred**; only on a later word from Cowork or Fan.
+- **Request:** where two reviews come within minutes, I act on the newest one I have read. A short "hold" line in the review file before a reversal would avoid stop–start cycles like this one.
+
+#### LT9F progress — past the first 2011 gaps; gap handling checked — Claude Code, 02 Nov 19:08
+
+- **Assimilate** (since 17:25:10, alone): at 2011-09. Anon 73 GB of 96. `DA_output/WRR_LT9F` was 441 GB at 2008-09 (about 66 GB per model year), so about 1 TB at the end.
+  - Expected end of assimilate about 21:00, then collect_DA (about 35 min), evaluate and export.
+  - Data root expected about 5.1 TB after collect_DA, below the 5,900 GB stop.
+- **Gap months, review 197.3: no update.** Ens_1 applied increments:
+
+  | month | non-river \|sum\| | river \|sum\| |
+  |---|---|---|
+  | 2011-01 (gap) | **0** | 1.59e5 |
+  | 2011-06 (gap) | **0** | 2.66e5 |
+  | 2010-12 | 1.22e6 | 1.9e5 |
+  | 2011-02 | 1.6e6 | 0 |
+  | 2011-05 | 1.55e6 | 2.88e5 |
+  | 2011-07 | 1.66e6 | 0 |
+
+  - The gap months carry only the 10-day river release of the previous analysis, as in FT9F's 2002 gaps.
+  - The month after a gap has no river release, because no analysis took place in the gap.
+  - So no analysis, no fill. The ensemble runs on.
+
+#### LT9F — assimilate and collect_DA done; checks (i) and (iii) vs FT9F passed; export running — Claude Code, 02 Nov 20:43
+
+- **LT9F:**
+  - assimilate EXIT=0, wall 9,176 s (17:25:10 → 19:58:19), peak anon 76.1 GB, alone
+  - collect_DA EXIT=0, 2,452 s; evaluate EXIT=0, 120 s
+  - **export running since 20:41:41**
+  - Data root **5,193 GB**, about 700 GB below the 5,900 stop; the export adds about 30 GB.
+- **Check (i), observations** (`lt9f_check.py` ea50e36b; `lt9f_check.out`): LT9F's `GlobalBasins_T9_0216_obs_GRACE.hdf5` (157 epochs) vs FT9F's `GlobalBasins_T9_obs_GRACE.hdf5` (54 epochs), the 54 common epochs matched by observation window:
+  - **LT9F − FT9F is one constant per unit and member**: the maximum over all 31 members and 707 units of (max − min over the 54 epochs) is **6.8e-13 mm** → **CONSTANT PER UNIT**
+  - Constants (ens_0): −170.9 … +127.0 mm, median |c| 14.7 mm. This is the reference-period shift of the GRACE and OL means; units with long-term trends have large values.
+  - **Covariance of the 54 epochs identical.** The observation perturbations are therefore identical too: only the offset differs.
+- **Check (iii), run copies** `settings/WRR_LT9F` vs `settings/WRR_FT9F`: differing keys are only
+  - basin, basin_mask, basin_shp (→ `GlobalBasins_T9_0216`, byte copies of T9)
+  - case
+  - todate 2016-12-31
+  - `seasonal_split.save`
+  - `Config .OutputVariable` (qtot / qr on; output-only, test 17:13 BIT-IDENTICAL)
+  - → **no code or config difference beyond the allowed ones.** Code: partition bab39fd0, DA_GRACE c2a7cd08, as FT9F (frozen record).
+- **Check (ii)** (2002–2006 fit and grid differences LT9F vs FT9F): on the desktop once the export is pulled with md5.
+- **Then:** pruning per review 201.2 (desktop md5 of each year's export, then that year's DA dailies, then the DA_output member files, keeping restart / seasonal_split state / filter summaries / logs), and the LT9F evaluation per review 199.4.
+
+#### LT9F complete; export md5-verified on the desktop; year-by-year pruning done (review 201.2) — Claude Code, 02 Nov 22:17
+
+- **LT9F chain:**
+  - export EXIT=0, 3,309 s
+  - **CHAIN COMPLETE 21:37:13**; `git status settings/` clean
+  - **RESTART CHECK: Ensemble_Initialization unchanged**
+  - `seasonal_split_state.npz` written (19:57)
+  - `Res/WRR/LT9F` 29 GB
+  - Wall times: collect_OL 2,043 s, assimilate 9,176 s (peak anon 76.1 GB), collect_DA 2,452 s, evaluate 120 s, export 3,309 s
+- **Export on the desktop:** `PyGLDA_v2_external_data/Res/WRR/LT9F`, **5,328 files, md5 OK** (30 grid files: OL / DA 2002–2016).
+  - The md5 list is in `da_dev/lt9f_export_verified.md5` (490fcd55).
+  - The 2002–2016 GRACE files `GlobalBasins_T9_0216_*` were also copied to desktop `GRACE/output` (md5 equal).
+- **Pruning** (`del_lt9f.sh` 5cbd1974). Per year, UCloud re-checked the year's export grids against the desktop list before deleting:
+  - **`Res/WRR_LT9F/DA/Ens_k/daily_output_<year>.nc` 2002 … 2016 deleted**: 15 × 32 files (31 members plus Ens_mean), 60 GB each, about 890 GB
+  - then, with all export files matching: **`DA_output/WRR_LT9F/Ens_*` deleted (969 GB)**
+  - kept: `restart/`, `seasonal_split_state.npz`, `filter_summary.json`, `adaptive_inflation_log.csv`, `logs/`
+  - The case's OL yearly files (`Res/WRR_LT9F/OL`, 2007–2016 real files) are kept.
+  - **Data root 5,221 → 3,362 GB.**
+- **Storage per model year (review 196 step 5, measured on LT9F):** `DA_output` about 65 GB, collected DA dailies 60 GB, export about 2 GB.
+- **Evaluation** (desktop, `paper/wrr/lt9f_eval/`) started:
+  - check (ii): LT9F vs FT9F 2002–2006 fit and grids, wells 2002–2006
+  - fit 2002–2016 on T9 / WB / HB3
+  - wells 2002–2016 (main sample ≥ 120 months, ≥ 2 readings/month; ≥ 72 months; region-balanced, detrended, n_eff; Jasechko trends)
+  - Amazon gauges 2002–2016
+  - Li's low-flow test (definition looked up in the reviews)
+- **Queue on UCloud is empty.** The OL qtot / qr rerun stays deferred (review 203).
+
+#### LT9F evaluation (review 199.4, check (ii) of 201.1) — fit good, consistent with FT9F; wells, trends and low flow below OL; gap-month steps — Claude Code, 02 Nov 22:24
+
+Files: `paper/wrr/lt9f_eval/` (summary `lt9f_eval_summary.txt`; subfolders check_ii, fit_0216, wells, jasechko, amazon, lowflow). Desktop only, new files only.
+
+**1. Check (ii): LT9F vs FT9F, 2002–2006** (anomaly RMSD; median / area-weighted quadratic / global land mean, mm)
+
+| geometry | OL | U2 | FT9F | LT9F | LT9F worse than FT9F by > 5 mm |
+|---|---|---|---|---|---|
+| T9 | 35.15 / 44.31 / 5.57 | 4.78 / 4.90 / 0.82 | 4.84 / 5.07 / 0.82 | **4.76 / 4.98 / 0.81** | 1 unit (0.1 % of area) |
+| WB 93 | 31.51 / 33.19 | 5.54 / 5.65 | 5.67 / 6.38 | 5.64 / 6.56 | 0 |
+| HB3 | 30.00 / 32.49 | 5.58 / 7.68 | 5.84 / 8.23 | 5.76 / 8.26 | 0 |
+
+- LT9F also passes rule 1 vs U2 on 2002–2006.
+- The raw RMSD (with mean offset) is 14.7 vs 5.0 mm: the reference-period offset of check (i).
+- **Grids LT9F − FT9F 2002–2006:**
+  - global land-mean TWS −1.49 mm, gw −1.89, soil +0.38, snow +0.27, surface −0.25
+  - median per-cell |diff| TWS 10.0, gw 3.4
+  - RMS dominated by a few lake / wetland cells (121 cells > 500 mm in some month)
+  - **OL bit-identical**
+- **Wells 2002–2006, main sample (854 cells)** — non-seasonal r / seasonal r: OL 0.679 / 0.867, **FT9F 0.628 / 0.853, LT9F 0.615 / 0.855**, U2 0.565 / 0.646.
+- **Reading:** the reference-period sensitivity is small: fit equal to slightly better, wells slightly lower.
+
+**2. Fit to GRACE 2002–2016** (157 assimilated epochs; the 23 gap months are missing)
+
+| T9 units | OL | LT9F |
+|---|---|---|
+| median / area-weighted / global land RMSD | 41.70 / 53.23 / 6.26 | **5.33 / 5.57 / 1.08** |
+| median CC | 0.770 | **0.997** |
+
+- LT9F 2002–2006: 4.76 / 4.98; 2007–2016: 5.28 / 5.77.
+- WB 93: OL 38.51 / 39.73, LT9F 6.78 / 6.94. HB3: OL 35.27 / 38.75, LT9F 6.53 / 9.34.
+- Global land-mean trend 2002–2016: GRACE −0.64, OL −1.00, LT9F −0.71 mm/yr.
+
+**3. Wells 2002–2016** (main sample: ≥ 120 months and ≥ 2 readings/month; 15,822 locations, 1,010 cells)
+
+| scale | run | non-seasonal r (detrended) | seasonal r | peak error | share significant with n_eff (ns / dt) | region-balanced non-seasonal r |
+|---|---|---|---|---|---|---|
+| point | OL | 0.507 (0.527) | 0.823 | 0.97 | 0.66 / 0.72 | 0.51 |
+| point | **LT9F** | 0.428 (0.450) | **0.848** | **0.86** | 0.58 / 0.65 | 0.37 |
+| point | GLWS2 | 0.303 (0.285) | 0.460 | 1.93 | 0.37 / 0.40 | 0.29 |
+| cell | OL | 0.624 (0.649) | 0.882 | 0.71 | 0.69 / 0.78 | 0.62 |
+| cell | **LT9F** | 0.552 (0.584) | 0.880 | 0.69 | 0.60 / 0.71 | 0.43 |
+| cell | GLWS2 | 0.368 (0.368) | 0.537 | 1.79 | 0.44 / 0.54 | 0.37 |
+
+- HB3 regions (31): OL 0.641 / 0.793, LT9F 0.493 / 0.850, GLWS2 0.550 / 0.501.
+- Median n_eff about 25–30 of 180 months.
+- LT9F beats OL in 39 % (non-seasonal) and 45 % (seasonal) of cells.
+- ≥ 72 months (1,292 cells): non-seasonal OL 0.592 / LT9F 0.527; seasonal both 0.86.
+- **Jasechko 2024 trend sign agreement** (Theil–Sen, 43,770 sites, 90 % USA), OL / LT9F:
+  - all sites 0.64 / 0.57
+  - clear trends 0.70 / 0.61
+  - aquifer-balanced 0.64 / 0.52
+  - OL declines at 80 % of sites (median −4.9 mm/yr), LT9F at 60 % (−0.6 mm/yr), the wells at 62 %. **The DA damps OL's declines.**
+
+**4. Amazon, monthly KGE** (ANA fetched again for 2002–2016 from the public HidroWeb service; the 2002–2006 part equals the earlier file), OL / LT9F, 2002–2016:
+- Óbidos 0.853 / **0.888**
+- Manacapuru 0.742 / **0.965**
+- Tabatinga 0.780 / 0.727
+- Porto Velho 0.882 / 0.865
+- Óbidos GMD cell 0.934 / 0.806
+
+**5. "Li's low-flow test"**
+- Only defined in the reviews as "GRDC annual low flow vs basin low groundwater" (review 182). GRDC is not yet on the desktop.
+- At Óbidos (Amazon basin, 15 years), r of observed annual low flow vs annual minimum basin gw: OL 0.82, LT9F 0.70.
+- Model low flow vs observed: Óbidos 0.79 → 0.72, Manacapuru 0.89 → 0.93, Porto Velho 0.87 → 0.93, Tabatinga 0.69 → 0.46.
+- Full test when GRDC arrives.
+
+**Flags for Cowork**
+- **(a) Gap months:** the global land-mean DA − OL TWS correction changes by a median 5.5 mm in the first month after a gap (3.1 mm otherwise). Largest steps: 2013-04 +16.1, 2016-05 +15.5, 2014-03 +14.1, 2015-07 +13.2 mm.
+  - Without an update the correction drifts during the gap and is reset at the next analysis. This is consistent with review 197.3 (no fill), but visible in monthly series.
+  - Cowork: acceptable as is (document), or a note / mask in the dataset?
+- **(b) 2007-01:** OL TWS change 13.7 mm (robust z 2.8 against other Januaries), gw ≤ 2 mm. It is the OL extension start from the 2006-12-31 restarts. No clear restart artefact (the restart pickles are the exact OL states, and OL 2002–2006 is bit-identical).
+- **(c) Groundwater:** over 15 years LT9F keeps OL's seasonal cycle (seasonal r 0.88 / 0.85 at points, better peak timing) but is below OL in non-seasonal r and in trend sign agreement (it damps OL's declines). Region-balanced non-seasonal r at points: OL 0.51 vs LT9F 0.37.
+- **(d) Discharge:** Tabatinga and the Óbidos GMD cell are below OL, as in the 2002–2006 runs.
+
+#### Review 204 (b) — the 2007-01 OL step is not a restart artefact: the budget is continuous across 2006-12-31 → 2007-01-01; January P not anomalous — Claude Code, 02 Nov 23:25
+
+- **Method:** `da_dev/ol2007_budget.py` (c8634665; read-only; output `ol2007_budget.out`).
+  - OL_output dailies of Ens_0 (unperturbed) and Ens_1, 2006-12-20 … 2007-01-10.
+  - Per day the land-total change of every storage, and the cell budget P − ET − (dis − dis_from_upstream), summed over land (the routing terms cancel, leaving the outlet outflow).
+  - Land area 1.464e8 km²; 1 km³ = 0.0068 mm.
+- **Restart day 2007-01-01** (first day of the OL extension, read from the 2006-12-31 pickles) vs the other days:
+
+  | | Ens_0 | Ens_1 |
+  |---|---|---|
+  | dTWS on 01-01 [km³] | 130.1 | 84.3 |
+  | P − ET − Q_out on 01-01 | 149.3 | 104.8 |
+  | **residual on 01-01** | **−19.1 (−0.13 mm)** | **−20.5 (−0.14 mm)** |
+  | median \|residual\| other days | 18.6 | 17.4 |
+
+  - The residual is the same small constant on every day, before and after the restart: about −15 to −24 km³/day, ≈ −0.12 mm/day. It is a term outside P / ET / net discharge (e.g. lake / reservoir evaporation or inland sinks), not a restart effect.
+  - The storage changes on 01-01 are within the range of the neighbouring days for all ten storages:
+    - swe +42 / +31 km³ (Dec days 29–55)
+    - soil +33 / +17 (Dec 3–48)
+    - gw +16 / +11 (Dec −3 … +11)
+    - river +20 / +16 (Dec −13 … +44)
+    - lakes, wetlands, reservoir ≤ 11
+  - No jump in any storage.
+- **January land-mean precipitation** (unperturbed forcing) 2002–2016: 2007 = 74.4 mm, **anomaly +1.0 mm** vs the other Januaries (range −4.8 … +3.5). Not anomalous.
+- **Reading:** the budget closes on the restart day exactly as on the other days, so **no restart field was lost** (the restart pickles carry routing, lakes and the other states). The 13.7 mm Dec → Jan step of the monthly mean (z 2.8 vs other Januaries) is not explained by January P.
+  - It builds up from ordinary daily changes, mainly snow and soil: about +0.6 mm/day of TWS gain in late December and early January in Ens_0.
+  - So neither "forcing" (P) nor a restart artefact; it is the model's own seasonal evolution in that year.
+  - Cowork: enough for the paper as "no restart artefact (budget continuous)", or should I look at the December 2006 / January 2007 temperature (melt / snowfall split)?
+- **(c)** (groundwater additions) is running on the desktop.
+
+#### Review 204 (c) — groundwater additions: LT9F's loss vs OL is in the 13–36-month band, not in the slow / trend part — Claude Code, 02 Nov 23:31
+
+- Files: `paper/wrr/lt9f_eval/gw_204/` (summary, c1–c4 csv, `gw_204.py`).
+- Setup: 2002–2016, main sample (≥ 120 months, ≥ 2 readings/month: 15,822 locations, 1,010 cells); GLWS2 2003–2016. Entries are OL / LT9F / GLWS2.
+
+**1. Region table, median non-seasonal r** (not detrended | detrended)
+
+| | n | points | cells (n) |
+|---|---|---|---|
+| eu | 12,478 / 516 | 0.517 / 0.439 / 0.310 \| 0.534 / 0.464 / 0.284 | 0.700 / 0.641 / 0.418 \| 0.707 / 0.677 / 0.398 |
+| na | 2,089 / 372 | 0.411 / 0.294 / 0.242 \| 0.436 / 0.316 / 0.285 | 0.498 / 0.352 / 0.260 \| 0.549 / 0.400 / 0.333 |
+| au | 1,219 / 115 | 0.511 / 0.480 / 0.266 \| 0.582 / 0.505 / 0.311 | 0.543 / 0.509 / 0.314 \| 0.558 / **0.626** / 0.314 |
+| pooled | 15,822 / 1,010 | 0.507 / 0.428 / 0.303 \| 0.527 / 0.450 / 0.285 | 0.624 / 0.552 / 0.368 \| 0.649 / 0.584 / 0.368 |
+
+- ar (24 points, 4 cells) and af (12 points, 3 cells) are too small to read; they are in the csv.
+- **North America loses most** (−0.12 to −0.15). In Australia, detrended at cells, LT9F > OL.
+
+**2. Interannual bands**
+- Filter: 12-month climatology removed; NaN where no well data, linear interpolation inside the record; LP13 / LP37 = centred running means (≥ 2/3 of the window); band 13–36 = LP13 − LP37; > 36 months = LP37, also detrended.
+
+| scale | band 13–36 months | > 36 months (LP37) | LP37 detrended |
+|---|---|---|---|
+| points | 0.635 / **0.541** / 0.439 | 0.451 / 0.466 / 0.414 | 0.500 / **0.537** / 0.386 |
+| cells | 0.706 / **0.617** / 0.498 | 0.606 / 0.572 / 0.495 | 0.662 / **0.665** / 0.493 |
+
+- **The loss (−0.09) is in the 13–36-month band.** The slow part is equal or slightly better than OL once detrended. Only the non-detrended LP37 at cells shows the trend difference (0.572 vs 0.606).
+- Band 13–36 by region, points (OL / LT9F): eu 0.659 / 0.575, na 0.490 / 0.315, au 0.573 / 0.478.
+
+**3. Jasechko trend magnitudes** (well trend × PCR-GLOBWB Sy of the site's cell → mm/yr; "USA" = conterminous-US box, since the site IDs carry no country)
+
+| subset | n | well | OL | LT9F | sign agreement OL / LT9F |
+|---|---|---|---|---|---|
+| all | 43,770 | −0.82 | −4.92 | −0.63 | 0.64 / 0.57 |
+| USA | 38,747 | −1.09 | −10.74 | −1.29 | 0.64 / 0.57 |
+| USA, clear trend | 19,794 | −3.80 | −19.41 | −2.13 | 0.71 / 0.61 |
+| rest | 5,023 | +0.47 | +0.46 | +0.39 | 0.62 / 0.55 |
+
+- Median trends in mm/yr.
+- **In the USA, OL's declines are 5–10× the Sy-converted well declines; LT9F's are 0.6–1.2×.** LT9F gets the magnitude closer but the sign less often.
+
+**4. Unit scale, deseasonalised innovation vs regional OL well residual (e = w − β·z_OL), 2002–2016**
+
+| units | innovation | n | median r (share > 0) |
+|---|---|---|---|
+| HB3 | GRACE − OL | 31 | +0.172 (0.65) |
+| T9 | GRACE − OL | 85 | **+0.215 (0.71)** |
+| T9 | filter innovation (GRACE − DA forecast) | 85 | +0.076 (0.66) |
+
+- At unit scale, **GRACE's interannual signal agrees weakly but consistently with what the OL misses at the wells** (2002–2006 cell remainder about +0.11).
+
+**Reading for the paper:** LT9F keeps OL's seasonal skill and, detrended, its slow (> 3-year) skill, and gets trend magnitudes closer to the wells. It loses 1–3-year variability, mostly in North America. GRACE carries real interannual information at unit scale (r ≈ 0.2), so the loss lies in the downscaling / partition of that signal to cells, not in GRACE.
+
+#### Review 205 step 1 (read-only) — no out-of-line change on 2007-01-01 in any storage, band or member; budget closes; January 2007 was the warmest January of 2002–2016 — step 2 running — Claude Code, 02 Nov 23:38
+
+- Files: `da_dev/ol2007_diag.py` (08bdc2cb), output `ol2007_diag.out`, plus `ol2007_budget.out` (23:25).
+- Method: OL_output dailies; the day change on Jan 1 vs Dec 25 … Jan 10 of the same winter (robust z); the 2002/03 … 2005/06 winters lie inside the continuous OL (2002–2006 rerun from 2001-12-31).
+- **(1) Jan-1 change, Ens_0, km³ (robust z):**
+
+  | storage | 2002/03 | 2003/04 | 2004/05 | 2005/06 | **2006/07 (restart)** |
+  |---|---|---|---|---|---|
+  | TWS | 87.2 (1.0) | 37.3 (−0.4) | 75.9 (0.0) | 90.6 (0.7) | **130.1 (1.2)** |
+  | snow | 46.7 (1.1) | 39.9 (−0.4) | 43.0 (0.2) | 24.9 (−1.4) | 42.2 (1.7) |
+  | soil | 8.9 | −4.0 | 11.2 | 27.6 | 32.9 (0.6) |
+  | gw | 7.9 (1.2) | −0.6 | 11.5 (1.1) | 10.0 (1.3) | 16.0 (1.6) |
+  | river | 14.7 (1.0) | 7.0 | 8.9 | 23.4 (1.3) | 19.7 (0.6) |
+  | local wetland | 7.0 (**4.4**) | −1.0 | 0.9 | 1.1 | 10.7 (1.9) |
+  | global lake | −0.3 | −0.2 | 1.2 | 5.7 (**7.7**) | 3.4 (2.7) |
+  | **budget residual** | −17.5 | −18.4 | −21.0 | −19.8 | **−19.1 (−0.1)** |
+
+  - Canopy, local lakes, global wetlands and reservoirs: |change| ≤ 3.6 km³ in every winter.
+  - Latitude bands (TWS): 30–60 N 70.4 km³ (z 2.0) in 2007 vs 59.2 (z 3.1) in 2002/03; all other bands |z| ≤ 1.
+  - **The restart day is not out of line.** Its largest z (global lakes 2.7, local wetland 1.9) is smaller than z values of the continuous winters (7.7, 4.4).
+- **Members:** robust z of the Jan-1 TWS change across members 0–30: 2006/07 median 1.20, max |z| 2.91, **none > 3**; 2005/06 median 0.30, max 1.84. A missing restart field would show in every member.
+- **(2) Budget:** ΔS − (P − ET − net Q) on Jan 1 is −19.1 km³ (−0.13 mm) in 2007, the same constant as on every other day and winter (−17.5 … −21.0). There is no mismatch on day 1.
+- **(3) Forcing** (land mean, January), raw / perturbed member mean:
+  - **2007-01 P 74.4 / 74.2 mm (anomaly +1.0)**, but **T 280.18 K, anomaly +0.84 K: the warmest January of 2002–2016** (others −0.69 … +0.57).
+  - Perturbation ratio (member mean / raw P): 0.997 in 2007-01 vs 0.992–1.019 in other Januaries; Nov 2006 … Feb 2007 0.978–1.006, member spread normal.
+  - Ens_0 forcing = raw.
+- **(4) Natural control:** not usable.
+  - The 2012-12-31 restarts (27 Oct 12:56) were written at the end of the production DA V2cGP 2002–2012 (started 10:42, collect done 14:39), before the restart fix: DA states.
+  - Likewise the 2002-08-31 restarts (1 Nov 11:16) are the SMOKE DA end states.
+  - So step 2 starts from the original 2001-12-31 OL start states, not from 2002-08-31.
+- **Step 2 running:** continuous OL 2002-01-01 … 2007-01-31 from `restartwatergap_2001-12-31`, production settings and outputs, into `DA_output/ol_cont_test`, alone (`ol_cont_test.sh` 102e7c71, `ol_flux.py` 264e2af9 `KEEP_OUTPUTS=1`), started 23:34:52.
+  - Check 1: 2002–2006 dailies vs OL_output (md5).
+  - Check 2: 2007-01 dailies vs the extension (md5).
+  - About 45 min.
+- **Reading so far:** no sign of a restart artefact. The Dec → Jan step coincides with the warmest January of the record and is spread over normal daily changes. Step 2 decides.
+
+#### Answer to DA review 206 — box runs prepared; they start automatically only if review 205 step 2 is bit-identical — Claude Code, 03 Nov 00:04
+
+- **A:** the continuous OL test (review 205 step 2) has been running since 23:34:52 and is expected to finish about 00:20.
+  - `box_chain.sh` starts **only if both checks report 0 differing files**; otherwise it stops and I report the differing variables.
+- **B, prepared** (driver code only):
+  - `wrr_run.py` 51ab56a8:
+    - FG5L / FG5 / FG4L / FG4 / FE3L / FE3 = FT9F's v1.0 options with only the unit set changed (G5 / G4 / E3 masks; GRACE obs and covariance files as for HG5 / HG4 / HE3, reused, not rebuilt)
+    - L runs: `seasonal_split` without init, save to their own `DA_output/WRR_<R>L/seasonal_split_state.npz`
+    - main runs: init = the L state (same format, keys clim / count, checked against `partition._load_climatology`), own save path
+  - `wrr_chain.sh` 9f4aee75: `STOP_AFTER=assimilate` for the learning passes.
+  - `box_chain.sh` 8db10a0d:
+    - FG5L → prune → FG5 → FG4L → prune → FG4 → FE3L / FE3 only if FG4 ends before 07:00
+    - each alone through the gate; `STOP_GB` 5,900; restart md5 before / after
+    - learning passes logged with state md5, `sp_n`, `bo_unplaced`, gw share
+  - `del_learn.sh` 73373540: after a learning pass, keep state / filter summary / inflation log / restart / logs; delete `DA_output/WRR_<R>L/Ens_*` (no DA dailies, since no collect).
+  - FG5 / FG4 keep their DA output until their export is md5-verified on the desktop; rule 164 (4) afterwards.
+  - Storage: data root 3,362 GB + FG5 / FG4 about 560 GB each → about 4.5 TB without pruning; fits under 5,900.
+  - Expected: learning passes about 65 min each, main runs about 1 h 50 each → FG4 done about 06:00.
+- **C (desktop):** started beside the runs (light), and scoring of FG5 / FG4 ("geometry under v1.0") when their exports are in.
+
+#### Review 205 step 2 — continuous OL BIT-IDENTICAL to the extension in 2007-01: **no restart artefact; LT9F is final**; box runs started (review 206 B) — Claude Code, 03 Nov 00:16
+
+- **Continuous OL** 2002-01-01 … 2007-01-31 from `restartwatergap_2001-12-31`, production settings and outputs, into scratch `DA_output/ol_cont_test`: EXIT=0, 2,350 s, alone.
+- **Check 1:** 2002–2006 dailies vs `OL_output`: **56,606 files, 0 differ** (md5).
+- **Check 2:** 2007-01 dailies vs the OL extension (which resumed from `restartwatergap_2006-12-31`): **961 files (31 members × 31 days), 0 differ** (md5).
+- **Conclusion:** the restart carries the complete model state; the 2007-01 Dec → Jan step is the model's response to the forcing.
+  - Step-1 evidence: January 2007 was the warmest January of 2002–2016 (+0.84 K); the step is spread over normal daily changes; the budget is continuous.
+  - Review 205 step 3 is not needed. **LT9F stands as final.**
+- Scratch folder deleted after the checks (my own test output, about 280 GB), together with the run copy `settings/OLFLUX`.
+- **Review 206 B started at 00:15:16:** `box_chain.sh` (8db10a0d), FG5L first; partition bab39fd0, DA_GRACE c2a7cd08, `wrr_run.py` 51ab56a8.
+- **Review 206 C** is running on the desktop.
+
+#### Review 206 C — four desktop analyses done; **budget flag: LT9F adds +50 … +87 mm/yr net increment over land every year while ΔS stays near 0** — Claude Code, 03 Nov 00:21
+
+- Files: `paper/wrr/review206_C/` (summary `review206_C_summary.txt`; unit_design/, budget/, C.2 / C.3 files). Desktop only.
+- **Correction:** the review-204 (c) outputs had been written to `lt9f_eval/wells/` (a path variable overwritten in the script). They are now copied, md5 identical, into `lt9f_eval/gw_204/` as stated in my 23:31 entry; the numbers are unchanged.
+
+**C.1 Unit-design diagnostics** (redesign yardstick `Extra/test_global_basins/global_basins_redesign` s5 / s6, copied unchanged; T9 reproduces the README scorecard)
+
+| set | units | coherence C | R² | median leakage | leaking units | median inflow/P | nearly closed (inflow/P < 0.1) |
+|---|---|---|---|---|---|---|---|
+| T9 | 707 | 0.641 | 0.684 | 0.156 | 34 | 0.047 | **59 %** |
+| G5 | 693 | 0.654 | 0.693 | 0.166 | 65 | 0.179 | 39 % |
+| G4 | 997 | 0.681 | 0.722 | 0.183 | 93 | 0.193 | 35 % |
+| E3 | 1,397 | 0.712 | 0.756 | 0.224 | 167 | 0.181 | 38 % |
+| plain 5° | 787 | 0.657 | 0.700 | 0.190 | 102 | 0.158 | 42 % |
+
+- Smaller units: higher C / R², but more leakage and fewer closed units. T9 is the only set with a majority of nearly closed units.
+
+**C.2 Unit-mean vs within-unit decomposition** (LT9F 2002–2016, main sample; OL / LT9F / GLWS2, median r)
+
+| part | n | non-seasonal | 13–36-month band |
+|---|---|---|---|
+| T9 unit mean | 102 units | 0.607 / **0.620** / 0.449 | 0.750 / **0.686** / 0.573 |
+| within-unit, points | 15,803 | 0.229 / 0.216 / 0.156 | 0.310 / 0.279 / 0.231 |
+| within-unit, cells | 1,007 | 0.322 / 0.318 / 0.255 | 0.438 / 0.389 / 0.322 |
+
+- **LT9F's 1–3-year loss is mainly in the regional (unit-mean) signal**: −0.06, LT9F better in 36 % of units. It is smaller within units (−0.03 / −0.05).
+- In non-seasonal r, LT9F equals OL at unit scale.
+
+**C.3 Map** `c3_map_dr_band13_36_LT9F_minus_OL.png` (Δr in the 13–36-month band, cells):
+- median −0.04 globally (LT9F better in 37 %)
+- Europe −0.03, conterminous USA −0.09, Australia −0.03
+- losses concentrated in the US East / Northeast and NW Germany / the Netherlands
+
+**C.4 Budget per T9 unit, LT9F 2003–2015** (global land, mm/yr; P = unperturbed OL Ens_0 `consistent-precipitation`, since the ensemble P is not exported; DA ET / qtot = monthly ensemble means; land storage = canopy + snow + soil + gw):
+- P 809–873; ET DA 561–604 vs OL 530–556; qtot DA 324–357 vs OL implied runoff (P − ET − ΔS) 282–319
+- **net applied increments +50 … +87 mm/yr every year** (land 26–52, surface 21–35), while **ΔS_land (DA) −8 … +5**
+- closure residual ΔS − (P − ET − qtot) − I_land = +35 … +49 (partly model structure: consumptive use in evap-total, gw recharge from surface water, P of Ens_0 vs ensemble)
+- **increments dominate the annual budget (D = |I| / |P − ET − qtot| > 1) in 279 of 707 units (39 % of the area)**: central and southern Amazon tributaries (D 2.9–6.9), Congo margins, N Australia, N Siberia, and Nile / Sahara unit 1 (+310 mm/yr against P 98)
+- Table `budget/budget_units.csv`; map `budget/budget_map_D.png`
+
+**Flag for Cowork (C.4):**
+- The DA puts a systematic net positive increment into the land every year (about +60 mm/yr), and the water leaves again as higher ET (+40 mm/yr vs OL) and runoff (+35 mm/yr).
+- A likely mechanism is an asymmetry: positive increments are placed, while negative ones hit the lower storage bounds (bound capping / overflow; `bo_n_fallback` 444,718 in FT9F).
+- This affects the DA's ET and discharge and the "mass-conserving" reading of the product.
+- **Suggested light checks (desktop, from the exports):**
+  - (1) the sign split of the applied increments: positive vs negative sum per storage and year, and the share of negative increment lost at bounds (filter summaries: `ss_increment_share_before/after_bounds`, `bo_*`)
+  - (2) the same budget for FT9F vs U2 2002–2006 (whether v1.0 or the bounds in general cause it)
+  - (3) ET and discharge DA − OL by region
+- Cowork: run these, or another line?
+- **Box runs:** FG5L collect_OL running (prepare passed at 00:17: v1.0 options on G5, no init, save set).
+
+#### Answer to DA review 207 — new order armed (OL qtot / qr rerun after FG4, FE3 only after it and with ≥ 5 h left); budget checks (1)–(3) started — Claude Code, 03 Nov 00:38
+
+- **New order on UCloud.** `box_chain.sh` (FG5L → FG5 → FG4L → FG4) is running and cannot be edited while it runs. So:
+  - `wrr_run.py` 3619357b refuses FE3L / FE3 while `da_dev/allow_fe3` is missing. `box_chain`'s FE3 attempt after FG4 then stops at prepare.
+  - `box2.sh` 08c8f432 (armed 00:38:22, tmux da:box2) waits for `box_chain` to end, checks that FG4 is COMPLETE, then runs **`olflux_chain.sh`** cea01bd0.
+  - Only if that ends before 07:00 does it set `allow_fe3` and run FE3L → prune → FE3.
+- **`olflux_chain.sh`:** OL qtot / qr, FLUX_ONLY (only `total_runoff` and `total_groundwater_recharge` written), production settings, into `DA_output/ol_flux` (never OL_output), alone through the gate, two legs from production restarts:
+  - leg 1: 2002-01-01 … 2006-12-31 from 2001-12-31; its end states compared by `cmp` with `Ensemble_Initialization` 2006-12-31 (31 files)
+  - leg 2: 2007-01-01 … 2016-12-31 from 2006-12-31, as the extension; end states vs 2016-12-31
+  - Bit-identical restarts on both dates prove the fluxes belong to the production OL. About 2 h.
+- **Budget checks (desktop, `paper/wrr/review207_budget/`), running:**
+  - (1) sign split of the applied increments per storage and year (LT9F, FT9F); before / after-bounds shares and `bo_*`; whether the negative increment lost at bounds can be quantified from the exports
+  - (2) the C.4 budget for FT9F vs U2 2002–2006
+  - (3) ET and discharge DA − OL by region
+- **(4)** exact DA − OL difference budget per member and unit: after the OL flux rerun.
+- **(5)** within-month leak-and-refill test: needs DA dailies. LT9F's and FT9F's are pruned. **I will run it on UCloud from FG5's collected DA dailies** (and the shared OL dailies) after FG5's chain, before FG5 is pruned. It uses the forecast drift from the first day after analysis k to the last day before analysis k+1 vs OL's change over the same window, per unit, split by storage and season.
+- **(5) of the review, the report:** follows when (1)–(5) are in, before any configuration proposal.
+
+#### Review 207 checks (1)–(3) — net positive increment confirmed and explained: the bounds remove negative updates of the fast stores; DA − OL budget closes; U2 has it too (about 2/3 of v1.0); about 70 % leaves as ET — Claude Code, 03 Nov 00:45
+
+- Files: `paper/wrr/review207_budget/` (`review207_summary.txt`, sign split, difference budget).
+- **`increments/` contains:** per member (Ens_1..30), per month, **after the bounds** (state after update − state before; released river shares on the day they enter).
+  - The before-bounds increment is not logged, so "negative increment lost at bounds" per cell / month cannot be computed.
+  - Run totals are in `filter_summary.json`.
+
+**(1) Sign split, land, mean per year (mm/yr)**
+
+| storage | LT9F 2002–2016 pos / neg / net | neg/pos | FT9F 2002–2006 net | neg/pos |
+|---|---|---|---|---|
+| gw | 39.4 / −42.3 / −2.9 | **1.07** | −4.9 | 1.13 |
+| soil | 81.1 / −49.9 / **+31.2** | 0.62 | +26.1 | 0.66 |
+| river | 35.5 / −20.2 / +15.3 | 0.57 | +12.4 | 0.61 |
+| local / global wetland | 24.7 / −14.5 / +10.3 | 0.59 | +7.9 | 0.65 |
+| snow | 12.3 / −5.6 / +6.7 | 0.46 | +6.2 | 0.48 |
+| **all** | 193.1 / −132.6 / **+60.5** | 0.69 | **+47.6** | 0.74 |
+
+- **Bound-capping events, LT9F:**
+  - soil: lower 20.1 M / upper 15.1 M
+  - river: lower 21.7 M / upper 0
+  - snow: lower 18.4 M / upper 2.7 M
+  - wetlands: lower 6.0 M / upper 0
+  - **gw: 0 / 0**
+- Shares before → after bounds: soil 0.441 → 0.395, snow 0.227 → 0.106, river 0.113 → 0.190, gw 0.114 → 0.151.
+- **Mechanism:** the lower bounds act almost only on **negative** updates of the fast stores (soil, river, wetlands, snow), whose negative updates come out at only 46–62 % of their positive ones. gw has no bounds and is balanced (slightly net negative). The net is positive in every year after 2002.
+- By region (LT9F net): au +98.8 (neg/pos 0.52), af +66.3, as +65.3, sa +61.0, eu +53.1, si +46.6, na +43.0, ar +39.5.
+
+**(2) DA − OL difference budget** (ensemble mean; implied increment = Δ(TWS_DA − TWS_OL) + ΔET + ΔQout, P cancels; Qout = dis at the 5,202 outlet / sink cells of the footprint)
+
+| run (2003–2006) | logged increment | implied increment | Δ(ΔTWS) | ΔET | ΔQout |
+|---|---|---|---|---|---|
+| U2 | (no increment files) | **35.3** | +1.4 | 24.7 | 9.3 |
+| FT9F | 55.5 | **54.0** | +1.4 | 37.4 | 15.3 |
+| LT9F | 57.0 | 55.6 | +1.4 | 38.9 | 15.4 |
+| LT9F 2003–2016 | 63.6 | 61.1 | +0.3 | 40.9 | 20.0 |
+
+- **The budget closes (logged − implied = 1–5 mm/yr).** The C.4 residual came from the single-run budget (Ens_0 P, consumptive use, focused recharge), not from the DA.
+- **Not specific to v1.0: U2 has it too, at about 2/3 of the size** (35 vs 54 mm/yr; au 32 vs 70, eu 33 vs 60).
+
+**(3) Where it leaves** (DA − OL, mean per year; % of OL ET / outflow)
+- Land, LT9F 2003–2016: **ET +40.9 (+7.5 %), outflow +20.0 (+6.9 %): about 2/3 to ET**. FT9F: +37.4 / +15.3. U2: +24.7 / +9.3 (same 70 % ET share).
+- Regions: in eu, na, au, af and as, ET takes 74–84 % (eu ET +12.7 %). In sa, si and ar, runoff takes 54–81 % (si outflow +14 %, ar +17 %).
+
+**Points for Cowork**
+- (a) **Reference-period dependence of the regional net increment:** for 2003–2006, LT9F and FT9F have the same land mean (57.0 vs 55.5), but eu 85.8 vs 60.0, na 19.3 vs 40.1, as 85.0 vs 64.4 mm/yr. na ΔQout is −12.0 in LT9F vs +2.8 in FT9F. Cause: the per-unit observation constants of review 201 (i).
+- (b) **Remaining:**
+  - (4) the exact per-member difference budget, after tonight's OL qtot / qr rerun
+  - (5) the leak-and-refill test, from FG5's DA dailies
+  - then the report of review 207 item 5
+- **Box runs:** FG5L assimilating since 00:29.
+
+#### Review 207 (5) — leak-and-refill test on FG5: increments to fast stores fade within weeks (soil about 20 % per month, river at once), gw increments stay — Claude Code, 03 Nov 02:37
+
+- **Method:** `da_dev/lr_test.py` ab2b0001; output `lr_test_FG5.out`, `lr_test_FG5_{storages,groups}.csv`.
+  - FG5 (G5, v1.0, 2002–2006, all epochs). Member month-end states DA and OL (members 1–30) and applied increments (after bounds).
+  - Per month and storage: R = (ΔS_DA − ΔS_OL) − I.
+- **Caveat first:** over 5 years the DA − OL difference has no trend, so the **mean** of R must equal −mean I. The land-mean ratios R/I ≈ −1 (soil −0.98, river −0.98, wetlands −0.93 / −1.03, snow −0.93) are a consequence of that stationarity, not a time-scale. The informative number is how much of a **given month's** increment is gone by the end of that month: the slope of R on I over cells × months.
+
+| group | land-mean I (mm/month) | slope R on I | slope for positive I | slope for negative I | seasons |
+|---|---|---|---|---|---|
+| gw | −0.48 | **−0.01** | +0.05 | −0.01 | all ≈ 0 |
+| soil | +2.26 | **−0.20** | −0.21 | −0.11 | MAM −0.21, JJA −0.14, SON −0.24, DJF −0.16 |
+| snow | +0.55 | −0.03 | −0.02 | −0.02 | MAM −0.03 |
+| wetlands | +0.72 | **−0.22** | −0.28 | −0.06 | SON −0.35, MAM −0.28 |
+| river | +1.03 | **−1.46** | −1.47 | −1.46 | all seasons −1.3 … −1.6 |
+
+- **Reading:**
+  - (a) **gw increments stay** (slope ≈ 0): they persist beyond the month. gw's net increment is slightly negative (−0.48 mm/month).
+  - (b) **Soil and wetlands lose about 20 % of a month's increment within that month**, more for positive increments (−0.21 / −0.28) than for negative ones (−0.11 / −0.06). So the added water leaves faster than a removal is refilled. With about 20 % per month, the soil part of an increment has an e-folding time of a few months.
+  - (c) **River increments leave the cell at once** (slope −1.46, beyond −1, because the water routes downstream into other cells within the month). The river share of the increment (19 % after bounds) is outflow almost immediately.
+  - (d) Snow increments persist within the month (−0.03).
+- **Combined with checks (1)–(3):**
+  - the lower bounds remove negative updates of soil / river / wetlands / snow (net +60 mm/yr)
+  - the positive soil / wetland updates drain faster than negative ones refill
+  - river updates leave at once
+  - → the net positive increment is a steady **refill of fast stores the model does not hold**. It leaves mostly as ET (soil, wetlands) and runoff (river). gw takes little and keeps what it gets.
+- **Still open:** (4) the exact per-member difference budget with OL runoff, after tonight's OL qtot / qr rerun (after FG4); then the review-207 item-5 report.
+- **Box runs:** FG5 chain at export (assimilate 2,895 s, collect_DA 668 s, evaluate 60 s); FG4L next.
+
+#### Box runs (review 206 B) — FG5L and FG5 done, FG5 export md5-verified and pruned; FG4L assimilating — Claude Code, 03 Nov 03:06
+
+- **FG5L** (learning pass): assimilate EXIT=0, 3,042 s, peak anon 70.6 GB.
+  - State `DA_output/WRR_FG5L/seasonal_split_state.npz` **af3b0faa**; sp_n 54, `bo_unplaced` 430 mm, gw share after bounds 0.15.
+  - Member files deleted (282 GB). Kept: state, filter summary, inflation log, restart, logs.
+- **FG5:** prepare / collect_OL / assimilate (2,895 s, peak 70.6 GB) / collect_DA / evaluate / export all EXIT=0; **CHAIN COMPLETE 02:51**; `settings/` clean.
+  - init = FG5L state (12 months known); own state 7900e5c0.
+  - Export `Res/WRR/FG5` 10 GB → **desktop, 1,828 files, md5 OK**.
+  - Pruned with `del_run.sh FG5` (08f4cce2; the generic form of `del_lt9f.sh`; per-year check of the export grids against the desktop list):
+    - DA dailies 2002–2006 deleted (5 × 52 GB)
+    - `DA_output/WRR_FG5/Ens_*` deleted (282 GB)
+    - kept: restart / state / summaries / logs
+    - data root 3,954 → 3,419 GB
+- **FG4L:** collect_OL EXIT=0, 687 s; **assimilate running since 03:03:54**. Then FG4 (about 1 h 50), then `box2.sh` → OL qtot / qr rerun (about 2 h).
+- **Leak-and-refill test** (review 207 (5)) was run on FG5's dailies before the pruning; see the 02:37 entry.
+
+#### Answer to DA review 208 — explanation test and open-ET check started (desktop); (4) after the OL flux rerun — Claude Code, 03 Nov 03:32
+
+- **Item 1 started** (desktop, `paper/wrr/review208/`). Per T9 unit, LT9F 2003–2016 and U2 2003–2006 (U2: implied net increment from the review-207 difference budget, since U2 has no increment files):
+  - net increment vs the GRACE − OL difference in seasonal amplitude (std of the 12 calendar-month means) and phase (month of maximum)
+  - plus the fast-store share of the seasonal increment
+  - Spearman, a multiple regression with R², scatter PNGs
+  - units with large net increment but no amplitude deficit listed separately (Nile / Sahara unit 1)
+- **Item 2:** only an open product without login or registration (FLUXCOM-X-BASE if openly served; GLEAM needs registration, so no). Otherwise reported as unavailable and skipped.
+- **Item 3** noted (sensitivity in the paper, no action).
+- **Item 4:** after FG4 and the OL qtot / qr rerun (`box2.sh`). Then the exact per-member difference budget and the review-207 item-5 report.
+- **Decision noted:** v1.0 stays frozen.
+- **UCloud:** FG4L assimilating since 03:03:54, alone.
+
+#### Review 208 items 1–2 — the seasonal-shape explanation holds only partly (R² about 0.2); no open observation-based ET without a licence step; vs TerraClimate the DA's extra ET widens the bias — Claude Code, 03 Nov 03:41
+
+- Files: `paper/wrr/review208/` (`review208_summary.txt`, `shape_test_*`, `et_check_*`).
+
+**1. Test per T9 unit (707)**
+- Net increment: LT9F logged (ensemble mean, 2003–2016); per-unit implied increment from the difference budget agrees to a median of 0.7 mm/yr. U2: implied (2003–2006).
+- Amplitude deficit = std of the 12 calendar-month means, GRACE target − OL. Phase = circular difference of the month of maximum. Fast share = L1 norm of the seasonal soil + snow + river + wetland increment / including gw.
+
+| case | median net (mm/yr) | ρ vs amplitude deficit | ρ vs \|phase\| | ρ vs fast share | R² (all) | R² (deficit only) |
+|---|---|---|---|---|---|---|
+| LT9F logged | 43.2 | **+0.42** | +0.08 | **−0.40** | 0.185 | 0.178 |
+| LT9F implied | 42.6 | +0.41 | +0.08 | −0.38 | 0.174 | 0.169 |
+| U2 implied | 25.8 | **+0.43** | +0.01 | – | 0.263 | 0.261 |
+
+- GRACE asks for a wider cycle in 62 % of units.
+- **Reading:**
+  - The net increment does rise with the amplitude deficit in both U2 and v1.0, but **the deficit explains only about 18–26 % of the unit-to-unit variation**. Phase does not matter.
+  - **The fast-share prediction fails at unit level:** units with more fast routing have *smaller* net (ρ −0.40). The fast share is 0.85–1.0 almost everywhere, so its spread is small.
+  - → The explanation is partly supported (mean effect, amplitude dependence) but leaves most of the variation unexplained.
+- **Large net without amplitude deficit:** 35 units (net > 86.5 mm/yr and deficit ≤ 0), mostly si 11, as 8, na 5, eu 4, au 3. Mainly soil and river (some Siberian units snow). For example:
+  - 489 na 247 mm/yr (local wetlands 121)
+  - 312 au 225 (soil 180)
+  - 395 eu 213 (soil 167)
+  - 692 si 192
+  - 271 as 179
+  - Amazon 573 / 577 (river; GRACE amplitude below OL's)
+- **Unit 1** (15.25–26.25 N, 33.75–39.75 E: Red Sea hills / eastern Sudan–Egypt desert) **does not contain Lake Nasser**; the Nasser cells are in unit 100, net +3.5 mm/yr.
+  - Unit 1: net +304 mm/yr (river 228, soil 47, wetlands 21, gw 9); GRACE amplitude 25.2 mm vs OL 1.9 mm.
+  - Trend 2002–2016: GRACE −1.2, OL −0.1, LT9F −1.8 mm/yr.
+  - Reading: GRACE signal leaking into a unit with almost no modelled storage variability (from the Nile / Nasser or Red Sea side), filled mostly as river water. The Nasser / irrigation explanation does not apply to unit 1 itself.
+
+**2. Independent ET check**
+- FLUXCOM-X-BASE (ICOS Carbon Portal) needs a licence-acceptance step, so it was not used. GLEAM needs registration; MOD16 and ERA5-Land need accounts.
+- **Used instead: TerraClimate v1.1 actual ET** (Abatzoglou et al.; **CC0**; open THREDDS HTTP, no login; 2003–2016, 1.3 GB in `Extra/benchmarks/TerraClimate_aet/`).
+- **Caveat:** TerraClimate is a climatic water-balance model (WorldClim / ERA5), independent of WaterGAP but **not an observation**.
+
+| region | TerraClimate (mm/yr) | OL / LT9F | bias OL / LT9F | r monthly anomalies OL / LT9F |
+|---|---|---|---|---|
+| land | 505 | 542 / 583 | +7 % / **+15 %** | 0.70 / **0.50** |
+| eu | 323 | 333 / 375 | +3 % / +16 % | 0.67 / 0.37 |
+| na | 560 | 596 / 632 | +6 % / +13 % | 0.78 / 0.68 |
+| af | 470 | 564 / 612 | +20 % / +30 % | 0.67 / 0.54 |
+| si | 289 | 240 / 258 | −17 % / −11 % | 0.72 / 0.49 |
+| ar | 263 | 222 / 234 | −16 % / −11 % | 0.60 / 0.42 |
+
+- Where OL already exceeds TerraClimate, LT9F's extra ET widens the bias. Only in si and ar, where OL is too low, does it reduce it.
+- The monthly-anomaly correlation drops with the DA (land 0.70 → 0.50); the seasonal correlation is unchanged (about 0.96).
+- **Reading:** against this benchmark the added ET does not improve ET. To be repeated with FLUXCOM-X / GLEAM once Fan can get them (licence / registration).
+
+**Cowork:**
+- (a) Given R² about 0.2, the paper wording "partly explained by the seasonal-shape demand" rather than "explained"?
+- (b) The ET result strengthens the case for describing the extra ET as a cost of fitting GRACE, not an improvement.
+- **UCloud:** FG4L assimilating.
+
+#### Box runs — FG4L and FG4 done; FE3 refused as planned; OL qtot / qr rerun started (review 207 order) — Claude Code, 03 Nov 05:33
+
+- **FG4L** (learning pass, G4): assimilate EXIT=0, 3,161 s.
+  - State **c8fc1bb6**; sp_n 54, `bo_unplaced` 788 mm, gw share after bounds 0.153.
+  - Member files deleted (283 GB); kept: state / summary / logs / restart.
+- **FG4:** all stages EXIT=0 (collect_OL 708 s, assimilate 3,063 s at peak anon 73 GB, collect_DA 728 s, evaluate 80 s, export 1,003 s); **CHAIN COMPLETE 05:32**; `settings/` clean.
+  - init = FG4L state (12 months known); own state d125b4a2.
+  - Export `Res/WRR/FG4` 13 GB → desktop pull with md5 running; then `del_run.sh FG4`.
+  - Data root 4,007 GB.
+- **FE3L:** `box_chain` tried it at 05:32. **`wrr_run.py` refused it at prepare** ("FE3L / FE3 not allowed now … allow_fe3 missing"), as planned, so `box_chain` ended ("FE3L FAILED - chain stops", only the planned refusal).
+  - `box_chain`'s restart md5 after-check did not run because of that exit; `box2.sh` covers it after the OL flux run.
+- **`box2.sh` → `olflux_chain.sh` started 05:33:23:** OL qtot / qr, FLUX_ONLY, leg 1 2002–2006 then leg 2 2007–2016, restart cmp at 2006-12-31 and 2016-12-31. About 2 h, alone.
+  - FE3L / FE3 only if it ends before 07:00. That is unlikely (expected end about 07:30), so FE3 will not run this job.
+- **After the OL flux run:** review 207 (4), the exact per-member DA − OL difference budget (LT9F 2003–2016, FT9F / FG5 / FG4 2003–2006). Then the item-5 report and the "geometry under v1.0" scoring (FT9F vs FG5 vs FG4).
+
+#### Review 206 B scoring — "geometry under v1.0": T9 wins on WB / HB3 (boundary-shared), FG4 slightly better on 0.5° cells, wells indistinguishable; net increment the same in all geometries — Claude Code, 03 Nov 05:54
+
+- Files: `paper/wrr/geometry_v1/` (`geometry_v1_summary.txt`, `geometry_v1_table.csv`; fit / wells / inc_test / amazon / increments).
+- Fit = anomaly RMSD vs the T9 gridded GRACE target, assimilated months. v1.0 runs and U2 use 54 epochs; HT9 / HG5 / HG4 (old configuration, withhold) use 41.
+
+| metric | OL | U2 | **FT9F** | **FG5** | **FG4** | HT9 | HG5 | HG4 |
+|---|---|---|---|---|---|---|---|---|
+| fit own units, median / awq | 35.15 / 44.31 | 4.78 / 4.90 | 4.84 / 5.07 | 5.11 / 5.47 | 5.27 / 5.82 | 4.45 / 4.62 | 4.79 / 5.08 | 4.93 / 5.32 |
+| fit WB-93, median / awq | 31.51 / 33.19 | 5.54 / 5.65 | **5.67 / 6.38** | 10.01 / 10.78 | 8.58 / 11.51 | 5.26 / 5.45 | 9.34 / 10.03 | 7.93 / 9.10 |
+| fit HB3, median / awq | 30.00 / 32.49 | 5.58 / 7.68 | **5.84 / 8.23** | 9.30 / 13.77 | 7.53 / 9.41 | 5.51 / 7.78 | 8.24 / 11.01 | 6.84 / 8.51 |
+| fit 0.5° cells, median | 44.48 | 34.19 | 37.99 | 37.55 | **36.60** | 34.02 | 33.06 | 31.75 |
+| wells cells, non-seasonal / seasonal r | 0.679 / 0.867 | 0.565 / 0.646 | 0.628 / 0.853 | **0.640 / 0.857** | 0.620 / 0.845 | 0.575 / 0.680 | 0.590 / 0.666 | 0.558 / 0.657 |
+| wells cells, region-balanced non-seasonal | 0.661 | 0.387 | 0.471 | **0.519** | 0.480 | 0.396 | 0.445 | 0.396 |
+| wells band 13–36 months | 0.760 | 0.660 | 0.670 | 0.692 | 0.694 | 0.664 | 0.643 | 0.636 |
+| review-186 seasonal r | – | – | +0.055 | +0.060 | +0.007 | −0.065 | – | – |
+| KGE Óbidos / Manacapuru | 0.853 / 0.694 | – | **0.872 / 0.947** | 0.793 / 0.905 | 0.831 / 0.862 | 0.882 / 0.928 | 0.810 / 0.877 | 0.837 / 0.846 |
+| KGE Tabatinga / Porto Velho / Óbidos GMD | 0.709 / 0.888 / 0.923 | – | 0.628 / 0.811 / 0.815 | **0.680 / 0.824 / 0.857** | 0.641 / 0.816 / 0.848 | 0.650 / 0.818 / 0.832 | 0.695 / 0.818 / 0.863 | 0.660 / 0.810 / 0.857 |
+| net increment, land (gw) [mm/yr] | – | – | 47.6 (−4.9) | 48.1 (−5.7) | 51.0 (−6.4) | – | – | – |
+| `bo_unplaced` mm / `bo_n_fallback` | – | – | 484 / 444,718 | 433 / 421,888 | 791 / 615,433 | – | – | – |
+
+- The > 36-month band (LP37) is indicative only with 60 months (FT9F 0.831, FG5 0.851, FG4 0.846).
+- **Paired bootstrap** (1,000; fit: 10° blocks × epochs, negative = FT9F better; wells: 10° blocks × months, positive = FT9F better):
+  - WB awq FT9F − FG5 **−4.32 [−6.24, −2.34]**; FT9F − FG4 **−4.94 [−7.44, −2.86]**
+  - HB3 awq FT9F − FG5 −5.16 [−10.22, −1.47]; FT9F − FG4 −1.11 [−2.56, +0.34]
+  - **0.5° cells median FT9F − FG4 +1.37 [+0.94, +1.82] (FG4 better)**; FT9F − FG5 +0.41 [−0.07, +0.90] (tie)
+  - wells non-seasonal r FT9F − FG5 −0.020 [−0.046, +0.003]; FT9F − FG4 +0.003 [−0.026, +0.030] (**tie**); FT9F − U2 **+0.063 [+0.037, +0.104]**
+- **Reading:**
+  - **Fit:** the T9 advantage on WB / HB3 is large and robust but inflated by shared boundaries (69–73 % of their boundary length lies on T9; reviews 177 / 179). On the neutral 0.5° cells FG4 is slightly but significantly better (median) and FG5 ties.
+  - **Wells:** geometry makes no significant difference under v1.0. All three v1.0 runs beat U2 and the old-configuration runs clearly, especially in seasonal r (≈ 0.85 vs 0.65–0.68).
+  - **Amazon:** FT9F best at Óbidos and Manacapuru; FG5 at Tabatinga, Porto Velho and the GMD cell.
+  - **Budget:** the net positive increment is the same in all geometries (48–51 mm/yr), **so it is not a T9 effect.**
+- **Own-unit fit for G5 / G4:** the G5 / G4 GRACE unit / gridded files were not on the desktop, so the T9 gridded target was averaged over the G5 / G4 units, as the pre-registered scorer did. The G5 / G4 signal / gridded files are now pulled (md5 equal) for an own-target rerun if Cowork wants it.
+- **UCloud:** OL qtot / qr rerun running (leg 1); FG4 pruned (data root 3,489 GB).
+
+#### OL qtot / qr rerun, leg 1 (2002–2006) — done; restart check: 28 / 31 byte-identical, the other 3 differ only in NaN bit patterns (8 cells of `water_freq`); every number bit-identical — Claude Code, 03 Nov 06:04
+
+- **Leg 1** (`olflux_chain.sh`; FLUX_ONLY: only qtot / qr written; from `restartwatergap_2001-12-31`): EXIT=0, 1,801 s; 1,826 daily files per member in `DA_output/ol_flux/p1`.
+- **Restart check 2006-12-31** (cmp of the pickles vs `Ensemble_Initialization`): 28 members byte-identical. **Ens_13, Ens_21 and Ens_22 differ.** Diagnosis:
+  - A deep comparison of every array and value (NaN-aware) finds **0 differing entries**.
+  - At byte level the only difference is **8 elements of `landfrac_state/water_freq` (360 × 720), NaN in both files but with different NaN bit patterns** (payload / sign of the NaN).
+  - All other state arrays (storages, routing, lakes, wetlands, …) are byte-identical; Ens_5, a control member, is identical everywhere.
+  - So the model states are identical. The NaN bit pattern of 8 masked cells depends on the output configuration or run, which is not a state difference.
+- **Leg 2** (2007–2016) starts from the production 2006-12-31 restarts (as the extension), so it is not affected; check at 2016-12-31 next.
+- The fluxes of leg 1 therefore belong to the production OL.
+
+#### OL qtot / qr rerun complete — leg 2 restarts 2016-12-31 all 31 BYTE-IDENTICAL; FE3 not started (job time); monthly reduction running — Claude Code, 03 Nov 07:04
+
+- **Leg 2** (2007-01-01 … 2016-12-31, from the production 2006-12-31 restarts): EXIT=0, 3,603 s.
+  - **Restart check 2016-12-31: 31 members, 0 differ** (cmp of the pickles vs `Ensemble_Initialization`, written by the OL extension 2 Nov).
+  - With leg 1 (28 byte-identical; 3 differ only in 8 NaN bit patterns of `water_freq`), the qtot / qr series 2002–2016 belong to the production OL.
+- **`DA_output/ol_flux`: 151 GB** (daily qtot / qr, full grid, 31 members × 15 years); scratch-like.
+  - After the monthly reduction (`olflux_monthly.py` 716655c4 → `Res/WRR/LT9F/ol_flux_monthly_2002_2016.npz`, T9 footprint, ensemble mean / std plus Ens_0), I propose to keep the dailies until Cowork decides whether the dataset needs daily OL fluxes; otherwise delete (my own run output).
+- **`box2.sh`:** OL flux done at 07:03, so **FE3 not started** (review 207: needs ≥ 5 h before the job end, about 12:00). DONE; data root 3,617 GB.
+- **Next:** review 207 (4), the exact ensemble-mean DA − OL difference budget for LT9F 2002–2016 with OL qtot (per unit and region), on the desktop once the npz is pulled. Then the review-207 item-5 report.
+- **The UCloud queue is empty after the reduction.** Nothing else is scheduled before the job end.
+
+- **03 Nov 07:09 Claude Code:** OL qtot / qr monthly reduction EXIT=0 (07:08).
+  - `Res/WRR/LT9F/ol_flux_monthly_2002_2016.npz` (31614efb), T9 footprint, ensemble mean / std (members 1–30) plus Ens_0; on the desktop with md5 equal.
+  - Review 207 (4), the exact difference budget with OL qtot, and the draft of the item-5 report started on the desktop (`review207_budget/exact_4/`).
+  - UCloud queue empty.
+#### Review 207 (4) and item-5 report — the exact DA − OL budget closes for the total column (residual +2.5 mm/yr); land-store increments leave about 85 % as ET; recharge +3.4 mm/yr — Claude Code, 03 Nov 07:15
+
+- Files: `paper/wrr/review207_budget/exact_4/` (`exact_budget_summary.txt`, `_regions.csv`, `_units.csv`, `_unit_year.csv`, `review207_item5_report.md`).
+- **Setup:** ensemble mean, LT9F 2003–2016. OL qtot / qr from the flux-only rerun (`ol_flux_monthly_2002_2016.npz` 31614efb).
+- **(b) total column:** I_tot 63.6 = Δ(ΔS_tws) 0.3 + ΔET 40.9 + ΔQout 20.0 + **residual 2.5** mm/yr. Per unit |R_b| median 0.75 (p90 8.8). **The budget closes.**
+- **(a) land stores** (canopy + snow + soil + gw), with Δqtot:
+  - I_land 36.9 = Δ(ΔS_land) −0.4 + ΔET 40.9 + Δqtot 7.2 + R_a **−10.7**
+  - R_a = the ET of the water added to wetlands and rivers: ET by store is not exported, so total ΔET is used.
+  - → land-store increments leave **about 85 % as ET**, 15 % as runoff (Siberia / Arctic: runoff 59–72 %).
+- **Recharge:** Δqr **+3.4 mm/yr** (+3.5 % of OL; 9 % of I_land). gw storage does not grow (ΔS_gw −0.7; gw increments −2.3 mm/yr).
+- Regions (I_tot / ET share / outflow share): af 70.0 / 0.74 / 0.26 … au 103.1 / 0.74 / 0.24; eu 55.1 / 0.77 / 0.23; na 48.6 / 0.84 / 0.16; sa 65.2 / 0.45 / 0.55; si 48.9 / 0.35 / 0.65; ar 40.6 / 0.28 / 0.72.
+
+**Review 207 item-5 report** (draft; also in `review207_item5_report.md`):
+
+**Review 207 item 5 — the net positive increment of v1.0: size, placement, fate, cause**
+
+Post-hoc diagnosis, desktop only. Sources:
+- reviews 207 (1)–(3): `review207_budget/`
+- review 207 (5), the leak-and-refill test on FG5: `doc/ucloud_notes.md` §7, entry of 3 Nov 02:37
+- the exact difference budget (item 4): `review207_budget/exact_4/`
+- review 208 items 1–2: `review208/`
+- review 206 B: `geometry_v1/`
+
+No configuration change is proposed here. v1.0 stays frozen.
+
+**1. Size**
+
+Net applied increment over land (area-weighted, mm/yr):
+
+| run | period | net increment | how determined |
+|---|---|---|---|
+| U2 (T9, old partition, all epochs) | 2003–2006 | **35** | implied: DA − OL difference budget; no increment files on the desktop |
+| FT9F (v1.0, T9) | 2003–2006 | **55** logged / 54 implied | |
+| FG5 (v1.0, 5° boxes) | 2002–2006 | 48 | FT9F on the same basis: 48 |
+| FG4 (v1.0, 4° boxes) | 2002–2006 | 51 | |
+| LT9F (v1.0, T9) | 2003–2016 | **64** logged / 61 implied | 50–87 per year; highest in 2010, 2011 and 2014 |
+
+- The effect is present in the old configuration too. v1.0 has about 1.5 × U2's.
+- It hardly depends on the unit geometry (FT9F, FG5, FG4 within ±3 mm/yr).
+- Regional values depend on the reference period of the GRACE target (per-unit observation offsets). For LT9F vs FT9F, 2003–2006: Europe 86 vs 60, North America 19 vs 40 mm/yr. The land mean does not depend on it.
+
+**2. Where and in which storages**
+
+**By storage**, LT9F, land, mean per year:
+- soil +31 mm/yr
+- river +15
+- wetlands +10
+- snow +7
+- groundwater −3 (net ≈ 0)
+
+**By region:** Australia (+99 to +103) > Africa, Asia, South America (+61 to +70) > Europe, Siberia, North America (+43 to +55) > Arctic (+40).
+
+**Units:**
+- In 279 of 707 T9 units (39 % of the area) the mean |annual net increment| exceeds the mean |P − ET − qtot|.
+- Hot spots: Amazon tributaries, Congo margins, northern Australia, northern Siberia.
+- Unit 1 (Red Sea hills / eastern Sudan): +304 mm/yr, mostly as river water, in a unit where the open loop has almost no seasonal storage variability (GRACE amplitude 25 mm vs OL 2 mm). Likely GRACE leakage from neighbouring water bodies. Lake Nasser lies in unit 100, which has only +3.5 mm/yr.
+
+**3. How fast it leaves, and through which flux**
+
+**Leak-and-refill test** (FG5): fraction of a month's increment lost within the same month.
+
+| store | fraction lost within the month |
+|---|---|
+| soil | about 20 % (positive 21 %, negative 11 %) |
+| wetlands | about 22 % (positive 28 %, negative 6 %) |
+| river | all of it (slope −1.46: routed downstream within the month) |
+| snow | about 3 % |
+| groundwater | about 1 % (increments persist) |
+
+**Exact difference budget, LT9F 2003–2016** (OL runoff from the flux-only rerun):
+
+*Total column:* I_tot 63.6 = Δ(ΔS) 0.3 + ΔET 40.9 + Δoutflow 20.0, residual 2.5 mm/yr.
+- About two thirds leaves as ET and one third as river outflow.
+- Regions differ: ET takes 74–84 % in af, as, au, eu and na; outflow takes 55–72 % in sa, si and ar.
+
+*Land stores* (soil + snow + gw, plus canopy for storage): I_land 36.9 vs Δ(ΔS_land) −0.4 + ΔET 40.9 + Δqtot 7.2, residual −10.7 mm/yr.
+- ET by store is not exported, so the total ET difference is used. It also contains the extra open-water evaporation of the incremented wetlands and lakes, which is why the residual is negative.
+- Runoff out of the land stores rises by only 7 mm/yr (+2 % of OL qtot).
+- The land-store increment leaves almost entirely as ET: 85 % of ΔET + Δqtot globally, 89–92 % in the warm regions.
+
+*Recharge:* Δqr +3.4 mm/yr (+3.5 % of OL recharge), about 9 % of I_land. Groundwater storage does not grow: ΔS_gw −0.7 mm/yr, gw increments −2.3 mm/yr.
+
+**Effect on ET**
+- ET rises by +7.5 % over land (+41 mm/yr). In Europe it rises by +12.7 % and in Australia by +10.9 %.
+- Against an independent model (TerraClimate v1.1 actual ET, open data, CC0), the DA widens the ET bias where OL is already high (land +7 % → +15 %, Europe +3 % → +16 %).
+- The DA also lowers the monthly-anomaly correlation (land 0.70 → 0.50).
+
+**4. Do the bounds cause an asymmetry? Yes**
+
+Sign split of the applied (after-bounds) increments, member level, LT9F. A ratio of 1 means symmetric:
+
+| storage | negative / positive |
+|---|---|
+| soil | 0.62 |
+| river | 0.57 |
+| wetlands | 0.57–0.60 |
+| snow | 0.46 |
+| groundwater | 1.07 |
+
+FT9F, FG5 and FG4 give the same pattern.
+
+**Bound capping in LT9F** (counts over members and windows):
+
+| storage | lower bound | upper bound |
+|---|---|---|
+| soil | 20.1 M | 15.1 M |
+| river | 21.7 M | 0 |
+| snow | 18.4 M | 2.7 M |
+| local wetlands | 3.9 M | 0 |
+| global wetlands | 2.1 M | 0 |
+| groundwater | 0 (no bounds) | 0 |
+
+**Effect on the storage shares** (before → after the bounds):
+- snow 0.23 → 0.11
+- soil 0.44 → 0.40
+- river 0.11 → 0.19
+- wetlands 0.10 → 0.16
+- groundwater 0.11 → 0.15
+
+The fast stores cannot take the negative updates the filter asks for. Part of the removal is redistributed: `water_redistributed_mm` is large, while `bo_unplaced` is small (1,261 mm summed in LT9F, with the fallback on). What remains is mostly the added water.
+
+**5. Is it "the seasonal-shape cost of fitting GRACE"? Only in part**
+
+Per T9 unit, net increment against the GRACE − OL difference in seasonal amplitude:
+- Spearman ρ +0.42 (LT9F) and +0.43 (U2).
+- The amplitude deficit explains R² 0.18 (LT9F) to 0.26 (U2). Phase does not matter (ρ ≈ 0).
+- The share of the seasonal increment going to fast stores correlates **negatively** with the net (ρ −0.40). The hypothesis predicted the opposite.
+- 35 units have a large net (> 2 × the median) without any amplitude deficit. Most are in Siberia and Asia, with soil, river or swe as the receiving store.
+
+**6. Reading**
+
+The net positive increment is a steady refill of fast stores (soil, river, wetlands, snow) that the model does not hold.
+- The DA keeps adding water because the lower bounds remove part of each negative update of these stores.
+- Positive updates drain within weeks: about 20 % per month for soil and wetlands, at once for rivers.
+- The water leaves mainly as extra ET (about 2/3 of the total, and almost all of the land-store part) and as extra river outflow (about 1/3).
+- It does not accumulate (ΔS ≈ 0) and does not reach groundwater (Δrecharge +3 mm/yr, gw net ≈ 0).
+
+Part of it follows from asking a convex, bounded model to follow a wider GRACE seasonal cycle around the OL mean. That part grows with the amplitude deficit, but it explains only about 20–25 % of the unit-to-unit variation. The rest reflects where the bounds bite and how the increment is routed. It is present in the old configuration (U2, about 35 mm/yr) and is larger in v1.0 (48–64 mm/yr), independent of the unit geometry.
+
+**7. Implications for the paper and the product (no change decided)**
+
+- **Paper, Sect. 3.4:**
+  - the net increment and its fate (ET vs outflow) per region;
+  - the bound asymmetry;
+  - the ET side effect, with TerraClimate as an indicative independent check;
+  - the regional reference-period sensitivity.
+- **Dataset:**
+  - ship the applied increments, with an `analysis_applied` flag per month;
+  - document that ET and discharge of the DA contain this refill flux;
+  - users interested in fluxes should use OL ET and runoff or the DA − OL difference with care.
+- **Future work, not tuned now:**
+  - a mass-conserving treatment of capped negative updates (carry-over to the next window or to a slower store);
+  - a seasonal/bounded split that sends part of the seasonal correction to stores that can hold it;
+  - repeat the ET check with FLUXCOM-X or GLEAM once they can be obtained legitimately.
+
+#### Answer to DA review 209 — OL flux dailies deleted; own-target rerun and report v2 started; final pull to the desktop running — Claude Code, 03 Nov 07:19
+
+- **Item 5:** `DA_output/ol_flux` deleted (151 GB) after re-checking the monthly npz md5 (31614efb, equal on desktop and UCloud); no links into it, no open handles. Data root 3,618 → 3,467 GB.
+- **Items 1, 2, 6:** report v2 (`review207_budget/exact_4/review207_item5_report_v2.md`, v1 kept) with the review-209 wording:
+  - "partly explained … ρ ≈ 0.4, R² ≈ 0.2"; open residual variation
+  - ET as a cost of fitting GRACE, with the TerraClimate wording and the licence note
+  - plus the exact-budget and geometry results
+  - Being written (desktop).
+- **Item 3:** own-target rerun for FG5 / FG4 against the G5 / G4 gridded / unit GRACE targets (pulled, md5 equal) → `geometry_v1/own_target/`. The T9-target version stays the pre-registered one.
+- **Item 4:** noted (no FE3, no new job).
+- **Item 7: final pull running** (`final_pull.sh`), every file md5-verified:
+  - `DA_output/WRR_{FT9F,LT9F,FG5L,FG5,FG4L,FG4}` without `restart/`: state, filter summary, inflation log, logs
+  - `Res/WRR_{FT9F,FG5,FG4,LT9F,FG5L,FG4L}` without `OL/`: DA basin series per member, Res_DA / Res_OL.h5, harmonics, evaluation, GRACE_*.h5
+  - all of `Res/WRR` again (12 exports)
+  - The list of what stays only on UCloud follows when it is done.
+
+#### Review 209 items 3 and 6 — the own-target rerun equals the pre-registered version (the G5 / G4 gridded GRACE fields are identical to T9's); report v2 written — Claude Code, 03 Nov 07:20
+
+- **Item 3:** the `tws` fields of `GlobalBasins_{G5,G4}_gridded_signal.hdf5` equal the T9 gridded field cell by cell (0.00 mm RMS, all 54 epochs; the md5s differ only outside `tws`). The unit means of each reproduce the G5 / G4 `*_signal.hdf5` (FG5 / FG4's own observations) to 2e-12 mm.
+  - → **The own-target fit is identical to the pre-registered T9-target version.**
+  - Own units, median / awq anomaly RMSD (mm): FT9F on T9 4.84 / 5.07, FG5 on G5 5.11 / 5.47, FG4 on G4 5.27 / 5.82. The geometry_v1 row stands.
+  - Cross table: each run fits its own units far better than the others do. For example, on G5 units FT9F 15.08 vs FG5 5.11; on G4 units FT9F 17.90 vs FG4 5.27. Bootstrap FT9F − FG5 on G5 units, median +10.1 [9.0, 11.3].
+  - This is home ground, so it says nothing about which geometry is better. The neutral comparison stays the cells / WB / HB3 bootstrap.
+  - Files: `geometry_v1/own_target/`.
+- **Item 6: report v2** `review207_budget/exact_4/review207_item5_report_v2.md` (v1 kept), with the review-209 wording:
+  - "partly explained … ρ ≈ 0.4, R² ≈ 0.2"; open residual variation
+  - ET as a cost of fitting GRACE, with the TerraClimate sentence and the licence / registration note
+  - exact budget (total column closes, +2.5 mm/yr; land stores about 85 % ET; recharge +3.4 mm/yr)
+  - net increment the same in all geometries
+  - no configuration change
+- **Final pull** to the desktop is still running.
+
+#### Review 209 item 7 — everything paper-relevant is on the desktop, md5-verified; list of what stays only on UCloud — Claude Code, 03 Nov 08:56
+
+**On the desktop** (`PyGLDA_v2_external_data/`, same relative paths; every file md5-checked against UCloud; 0 failed, 0 missing):
+
+| folder | files | content |
+|---|---|---|
+| `Res/WRR` (all exports) | 25,196 | HT9, HT9R, HT9S, HG5, HG5R, HG4, HG4R, HE3, FT9F, LT9F, FG5, FG4: monthly grids, gauges, units, evaluation, increments, settings, filter logs; plus `LT9F/ol_flux_monthly_2002_2016.npz` |
+| `DA_output/WRR_{FT9F,LT9F,FG5,FG4}` (without `restart/`) | 75–77 each | `seasonal_split_state.npz`, `filter_summary.json`, `adaptive_inflation_log.csv`, `logs/` (rank logs, chain outputs, memory samples) |
+| `DA_output/WRR_{FG5L,FG4L}` (without `restart/`) | 39 each | learning-pass state, filter summary, inflation log, logs |
+| `Res/WRR_{FT9F,FG5,FG4,LT9F}` (without `OL/`) | 136 each | DA `basin_ts_DA.h5` per member, `Res_DA.h5`, `Res_OL.h5`, harmonics, `evaluation_global`, GRACE_*.h5 |
+| `Res/WRR_{FG5L,FG4L}` (without `OL/`) | 2 each | `Res_OL.h5`, `Harmonic_OL.nc` |
+
+- Also on the desktop:
+  - GRACE `GlobalBasins_T9_0216_*` and `GlobalBasins_{G5,G4}_{signal,gridded_signal}`
+  - Extra/benchmarks (TerraClimate aet 2003–2016) and Extra/specific_yield
+  - frozen record `paper/wrr/frozen_v1.0`
+  - all post-hoc analyses (`temp/exp_logs/paper/wrr/…`)
+
+**Left only on UCloud** (data root 3,467 GB; all reproducible, none needed for the paper tables):
+- `DA_output/WRR_{FT9F,LT9F,FG5,FG5L,FG4,FG4L}/restart`: 6 × 8 GB, DA end states (needed only to continue a run)
+- `Res/WRR_LT9F/OL`: 523 GB, the collected OL yearly files 2007–2016 of the LT9F case (from `OL_output`, reproducible by collect)
+- **Production base (category C, kept):**
+  - `OL_output` (2002–2016)
+  - `Ensemble_input` (2000–2016)
+  - `Ensemble_Initialization` (restarts 2001-12-31, 2002-08-31, 2006-12-31, 2012-12-31, 2016-12-31)
+  - `Res/GDA_Ucloud` (OL members 2002–2006)
+  - U2's `Res/GDA_Global` and `DA_output/GDA_Global`
+  - GRACE inputs
+  - Input_data, Extra, envs
+- Scratch / refused runs: `Res/WRR_FE3L` (1 GB, OL links only, refused run), `settings/WRR_*` run copies (small).
+- **The UCloud queue is empty.** Nothing runs before the job end (about 12:00).
+
+#### Answer to DA review 210 — GRDC Danube evaluation started (desktop) — Claude Code, 03 Nov 10:37
+
+- Started on the desktop (`paper/wrr/grdc_danube/`) with the colleague's GRDC Danube files (`validation/GRDC`, 368 stations; internal test). The GRDC input path is a parameter, so the scripts rerun unchanged on Fan's own download.
+- Items 1–5 as written:
+  - **station selection:** ≥ 25,000 km², in the T9 footprint, ≥ 48 / ≥ 120 valid months
+  - **matching:** cells within 0.75°, closest DDM30 upstream area, ±25 %, matching table
+  - **runs:** OL, U2 if its discharge exists, FT9F, FG5, FG4, and the old configuration via the discharge reruns HT9R / HG5R / HG4R (withheld months flagged); OL and LT9F 2002–2016
+  - **metrics:** KGE parts, anomaly r, LT9F low-flow test
+  - **summary:** with bootstrap, main stem vs tributaries, figure, FT9F vs FG5 vs FG4 paired
+- UCloud is not needed (job ends about 12:00; queue empty).
+
+#### Review 210 — GRDC Danube: discharge essentially unchanged by the DA in 2002–2006, slightly worse in LT9F 2002–2016; geometry differences small — Claude Code, 03 Nov 10:41
+
+- Files: `paper/wrr/grdc_danube/` (`grdc_danube_summary.txt`, `station_matching.csv`, `station_metrics.csv`, `summary_runs.csv`, `geometry_v1_discharge_paired.csv`, `lowflow_test.csv`, two PNGs). The script takes the GRDC folder as a parameter: `python grdc_eval.py --grdc <dir>`.
+- **Data:** the GRDC files are in `PyGLDA_v2_external_data/validation/GRDC/` (not `PyGLDA_v2/validation/`): `GRDC-Monthly.nc`, `GRDC-Daily.nc`, `stationbasins.geojson` (128 polygons), station table.
+- **Stations:** 368 in total; 59 with ≥ 25,000 km², all in the T9 footprint; 48 with enough months (valid month = GRDC flag ≥ 80 % valid days).
+- **Matching:** upstream area accumulated from `watergap_22e_continentalarea.nc` along `routing_order.csv` (check: Amazon outlet 5.92 M km²). **47 of 48 matched** (26 main stem, 21 tributaries); Tisa / Vásárosnamény dropped (ratio 1.29); most ratios 0.98–1.03.
+  - 26 main-stem stations qualify, more than the 15 named in the review; all are kept.
+- **Median monthly KGE, 2002–2006 (46 stations):**
+
+| | OL | U2 | FT9F | FG5 | FG4 | HT9R | HG5R | HG4R |
+|---|---|---|---|---|---|---|---|---|
+| all | 0.740 | 0.727 | 0.728 | 0.707 | 0.728 | 0.741 | 0.720 | 0.743 |
+| ΔKGE vs OL [5–95 %] | – | −0.012 [−0.029, 0.002] | −0.012 [−0.015, 0.007] | −0.025 [−0.042, −0.009] | +0.003 [−0.022, 0.018] | +0.011 [−0.020, 0.026] | −0.014 | +0.009 |
+| share improved | – | 39 % | 43 % | 20 % | 52 % | 52 % | 43 % | 52 % |
+| main stem (26) | 0.716 | 0.717 | 0.723 | 0.697 | 0.721 | 0.745 | 0.713 | 0.737 |
+| tributaries (20) | 0.756 | 0.744 | 0.742 | 0.733 | 0.737 | 0.739 | 0.733 | 0.745 |
+| anomaly r | 0.925 | 0.913 | 0.905 | 0.906 | 0.914 | 0.914 | 0.913 | 0.926 |
+
+- **2002–2016 (45 stations), OL vs LT9F:**
+  - all 0.741 vs 0.707, **ΔKGE −0.046 [−0.052, −0.031], improved at 9 %**
+  - main stem 0.771 vs 0.735 (improved at 0 %); tributaries 0.666 vs 0.620
+  - anomaly r 0.910 vs 0.867
+- **Ceatal Izmail** (most downstream): 2002–2006 OL 0.78, FT9F 0.83, FG5 0.84, FG4 0.85; 2002–2016 OL 0.85 vs LT9F 0.80.
+- **Old configuration, withheld months only:** OL 0.776, HT9R 0.754, HG5R 0.734, HG4R 0.729.
+- **Geometry under v1.0, discharge** (paired median ΔKGE): FT9F − FG5 +0.014 [0.000, 0.020]; FT9F − FG4 −0.004 [−0.011, 0.002]; FG5 − FG4 −0.021 [−0.023, −0.006]. **FG5 slightly worst; FT9F and FG4 tie.**
+- **Low-flow test, LT9F 2002–2016** (basin = stationbasins polygon, else routing upstream cells): median r of observed annual minimum flow vs basin annual minimum gw is **OL 0.72 vs LT9F 0.58**.
+  - It drops on the lower main stem (Smederevo … Ceatal Izmail, 0.63–0.85 → 0.28–0.51) and on the Tisa (0.86–0.92 → 0.39–0.63).
+  - It rises on the upper Danube (Melk … Achleiten) and the Inn.
+  - The model's own minimum flow vs observed: OL 0.81 vs LT9F 0.84.
+- **Points for Cowork:**
+  - (a) **Harsova** (main stem) has a bias of about +150 % in every run (KGE −0.8). It probably gauges one Danube arm while the model cell carries the full flow. Kept in the medians; exclude?
+  - (b) The Danube OL KGE is already about 0.74, leaving little room for the DA.
+  - (c) The data are a colleague's (internal test); the paper reruns `grdc_eval.py` on Fan's own download.
+
+#### Answer to DA review 211 — Danube follow-ups started (desktop); UCloud idle — Claude Code, 03 Nov 11:32
+
+- Started on the desktop (`paper/wrr/grdc_danube/r211/`, new files):
+  - (1) medians with and without Harsova (excluded from the headline; kept in the station table)
+  - (2) LT9F scored over 2002–2006 only vs FT9F (same stations and months) and vs LT9F 2007–2016, to separate the period effect from the reference-period constants
+  - (3) per-station ΔKGE split into r / α / β parts plus the bias change, main stem vs tributaries
+  - (4) the FT9F low-flow test only if 5 annual minima allow a sound estimate; otherwise skipped with the reason
+- UCloud: nothing running; the job can end. All paper files are on the desktop (09:00 inventory).
+- Fan's global GRDC download: `grdc_eval.py --grdc <folder>` reruns unchanged when it arrives.
+
+#### Review 211 — Danube follow-ups: the LT9F discharge loss is mainly too much variability (α); tributaries lose through the reference-period constants, the main stem in 2007–2016 — Claude Code, 03 Nov 11:34
+
+- Files: `paper/wrr/grdc_danube/r211/` (`r211_summary.txt`, `_medians.csv`, `_paired.csv`, `_dKGE_decomposition*.csv`, `_station_metrics.csv`). The parent outputs are untouched.
+- **(1) Harsova excluded from the headline:** the medians change by ≤ 0.001.
+  - OL 2002–06 0.741; FT9F 0.728; LT9F 2002–06 0.691; OL 2002–16 0.741; LT9F 2002–16 0.707; LT9F 2007–16 0.731.
+- **(2) Period vs reference-period effect** (paired median ΔKGE, station bootstrap):
+
+| comparison | all (45) | main stem (25) | tributaries (20) |
+|---|---|---|---|
+| FT9F − OL, 2002–06 | −0.012 | +0.007 | −0.019 |
+| LT9F − OL, 2002–06 | −0.015 | +0.008 | **−0.123** [−0.169, −0.073] |
+| LT9F − FT9F, 2002–06 | +0.001 | +0.004 [0.002, 0.005] | **−0.094** [−0.110, −0.081] |
+| LT9F − OL, 2007–16 | −0.036 | **−0.057** [−0.082, −0.038] | −0.002 |
+| LT9F − OL, 2002–16 | −0.046 | −0.035 | −0.051 |
+
+  - **Main stem:** LT9F = FT9F in 2002–2006, so its loss is a **2007–2016 effect**.
+  - **Tributaries:** LT9F is already much worse than FT9F in 2002–2006, i.e. the **reference-period constants** (review 201 (i)); neutral in 2007–2016.
+- **(3) ΔKGE components** (DA − OL, medians; shares of the change in the squared KGE distance from r / α / β):
+  - LT9F 2002–16, all: ΔKGE −0.046, Δr +0.001, **Δα +0.056**, Δβ +0.024 (bias +2.4 % points); **shares 0.11 / 0.74 / 0.15**
+  - FT9F 2002–06: Δα +0.036, shares 0.10 / 0.73 / 0.17
+  - LT9F tributaries 2002–06: Δα +0.188, Δβ +0.114 (**bias +11.4 % points**); shares 0.04 / 0.49 / 0.48
+  - LT9F main stem 2007–16: Δα +0.092, Δβ +0.040; shares 0.14 / 0.78 / 0.08
+  - **α (too much variability) carries about 70–80 % of the loss.** β (bias +1–4 % points, the extra outflow of the net increment) is secondary, except for the LT9F tributaries 2002–06 (half). r improves slightly almost everywhere.
+  - **Link to the budget:** the net increment reaches discharge mainly as amplified variability (fast-store / river refill passed to the river), less as a higher mean flow.
+- **(4) FT9F low-flow test: skipped.** 5 annual minima per station make r meaningless, and pooling the 46 stations does not help (one basin, the same 5 years, so about 5 independent points). LT9F 2002–2016 is reported as is (OL 0.72 vs LT9F 0.58).
+
+#### Answer to DA review 212 — GRDC subregions as a basin geometry: started (desktop) — Claude Code, 03 Nov 11:35
+
+- Started on the desktop (`paper/wrr/grdc_subregions/`, style as `geometry_v1/`) with `validation/GRDC/monthly/subregions.geojson` (841 WMO subregions):
+  - (1) boundary coincidence with T9 / G5 / G4 / E3 and the S3 / B3 chance references, with the review-177 / 179 code (copied)
+  - (2) fit to GRACE on the subregions with ≥ 100,000 km² of footprint for OL, U2, FT9F, FG5, FG4 (2002–2006) and LT9F (2002–2016), with the paired bootstrap FT9F − FG5 / FG4
+  - (3) subregion-mean gw vs the regional well average as a fourth scale, if useful
+  - the GRDC citation from the website, if readable without login
+- UCloud: nothing running.
+
+- **03 Nov 11:37 Claude Code, review 213 (replaces 212):** the agent is redirected; files already written for 212 are kept, nothing is deleted. Now running (desktop, `paper/wrr/grdc_subregions/`):
+  - purity per unit (T9, G5, G4, E3, plain 5°; also merged by RIVERBASIN), with maps and the paper table
+  - the reverse view (splitting of subregions ≥ 100,000 km², T9 vs G5 / G4)
+  - the names file `Basin/shp/GlobalBasins_T9_0216/T9_wmo_names.csv` (new; desktop data root)
+  - the independence paragraph (GRDC subregion lineage vs T9's HydroBASINS lineage)
+#### Review 213 — T9 units match the GRDC / WMO subregions far better than boxes or E3 (median purity 0.97 vs 0.61–0.70), but both derive from HydroBASINS (shared lineage) — Claude Code, 03 Nov 11:40
+
+- Files: `paper/wrr/grdc_subregions/sr213_*` (`sr213_summary.txt`, `_purity_table.csv`, `_reverse_table.csv`, `_purity_maps_T9_G5.png`); new data file `Basin/shp/GlobalBasins_T9_0216/T9_wmo_names.csv` (desktop data root).
+- **Review 212** had already finished when 213 arrived; its files are kept:
+  - boundary coincidence: 73 % of the subregion boundary (≥ 1e5 km²) lies on T9, vs 10–18 % for G4 / G5 / E3 / S3 / B3
+  - fit, median / awq (mm): FT9F 7.3 / 11.5, FG5 13.4 / 20.8, FG4 10.9 / 14.4, U2 7.0 / 10.8, LT9F 8.4 / 13.4
+- **Method:** centre-in-polygon cells → subregions; 675 coastal cells in no subregion are left out; cos-lat areas.
+
+**1. Purity per unit** (largest share of the unit's footprint area in one subregion)
+
+| set | units | median | area-weighted | ≥ 0.9 | ≥ 0.75 | union of whole subregions | basin level (RIVERBASIN): median / ≥ 0.9 |
+|---|---|---|---|---|---|---|---|
+| **T9** | 707 | **0.973** | **0.804** | **62.5 %** | 69.3 % | 4.5 % | 0.983 / 70.6 % |
+| G5 | 693 | 0.611 | 0.614 | 17.0 % | 30.7 % | 0.4 % | 0.679 / 25.0 % |
+| G4 | 997 | 0.660 | 0.664 | 22.4 % | 37.9 % | 0.2 % | 0.717 / 31.6 % |
+| E3 | 1,398 | 0.695 | 0.703 | 28.9 % | 43.6 % | 0 % | 0.770 / 37.8 % |
+| plain 5° | 787 | 0.642 | 0.619 | 23.4 % | 36.8 % | 0 % | 0.711 / 30.4 % |
+
+- T9 units are mostly **nested inside one subregion**; "union of whole subregions" is rare for every set.
+
+**2. Reverse view** (274 subregions ≥ 1e5 km² of footprint)
+
+| set | median units touching / ≥ 5 % | median largest-unit share | nested-unit share (median / awq) | subregions kept whole |
+|---|---|---|---|---|
+| **T9** | 4 / 2 | **0.60** | **0.64 / 0.66** | **26 %** |
+| G5 | 5 / 4 | 0.43 | 0.00 / 0.17 | 2 % |
+| G4 | 6 / 5 | 0.35 | 0.00 / 0.25 | 1 % |
+| E3 | 7 / 5 | 0.30 | 0.05 / 0.32 | 0 % |
+
+- **T9 splits WMO subregions along their internal divides** (about 2/3 of a subregion's area in units nested in it). Boxes and E3 cut across them.
+
+**3. Names:** `T9_wmo_names.csv`, 707 rows: T9_ID, SUBREGNUM, SUBREGNAME, RIVERBASIN, REGNAME, WMOBB, purity; second subregion for the 265 units with purity < 0.9. For example, unit 1 is "Red Sea" 0.69, second BARAKA 0.31.
+
+**4. Independence** (GRDC page https://grdc.bafg.de/products/basin_layers/wmo_basins/, readable without login):
+- The 2020 edition (3rd, rev. ext.) was made by dissolving the **HydroBASINS level-12** polygons (HydroSHEDS; Lehner & Grill 2013) that intersect the 2004-edition subregions. The 2004 edition was delineated from HYDRO1k (USGS 2000). GRDC delineated no new boundaries.
+- T9 is built from **HydroBASINS v1c level-6** atoms.
+- **So purity and boundary coincidence partly reflect shared lineage, not independent confirmation.** Independent is the WMO choice of which basins and coastal sections form a unit. The paper must say so.
+- Citation: GRDC (2020): WMO Basins and Sub-Basins / Global Runoff Data Centre, GRDC. 3rd, rev. ext. ed. Koblenz, Germany: Federal Institute of Hydrology (BfG).
+
 ### Suggestions / open points from analysis_run12.md not yet in the master note
 - 2018-10 re-entry after the GRACE-FO gap: largest event of the run (basin GW -21..-47 mm; -110..-143 mm in
   sub-basins 1-3). Beyond the forcing check, consider a reduced gain or a wider R for the first 1-2 windows after a

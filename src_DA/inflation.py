@@ -245,8 +245,15 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
     REASSIGN_LOST_VARIANCE = True   # variance snow cannot take (no / little snow) goes to the unbounded storages
 
     def __init__(self, split_storages=None, weight_current=0.5, max_factor=3.0, min_sigma=5.0, remove_bias=True,
-                 bias_memory=0.05, seed=None):
+                 bias_memory=0.05, seed=None, split='ol_spread'):
         super().__init__(sigma=None, seed=seed)
+        '''split: how sigma_j is shared among the storages. "ol_spread" (default): open-loop ensemble variance per
+        calendar month (split_table). "ol_seasonal": squared open-loop seasonal amplitude of each storage in the
+        sub-basin (partition.seasonal_amplitude_table), the same in every month - noise goes where the model's seasonal
+        signal is, not where its ensemble spread is (DA reviews 180-182, 1 Nov 2026)'''
+        if split not in ('ol_spread', 'ol_seasonal'):
+            raise ValueError('adaptive_additive: split must be "ol_spread" or "ol_seasonal", got %s' % split)
+        self.split_mode = split
         self.split_storages = list(split_storages) if split_storages is not None else None
         self.split_source = None
         self._table = None              # (12, n_sub, n_storage) variance shares from the open loop
@@ -276,7 +283,10 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
             if not storages:
                 raise ValueError('adaptive_additive: none of split_storages %s is in the DA state %s'
                                  % (self.split_storages, names))
-        self._table, self._table_vars = split_table(src, storages, n_obs)
+        if self.split_mode == 'ol_seasonal':
+            self._table, self._table_vars = seasonal_split_table(src, storages, n_obs)
+        else:
+            self._table, self._table_vars = split_table(src, storages, n_obs)
         self.split_source = str(src)
         used = self._table.max(axis=(0, 1)) > 0
         self.split = {v: float(self._table[:, :, i].mean()) for i, v in enumerate(self._table_vars) if used[i]}
@@ -288,7 +298,8 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
         self.stats = dict(n_applied=0, sum_hx_spread_added=np.zeros(n_obs))
 
     def describe(self):
-        split = 'open-loop ensemble variance from %s (mean shares %s)' % (
+        split = 'open-loop %s from %s (mean shares %s)' % (
+            'seasonal amplitude' if self.split_mode == 'ol_seasonal' else 'ensemble variance',
             self.split_source, {v: round(s, 2) for v, s in self.split.items()})
         return ('adaptive additive, variance split %s, weight of current window %.2f, sigma in [%.1f mm, %.1f x obs '
                 'error], bias removal %s (memory %.2f)'
@@ -342,7 +353,7 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
         out = super().summary()
         out.update(kind=self.KIND, split=self.split, weight_current=self.weight_current, max_factor=self.max_factor,
                    min_sigma=self.min_sigma, remove_bias=self.remove_bias, bias_memory=self.bias_memory,
-                   split_mode='ol_spread')
+                   split_mode=self.split_mode)
         if self._table is not None:
             out.update(split_source=self.split_source, split_storages=self._table_vars,
                        split_table={v: [[round(float(x), 3) for x in self._table[m, :, i]] for m in range(12)]
@@ -397,6 +408,25 @@ def split_table(path, storages, n_sub):
         S[empty] = 0.0
         S[empty, k] = 1.0
     return S, storages
+
+
+def seasonal_split_table(path, storages, n_sub):
+    """
+    Shares from the open loop's seasonal amplitudes (partition.seasonal_amplitude_table): share_v = amp_v^2 / sum amp^2
+    per sub-basin, repeated for the 12 months (variance-like, as split_table). Sub-basins without any amplitude: all
+    to groundwater. Returns (table (12, n_sub, n_storage), storages)
+    """
+    from src_DA.partition import seasonal_amplitude_table
+    storages = list(storages)
+    amp2 = seasonal_amplitude_table(path, storages, n_sub) ** 2                # (n_sub, n_storage)
+    tot = amp2.sum(1)
+    S = amp2 / np.where(tot > 0, tot, 1.0)[:, None]
+    empty = tot <= 0
+    if empty.any():
+        k = storages.index('groundwstor') if 'groundwstor' in storages else 0
+        S[empty] = 0.0
+        S[empty, k] = 1.0
+    return np.repeat(S[None, :, :], 12, axis=0), storages
 
 
 INFLATIONS = {c.KIND: c for c in (NoInflation, MultiplicativeInflation, RTPS, AdditiveInflation,

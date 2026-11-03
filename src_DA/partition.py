@@ -37,7 +37,34 @@ Options of "non_negative" (all default off):
         alpha Y. The storage totals of every sub-basin, and therefore H dX = delta, are kept exactly. The bound step
         then works additively, so the smoothing survives the bounds. Meant for unbounded storages (groundwater):
         smoothing bounded storages moves water into cells at their limits.
-Order: weight cap, blend, normalisation (H S = I), storage shares, boundary smoothing, bounds and per-cell limit.
+    "bound_overflow": {"exclude": ["groundwstor"], "fallback": false}
+        where an element hits a bound, its share of the sub-basin increment normally goes to all free elements of the
+        sub-basin in proportion to their shares; unbounded groundwater then collects the seasonal correction that full
+        or empty soil and snow cannot take (diagnosis 1 Nov 2026, DA reviews 180/181). With "exclude", the listed
+        storages keep their own increment and take no overflow: the overflow goes to the other free elements only.
+        If those have no room, the remainder is left unplaced (fallback false, it reappears in the next innovation) or
+        given to the excluded storages as before (fallback true).
+    "seasonal_split": {"storages_slow": ["groundwstor"], "method": "lowpass", "tau_months": 12}
+        keeps the fast (seasonal) part of each sub-basin's ensemble-mean increment out of the slow storages. The
+        ensemble-mean increment m_j = mean_n(delta_j) is split into a slow part and a fast part c_j: "lowpass": slow =
+        recursive low-pass of m_j over the windows (time constant tau_months, started at the first window's value);
+        "climatology": c_j = running calendar-month mean of m_j minus its mean over the months seen (memory_years: the
+        running mean turns into an exponential one with weight 1/memory_years per year). Then
+            dX = S (delta - c) + S_fast c,   S_fast = S without the slow storages, re-normalised (H S_fast = I),
+        so H dX = delta, the member spread of the increment is shared as before, and only the ensemble-mean fast part
+        bypasses the slow storages. Sub-basins without non-slow shares keep c_j = 0. State is kept in memory across
+        windows (one process per run, like the adaptive inflation). "climatology" only: "save": path of an .npz the
+        monthly means and visit counts are written to after every window; "init": such a file from an earlier run
+        (same sub-basins) to start from, so that the first year is not used to learn the climatology (its counts are
+        raised to memory_years, i.e. the loaded climatology is treated as established). Motivation: at wells the seasonal GRACE innovation
+        is anti-correlated with the open loop's groundwater error, its interannual part is positively correlated
+        (DA review 186, 1 Nov 2026).
+        "fraction" (0..1, default 1): only this share of the fast part bypasses the slow storages, c_j -> fraction * c_j
+        (0 = no split, i.e. the standard partition; 1 = full split). The climatology / low-pass state still learns
+        from the full m_j. One knob between U2-like (0) and the full split (1) for the configuration choice
+        (DA review 194, 2 Nov 2026).
+Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, boundary smoothing, bounds and
+per-cell limit.
 """
 import numpy as np
 from scipy import sparse
@@ -74,8 +101,44 @@ class NonNegativePartition(Partition):
     ACTIVE_WEIGHT_FRACTION = 0.01      # _cap_weights: an element counts as active above 1 % of the storage's largest weight
 
     def __init__(self, max_weight_ratio=None, spatial_blend=None, max_cell_factor=None, storage_shares=None,
-                 boundary_smoothing=None):
+                 boundary_smoothing=None, bound_overflow=None, seasonal_split=None):
         super().__init__()
+        sp = dict(seasonal_split or {})
+        self.seasonal_split = None
+        if sp:
+            unknown_keys = set(sp) - {'storages_slow', 'method', 'tau_months', 'memory_years', 'init', 'save', 'fraction'}
+            if unknown_keys:
+                raise ValueError('seasonal_split: unknown keys %s' % sorted(unknown_keys))
+            meth = str(sp.get('method', 'lowpass')).lower()
+            if meth not in ('lowpass', 'climatology'):
+                raise ValueError('seasonal_split method must be "lowpass" or "climatology", got %s' % meth)
+            tau, mem = float(sp.get('tau_months', 12.0)), float(sp.get('memory_years', 3.0))
+            if tau < 1.0 or mem < 1.0:
+                raise ValueError('seasonal_split needs tau_months >= 1 and memory_years >= 1, got %s' % sp)
+            if meth != 'climatology' and (sp.get('init') or sp.get('save')):
+                raise ValueError('seasonal_split: "init" / "save" are for method "climatology" only')
+            frac = float(sp.get('fraction', 1.0))
+            if not 0.0 <= frac <= 1.0:
+                raise ValueError('seasonal_split fraction must be in [0, 1], got %s' % frac)
+            self.seasonal_split = dict(storages_slow=[str(v) for v in sp.get('storages_slow', ['groundwstor'])],
+                                       method=meth, tau_months=tau, memory_years=mem,
+                                       init=str(sp['init']) if sp.get('init') else None,
+                                       save=str(sp['save']) if sp.get('save') else None, fraction=frac)
+        self._sp_idx = np.zeros(0, dtype=int)   # slow storage indices (setup)
+        self._sp_lp = None                      # lowpass state (n_obs,)
+        self._sp_clim = None                    # climatology state (n_obs, 12) and visit counts (12,)
+        self._sp_cnt = np.zeros(12)
+        bo = dict(bound_overflow or {})
+        self.bound_overflow = None
+        if bo:
+            unknown_keys = set(bo) - {'exclude', 'fallback'}
+            if unknown_keys:
+                raise ValueError('bound_overflow: unknown keys %s' % sorted(unknown_keys))
+            excl = [str(v) for v in bo.get('exclude', [])]
+            if not excl:
+                raise ValueError('bound_overflow needs "exclude", e.g. ["groundwstor"]')
+            self.bound_overflow = dict(exclude=excl, fallback=bool(bo.get('fallback', False)))
+        self._bo_idx = np.zeros(0, dtype=int)   # storage indices that take no overflow (setup)
         bs = dict(boundary_smoothing or {})
         self.boundary_smoothing = None
         if bs:
@@ -141,7 +204,9 @@ class NonNegativePartition(Partition):
                           ss_n_obs_no_amplitude=0, ss_n_taper_fallback=0,
                           boundary_smoothing=self.boundary_smoothing, bs_n=0, bs_step_before_sum=0.0,
                           bs_step_after_sum=0.0, bs_within_before_sum=0.0, bs_within_after_sum=0.0,
-                          bs_moved_mm_sum=0.0)
+                          bs_moved_mm_sum=0.0, bound_overflow=self.bound_overflow, bo_unplaced_mm_sum=0.0,
+                          bo_n_fallback=0, seasonal_split=self.seasonal_split, sp_n=0, sp_fast_abs_sum=0.0,
+                          sp_mean_abs_sum=0.0, sp_n_obs_no_fast_share=0)
 
     def _ratio(self, var):
         """cap for one storage (None = not capped)"""
@@ -161,6 +226,24 @@ class NonNegativePartition(Partition):
             self._setup_boundary_smoothing(f)
         if self.storage_shares is not None:
             self._setup_storage_shares(f)
+        if self.seasonal_split is not None:
+            names = list(f.bounds.names)
+            self._sp_idx = np.array([names.index(v) for v in self.seasonal_split['storages_slow'] if v in names], dtype=int)
+            unknown = [v for v in self.seasonal_split['storages_slow'] if v not in names]
+            if unknown:
+                print('non_negative partition: seasonal_split storages %s not in the DA state %s - ignored' % (unknown, names))
+            print('non_negative partition: seasonal part of the increment kept out of %s (%s)'
+                  % ([names[i] for i in self._sp_idx], self.seasonal_split))
+            if self.seasonal_split['init']:
+                self._load_climatology(self.seasonal_split['init'], f._L_state.shape[1])
+        if self.bound_overflow is not None:
+            names = list(f.bounds.names)
+            unknown = [v for v in self.bound_overflow['exclude'] if v not in names]
+            if unknown:
+                print('non_negative partition: bound_overflow exclude %s not in the DA state %s - ignored' % (unknown, names))
+            self._bo_idx = np.array([names.index(v) for v in self.bound_overflow['exclude'] if v in names], dtype=int)
+            print('non_negative partition: bound overflow kept out of %s (fallback %s)'
+                  % ([names[i] for i in self._bo_idx], self.bound_overflow['fallback']))
         if isinstance(self.max_weight_ratio, dict):
             unknown = [v for v in self.max_weight_ratio if v not in f.bounds.names]
             if unknown:
@@ -270,7 +353,10 @@ class NonNegativePartition(Partition):
         S = (W @ sparse.diags(scale)).tocsc()                                      # normalised shares, H S = I (block)
         if self.storage_shares is not None:
             S = self._storage_share_mix(S, L, X)                                   # also the shares used by the bounds
-        dX_new = np.asarray(S @ delta)                                             # n_state x N
+        if self.seasonal_split is not None and len(self._sp_idx):
+            dX_new = self._seasonal_split(S, delta)
+        else:
+            dX_new = np.asarray(S @ delta)                                         # n_state x N
 
         if self._bs is not None:
             dX_new = self._smooth_boundaries(dX_new, S, delta)
@@ -294,6 +380,56 @@ class NonNegativePartition(Partition):
         self._record_max(dX_new)
         self.stats['max_abs_inc_new'] = max(self.stats['max_abs_inc_new'], float(np.abs(dX_new).max()))
         return dX_new
+
+    def _fast_part(self, m):
+        """ensemble-mean fast (seasonal) part c_j of the sub-basin increments m (n_obs,), updating the state"""
+        sp = self.seasonal_split
+        if sp['method'] == 'lowpass':
+            if self._sp_lp is None:
+                self._sp_lp = m.copy()                                          # neutral start: c = 0
+            else:
+                self._sp_lp = self._sp_lp + (m - self._sp_lp) / sp['tau_months']
+            return m - self._sp_lp
+        month = int(str(getattr(self.f, '_today', '0000-01'))[5:7] or 1) - 1
+        if self._sp_clim is None:
+            self._sp_clim = np.zeros((len(m), 12))
+        self._sp_cnt[month] += 1
+        a = max(1.0 / self._sp_cnt[month], 1.0 / sp['memory_years'])
+        self._sp_clim[:, month] += a * (m - self._sp_clim[:, month])
+        if sp.get('save'):
+            np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt)
+        seen = self._sp_cnt > 0
+        return self._sp_clim[:, month] - self._sp_clim[:, seen].mean(1)
+
+    def _load_climatology(self, path, n_obs):
+        """start the climatology from an earlier run's saved state (see seasonal_split "init")"""
+        z = np.load(path)
+        clim, cnt = np.asarray(z['clim'], dtype=float), np.asarray(z['count'], dtype=float)
+        if clim.shape != (n_obs, 12) or cnt.shape != (12,):
+            raise ValueError('seasonal_split init %s: climatology has shape %s / counts %s, expected (%d, 12) / (12,)'
+                             % (path, clim.shape, cnt.shape, n_obs))
+        self._sp_clim = clim.copy()
+        self._sp_cnt = np.where(cnt > 0, np.maximum(cnt, self.seasonal_split['memory_years']), 0.0)
+        self.stats['sp_init'] = dict(path=str(path), months_known=int((cnt > 0).sum()))
+        print('non_negative partition: seasonal_split climatology started from %s (%d months known)'
+              % (path, int((cnt > 0).sum())))
+
+    def _seasonal_split(self, S, delta):
+        """dX = S (delta - c) + S_fast c, see seasonal_split"""
+        f = self.f
+        m = np.mean(delta, 1)
+        c = self.seasonal_split['fraction'] * self._fast_part(m)
+        slow = np.isin(f._var_idx, self._sp_idx).astype(float)
+        Sf = sparse.csc_matrix(S.multiply((1.0 - slow)[:, None]))
+        hs = f._DM(states=Sf).diagonal().copy()
+        okf = hs > 1e-12
+        Sf = sparse.csc_matrix(Sf @ sparse.diags(np.where(okf, 1.0 / np.where(okf, hs, 1.0), 0.0)))
+        c = np.where(okf, c, 0.0)
+        self.stats['sp_n_obs_no_fast_share'] += int((~okf).sum())
+        self.stats['sp_n'] += 1
+        self.stats['sp_fast_abs_sum'] += float(np.abs(c).sum())
+        self.stats['sp_mean_abs_sum'] += float(np.abs(m).sum())
+        return np.asarray(S @ (delta - c[:, None])) + np.asarray(Sf @ c)[:, None]
 
     def _setup_storage_shares(self, f):
         """open-loop seasonal amplitude shares of the group storages per sub-basin (n_obs x n_group)"""
@@ -393,6 +529,14 @@ class NonNegativePartition(Partition):
         else:
             for k in [k for k in out if k.startswith('ss_')] + ['storage_shares']:
                 out.pop(k, None)
+        if self.bound_overflow is None:
+            for k in [k for k in out if k.startswith('bo_')] + ['bound_overflow']:
+                out.pop(k, None)
+        if self.seasonal_split is None:
+            for k in [k for k in out if k.startswith('sp_')] + ['seasonal_split']:
+                out.pop(k, None)
+        elif out.get('sp_mean_abs_sum', 0) > 0:
+            out['sp_fast_share_of_mean_increment'] = round(out['sp_fast_abs_sum'] / out['sp_mean_abs_sum'], 3)
         if self.boundary_smoothing is None:
             for k in [k for k in out if k.startswith('bs_')] + ['boundary_smoothing']:
                 out.pop(k, None)
@@ -571,6 +715,9 @@ class NonNegativePartition(Partition):
                 lo_j, hi_j = lo_c, hi_c
             dj = out[rows, :]                                 # current increments of sub-basin j (n_E x N)
             fixed = np.zeros_like(dj, dtype=bool)
+            frozen = np.zeros_like(dj, dtype=bool)            # bound_overflow: elements that keep their increment
+            if len(self._bo_idx):
+                frozen[np.isin(f._var_idx[rows], self._bo_idx), :] = True
             for _ in range(n_iter):
                 lo = dj < lo_j - 1e-9
                 hi = dj > hi_j + 1e-9
@@ -583,6 +730,34 @@ class NonNegativePartition(Partition):
                 # what the fixed elements contribute to the sub-basin increment, and what is left for the free ones
                 denom = hj @ np.where(fixed, 0.0, s[:, None])                    # (N,)
                 ok = denom > 1e-12
+                if frozen.any():
+                    '''bound_overflow: frozen (excluded) elements keep their increment; the free, non-frozen elements
+                    take the rest. Where those have no room: fallback -> old behaviour, else the rest stays unplaced'''
+                    held = fixed | frozen
+                    denom2 = hj @ np.where(held, 0.0, s[:, None])
+                    ok2 = denom2 > 1e-12
+                    if self._bs is not None:
+                        rem2 = delta[j] - hj @ dj
+                        add2 = np.where(ok2, rem2 / np.where(ok2, denom2, 1.0), 0.0)
+                        dj2 = np.where(held, dj, dj + s[:, None] * add2[None, :])
+                    else:
+                        rem2 = delta[j] - hj @ np.where(held, dj, 0.0)
+                        scale2 = np.where(ok2, rem2 / np.where(ok2, denom2, 1.0), 0.0)
+                        dj2 = np.where(held, dj, s[:, None] * scale2[None, :])
+                    if self.bound_overflow['fallback'] and not ok2.all():
+                        self.stats['bo_n_fallback'] += int((~ok2).sum())
+                        if self._bs is not None:
+                            rem = delta[j] - hj @ dj
+                            add = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
+                            dj1 = np.where(fixed, dj, dj + s[:, None] * add[None, :])
+                        else:
+                            rem = delta[j] - hj @ np.where(fixed, dj, 0.0)
+                            scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
+                            dj1 = np.where(fixed, dj, s[:, None] * scale[None, :])
+                        dj = np.where(ok2[None, :], dj2, dj1)
+                    else:
+                        dj = dj2
+                    continue
                 if self._bs is not None:
                     # free elements keep their smoothed values; the remainder is added on top
                     rem = delta[j] - hj @ dj                                     # (N,)
@@ -593,6 +768,8 @@ class NonNegativePartition(Partition):
                     scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
                     dj = np.where(fixed, dj, s[:, None] * scale[None, :])
             miss = float(np.abs(delta[j] - hj @ dj).max())                       # increment that found no room
+            if frozen.any():
+                self.stats['bo_unplaced_mm_sum'] += float(np.abs(np.mean(delta[j] - hj @ dj)))
             self.stats['increment_not_placed_mm_max'] = max(self.stats['increment_not_placed_mm_max'], miss)
             n_capped += int(fixed.sum())
             if fixed.any():                                   # physical bound hits per storage (lower / upper)

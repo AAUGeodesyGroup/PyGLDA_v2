@@ -96,6 +96,7 @@ class config_DA:
             self.OL_output_temp_dir = None
             self.DA_output_temp_dir = None
             self.Ensemble_ini_dir = None
+            self.DA_restart_dir = None      # where a DA run saves its end states (None: <DA_output_temp_dir>/<case>/restart)
             self.Ensemble_input_dir = None
             self.Auxiliary_dir = None
 
