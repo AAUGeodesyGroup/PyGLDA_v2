@@ -1,0 +1,38 @@
+{
+  "title": "PyGLDA v2.0: a modular and parallel open-source Python framework for assimilating satellite gravimetry into the global hydrological model WaterGAP 2.2e",
+  "upload_type": "software",
+  "version": "v2.0.0",
+  "description": "<p>PyGLDA v2.0 (Python-based Global Land Data Assimilation system) assimilates GRACE/GRACE-FO terrestrial water storage into the global hydrological model WaterGAP 2.2e with an ensemble Kalman filter assembled from exchangeable components (localization, inflation, increment partition, physical bounds). The model is coupled in memory; observations of any averaging period enter through one interface; regional and global experiments start from one global open loop.</p><p>This release is the version described in the Geoscientific Model Development paper. It contains the source code, a copy of the reprogrammed WaterGAP 2.2e with the modifications listed in README.md, the conda environment file, the driver scripts, and, as examples, the settings of the three demonstration experiments of the paper in settings/GMD_Global, settings/GMD_Danube and settings/GMD_Amazon; all choices (state storages, filter components, observation options) are user settings. The input data, the assimilated observations and the model output of these experiments are archived in a separate Zenodo record.</p>",
+  "creators": [
+    {
+      "name": "Yang, Fan",
+      "affiliation": "Geodesy Group, Department of Sustainability and Planning, Aalborg University, Denmark"
+    }
+  ],
+  "license": "LGPL-3.0-only",
+  "access_right": "open",
+  "keywords": [
+    "data assimilation",
+    "GRACE",
+    "GRACE-FO",
+    "terrestrial water storage",
+    "WaterGAP",
+    "ensemble Kalman filter",
+    "hydrology",
+    "Python",
+    "MPI"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isDerivedFrom",
+      "identifier": "https://github.com/HydrologyFrankfurt/ReWaterGAP",
+      "resource_type": "software"
+    },
+    {
+      "relation": "references",
+      "identifier": "10.5194/gmd-18-6195-2025",
+      "resource_type": "publication-article"
+    }
+  ],
+  "language": "eng"
+}
