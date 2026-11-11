@@ -161,12 +161,12 @@ class model_state_threshold:
                 lo, hi = self.envelope[var]
                 return np.maximum(lo, self.river_floor), hi
             return self.river_floor, np.inf
-        if var in self.non_negative_vars:
-            return 0.0, np.inf
-        if var in self.lake_floor:                      # lakes in the DA state: WaterGAP's floor (set_lake_floor)
-            lo, hi = self.lake_floor[var]
+        if var in self.lake_floor:                      # lakes / reservoirs in the DA state (set_lake_floor):
+            lo, hi = self.lake_floor[var]               # lakes -max .. +max, reservoirs 0 .. capacity (review 260)
             if np.shape(lo) == np.shape(x):
                 return lo, hi
+        if var in self.non_negative_vars:
+            return 0.0, np.inf
         return None                                     # groundwater, lakes: unbounded
 
     # ------------------------------------------------------------------ application

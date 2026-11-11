@@ -1,0 +1,16 @@
+--- upstream/model/land_surfacewater_fraction.py
++++ local/model/land_surfacewater_fraction.py
+@@ -16,6 +16,13 @@
+ # Reservoirs are activated if cm.RESERVOIR_OPT="on", else they are deactivated
+ reservoir_operation = cm.RESERVOIR_OPT
+ 
++def update_setting():
++    global anthroprogenic, reservoir_operation
++    # For anthropogenic run , cm.ant=True , else naturalised run is activated
++    anthroprogenic = cm.ant
++    # Reservoirs are activated if cm.RESERVOIR_OPT="on", else they are deactivated
++    reservoir_operation = cm.RESERVOIR_OPT
++
+ 
+ def compute_landareafrac(landwater_frac, land_area_frac,
+                          resyear_frac=None, res_year=None,

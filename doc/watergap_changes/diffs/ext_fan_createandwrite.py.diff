@@ -1,0 +1,193 @@
+--- upstream/view/createandwrite.py
++++ Extension/fan_createandwrite.py
+@@ -13,37 +13,21 @@
+ # =============================================================================
+ # This module creates and writes daily ouputs to  storage and flux varibales
+ # =============================================================================
+-import concurrent.futures
+-import platform
+ import numpy as np
+ from controller import configuration_module as cm
+-from view import data_output_handler as doh
+-
+-
+-#  write_to_netcdf (used together with save_netcdf_parallel function
+-# in CreateandWritetoVariables class)
+-def write_to_netcdf(args):
+-    """
+-    Write variables to NetCDF.
+-
+-    Parameters
+-    ----------
+-    args : list of xrray variable, encoding and path to save data
+-
+-    """
+-    var, encoding, path = args
+-    try:
+-        var.to_netcdf(path, format='NETCDF4_CLASSIC', encoding=encoding)
+-        del var
+-        return None  # Successful execution
+-    except FileNotFoundError as exc:
+-        return exc
++from src_GHM.Extension import fan_data_output_handler as doh
+ 
+ 
+ class CreateandWritetoVariables:
+     """Create and write daily ouputs to  storage and flux varibales."""
+ 
+-    def __init__(self, grid_coords):
++    '''daily output file (save_netcdf_daily_single_file): zlib level 1 writes ~2.3x faster than level 5 for
++    ~5% larger files; lat x lon tiles of 36 x 72 cells (100 per global field) make reading a basin box 7-14x
++    faster and cost nothing when writing'''
++    COMPLEVEL = 1
++    TILE = (36, 72)
++
++    def __init__(self, grid_coords, **kwargs):
+         # output path
+         self.path = cm.config_file['FilePath']['outputDir']
+         # =====================================================================
+@@ -103,7 +87,7 @@
+             "consistent-precipitation" : "consistent_precipitation",
+             "groundwstor": "groundwater_storage",
+             "qg": "groundwater_discharge",
+-            "qtot": "total_runoff", 
++            "qtot": "total_runoff",
+             "qrf": "groundwater_recharge_swb",
+             "qr": "total_groundwater_recharge",
+             "locallakestor": "local_lake_storage",
+@@ -158,6 +142,27 @@
+                                              grid_coords)
+                     self.lb_fluxes[var_name] = var
+ 
++
++        """decide whether to crop the data to be saved"""
++        # Parse **kwargs to extract the Bounding Box extent
++        # Use .get() so it safely defaults to None if the parameter is missing
++        lon_min = kwargs.get('lon_min')
++        lon_max = kwargs.get('lon_max')
++        lat_min = kwargs.get('lat_min')
++        lat_max = kwargs.get('lat_max')
++
++        # Execute spatial subsetting if all four parameters are provided
++        if all(v is not None for v in [lon_min, lon_max, lat_min, lat_max]):
++
++            # WaterGAP latitudes are stored in descending order
++            self.lat_slice = slice(lat_max, lat_min)  # Descending order
++            self.lon_slice = slice(lon_min, lon_max)
++            self.is_crop_save = True
++        else:
++            self.is_crop_save = False
++
++        pass
++
+     def verticalbalance_write_daily_var(self, value, sim_year,
+                                         sim_month, sim_day):
+         """
+@@ -243,7 +248,7 @@
+         contfrac : array
+             continental fraction (land and surfacewater bodies), Unit: [-]
+         month_daily_aggr : string
+-            Specifies the aggregation method, either "month" for monthly averages 
++            Specifies the aggregation method, either "month" for monthly averages
+             or "daily" for daily values.
+ 
+         Returns
+@@ -291,47 +296,65 @@
+                 # converted and aggreagated data
+                 value.data[key][:] = converted_data
+ 
+-    def save_netcdf_parallel(self, end_date):
++    def save_netcdf_daily_single_file(self, end_date):
+         """
+-        Save variables to netcdf.
++        Save variables to one single netcdf file.
+ 
+         end_date: datetime
+             Date for end of simulation
+-
+-        Returns
+-        -------
+-        None.
+-
+         """
+-        # Create a list of tuples with arguments for writing
+-        write_args = []
++        import xarray as xr
++        vars_dict = {}
++        encoding = {}
++
++        # collect all variables
+         for var in [self.vb_storages, self.vb_fluxes,
+                     self.lb_storages, self.lb_fluxes]:
++
+             for key, value in var.items():
+-                path = self.path + f'{key}_{end_date}.nc'
+ 
+                 if key == "get_neighbouring_cells_map":
+-                    encoding = {key: {'chunksizes': [1, value.data[key].shape[1], 
+-                                                     value.data[key].shape[2], 2],
+-                                      "zlib": True,
+-                                      "complevel": 5}}
+-                elif key == 'smax':
+-                    path = self.path + f'{key}.nc'
+-                    encoding = {key: {'_FillValue': 1e+20,
+-                                      "zlib": True,
+-                                      "complevel": 5}}
++                    encoding[key] = {"zlib": True, "complevel": self.COMPLEVEL}
++
++                elif key == "smax":
++                    encoding[key] = {
++                        "_FillValue": 1e+20,
++                        "zlib": True,
++                        "complevel": self.COMPLEVEL
++                    }
++
+                 else:
+-                    encoding = {key: {'_FillValue': 1e+20,
+-                                      'chunksizes': [1, value.data[key].shape[1], 
+-                                                     value.data[key].shape[2]],
+-                                      "zlib": True, "complevel": 5}}
+-                write_args.append((value.data, encoding, path))
+-
+-        # For saving output in parallel, Threading is used for macOS but
+-        # multiprocessing is used of Linux, windows, etc
+-        if platform.system() != 'Darwin':  # not macOS
+-            with concurrent.futures.ProcessPoolExecutor() as executor:
+-                executor.map(write_to_netcdf, write_args)
+-        else:
+-            for i in write_args:
+-                write_to_netcdf(i)
++                    encoding[key] = {
++                        "_FillValue": 1e+20,
++                        "zlib": True,
++                        "complevel": self.COMPLEVEL
++                    }
++
++                if isinstance(value.data, xr.Dataset):
++                    for sub_key, da in value.data.data_vars.items():
++                        vars_dict[sub_key] = da.copy()
++                else:
++                    vars_dict[key] = value.data.copy()
++
++        path = self.path + f"daily_output_{end_date}.nc"
++
++        ds = xr.Dataset(vars_dict)
++
++        if self.is_crop_save:
++            ds = ds.sel(lon=self.lon_slice, lat=self.lat_slice)
++
++        '''store the lat/lon fields in tiles: reading a sub-region later (any basin box) decompresses only
++        the tiles it overlaps instead of the whole global field; capped at the field size for cropped files'''
++        for name in ds.data_vars:
++            if name in encoding and 'lat' in ds[name].dims and 'lon' in ds[name].dims:
++                encoding[name]['chunksizes'] = tuple(
++                    min(self.TILE[0], n) if d == 'lat' else min(self.TILE[1], n) if d == 'lon' else n
++                    for d, n in zip(ds[name].dims, ds[name].shape))
++
++        ds.to_netcdf(
++            path,
++            format="NETCDF4_CLASSIC",
++            encoding=encoding
++        )
++
++

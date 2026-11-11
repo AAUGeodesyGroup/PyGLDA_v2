@@ -141,7 +141,7 @@ class GRACE_CSR_mascon(GRACE_preparation):
             data = mascon_data[available_month[this_month_shortname]].copy()
             '''convert to be compatible with the mask grid definition'''
             data = np.flipud(data)
-            tws_one_month = np.roll(data, 360)
+            tws_one_month = np.roll(data, 360, axis=1)
 
             for i in range(1, basins_num + 1):
                 key = 'sub_basin_%d' % i
@@ -227,7 +227,7 @@ class GRACE_CSR_mascon(GRACE_preparation):
             data = mascon_data[available_month[this_month_shortname]].copy()
             '''convert to be compatible with the mask grid definition, convert unit from cm to mm'''
             data = np.flipud(data) * 10
-            tws_one_month = np.roll(data, 360)
+            tws_one_month = np.roll(data, 360, axis=1)
 
             a = tws_one_month[mask.astype(bool)]
             TWS.append(a)

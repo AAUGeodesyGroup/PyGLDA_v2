@@ -28,6 +28,17 @@ Options of "non_negative" (all default off):
         keep their ensemble weights. GRACE sees only the sum; the ensemble's soil / groundwater covariance follows how
         the inflation noise is split rather than where the model's seasonal error is, so the model's own seasonal
         partition is the better prior. H dX = delta is unchanged.
+        "residence": {"tau_ref_days": 30} (optional, default off) weights each group storage's amplitude share by how
+        long that storage keeps water in the open loop of the sub-basin: s_vj ~ amp_vj * tau_vj / (tau_vj + tau_ref),
+        tau_vj = e-folding time (days) of the deseasonalised daily ensemble-mean unit series, -1 / ln(rho_1) from its
+        lag-1 autocorrelation (calendar-day climatology removed; clipped to [tau_min_days, tau_max_days], default
+        [0.5, 3650]; over a few years long times are biased low, e.g. 400 d read as ~150-250 d, which hardly changes
+        the factor of slow stores). Storages that drain within days (small and medium rivers) get a small share, storages that hold
+        water for months (soil, wetlands, floodplains, large rivers) keep theirs. Put "riverstor" into "storages" for
+        the river to be weighted at all (otherwise its share follows the ensemble weights). Writes
+        <res_permanent>/<case>/storage_shares_residence.csv (tau and factor per sub-basin and storage). Motivation:
+        the DA's river increments leave the cell within the month and widen the discharge variability (DA reviews
+        207 (5), 211, 214).
     "boundary_smoothing": {"storages": ["groundwstor"], "length_km": 50, "n_iter": 10, "alpha": 1.0, "cutoff": 2.0}
         with one observation per sub-basin the increment field is built inside every sub-basin from that sub-basin's
         increment alone and steps at sub-basin boundaries. Mass-preserving (pycnophylactic, Tobler 1979) smoothing of
@@ -63,6 +74,13 @@ Options of "non_negative" (all default off):
         (0 = no split, i.e. the standard partition; 1 = full split). The climatology / low-pass state still learns
         from the full m_j. One knob between U2-like (0) and the full split (1) for the configuration choice
         (DA review 194, 2 Nov 2026).
+        "interannual" {"tau_months": 36, "fraction": 1}: optional second split of the remainder r_j = m_j - c_j (the
+        non-seasonal part, full c_j before "fraction"). A recursive low-pass s_j of r_j over the windows (time constant
+        tau_months, neutral start s_j = first r_j) is the slow part that the slow storages keep; b_j = fraction (r_j - s_j),
+        the 1-3-year part and noise, also bypasses them: c_j -> c_j + b_j. Motivation: v1.1 gw loses skill at wells in
+        the 13-36-month band and in the low-flow test while its trend and > 36-month skill improve, and gw increments
+        persist (DA reviews 218 / 221, 4 Nov 2026). With "save" the low-pass state is written with the climatology
+        ("ia_lp"), and "init" loads it when present. Absent = previous behaviour, bit-identical.
 Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, boundary smoothing, bounds and
 per-cell limit.
 """
@@ -106,7 +124,8 @@ class NonNegativePartition(Partition):
         sp = dict(seasonal_split or {})
         self.seasonal_split = None
         if sp:
-            unknown_keys = set(sp) - {'storages_slow', 'method', 'tau_months', 'memory_years', 'init', 'save', 'fraction'}
+            unknown_keys = set(sp) - {'storages_slow', 'method', 'tau_months', 'memory_years', 'init', 'save', 'fraction',
+                                      'interannual'}
             if unknown_keys:
                 raise ValueError('seasonal_split: unknown keys %s' % sorted(unknown_keys))
             meth = str(sp.get('method', 'lowpass')).lower()
@@ -124,10 +143,24 @@ class NonNegativePartition(Partition):
                                        method=meth, tau_months=tau, memory_years=mem,
                                        init=str(sp['init']) if sp.get('init') else None,
                                        save=str(sp['save']) if sp.get('save') else None, fraction=frac)
+            ia = sp.get('interannual')
+            if ia:
+                ia = dict(ia)
+                bad_k = set(ia) - {'tau_months', 'fraction'}
+                if bad_k:
+                    raise ValueError('seasonal_split interannual: unknown keys %s' % sorted(bad_k))
+                ia = dict(tau_months=float(ia.get('tau_months', 36.0)), fraction=float(ia.get('fraction', 1.0)))
+                if ia['tau_months'] < 2.0 or not 0.0 <= ia['fraction'] <= 1.0:
+                    raise ValueError('seasonal_split interannual needs tau_months >= 2 and 0 <= fraction <= 1, got %s'
+                                     % ia)
+                self.seasonal_split['interannual'] = ia
         self._sp_idx = np.zeros(0, dtype=int)   # slow storage indices (setup)
         self._sp_lp = None                      # lowpass state (n_obs,)
         self._sp_clim = None                    # climatology state (n_obs, 12) and visit counts (12,)
         self._sp_cnt = np.zeros(12)
+        self._sp_ia = None                      # interannual low-pass state of the non-seasonal remainder (n_obs,)
+        self._fast_offset = None                # (n_obs,) set by the filter for one update: added to the sub-basin
+                                                # increment through the fast storages only (innovation_bias "fast_only")
         bo = dict(bound_overflow or {})
         self.bound_overflow = None
         if bo:
@@ -160,7 +193,7 @@ class NonNegativePartition(Partition):
         ss = dict(storage_shares or {})
         self.storage_shares = None
         if ss:
-            unknown_keys = set(ss) - {'storages', 'mix'}
+            unknown_keys = set(ss) - {'storages', 'mix', 'residence'}
             if unknown_keys:
                 raise ValueError('storage_shares: unknown keys %s' % sorted(unknown_keys))
             mix = float(ss.get('mix', 1.0))
@@ -169,9 +202,21 @@ class NonNegativePartition(Partition):
             sto = [str(v) for v in ss.get('storages', ['soilmoist', 'groundwstor'])]
             if len(sto) < 2:
                 raise ValueError('storage_shares needs at least two storages, got %s' % sto)
-            self.storage_shares = dict(storages=sto, mix=mix)
+            rs = ss.get('residence')
+            if rs:
+                rs = dict(rs)
+                bad_k = set(rs) - {'tau_ref_days', 'tau_min_days', 'tau_max_days'}
+                if bad_k:
+                    raise ValueError('storage_shares residence: unknown keys %s' % sorted(bad_k))
+                rs = dict(tau_ref_days=float(rs.get('tau_ref_days', 30.0)), tau_min_days=float(rs.get('tau_min_days', 0.5)),
+                          tau_max_days=float(rs.get('tau_max_days', 3650.0)))
+                if not (rs['tau_ref_days'] > 0 and 0 < rs['tau_min_days'] < rs['tau_max_days']):
+                    raise ValueError('storage_shares residence needs tau_ref_days > 0 and 0 < tau_min_days < '
+                                     'tau_max_days, got %s' % rs)
+            self.storage_shares = dict(storages=sto, mix=mix, residence=rs or None)
         self._ss_idx = []                   # storage indices of the group
         self._ss_table = None               # (n_obs, n_group) open-loop amplitude shares within the group
+        self._ss_tau = None                 # (n_obs, n_group) open-loop residence times [d] (residence option)
         self.spatial_blend = {str(v): float(b) for v, b in (spatial_blend or {}).items() if b}
         bad_b = {v: b for v, b in self.spatial_blend.items() if not 0.0 < b <= 1.0}
         if bad_b:
@@ -207,6 +252,8 @@ class NonNegativePartition(Partition):
                           bs_moved_mm_sum=0.0, bound_overflow=self.bound_overflow, bo_unplaced_mm_sum=0.0,
                           bo_n_fallback=0, seasonal_split=self.seasonal_split, sp_n=0, sp_fast_abs_sum=0.0,
                           sp_mean_abs_sum=0.0, sp_n_obs_no_fast_share=0)
+        if self.seasonal_split is not None and self.seasonal_split.get('interannual'):
+            self.stats['sp_ia_abs_sum'] = 0.0   # sum |b_j|: the non-seasonal part kept out of the slow storages
 
     def _ratio(self, var):
         """cap for one storage (None = not capped)"""
@@ -353,9 +400,15 @@ class NonNegativePartition(Partition):
         S = (W @ sparse.diags(scale)).tocsc()                                      # normalised shares, H S = I (block)
         if self.storage_shares is not None:
             S = self._storage_share_mix(S, L, X)                                   # also the shares used by the bounds
+        off, self._fast_offset = self._fast_offset, None                           # one update only
         if self.seasonal_split is not None and len(self._sp_idx):
-            dX_new = self._seasonal_split(S, delta)
+            dX_new = self._seasonal_split(S, delta, off)
+            if off is not None:
+                '''the sub-basin totals now include the fast-only offset; the bounds and smoothing preserve these'''
+                delta = delta + off[:, None]
         else:
+            if off is not None:
+                raise ValueError('partition: a fast-only offset (innovation_bias "fast_only") needs seasonal_split')
             dX_new = np.asarray(S @ delta)                                         # n_state x N
 
         if self._bs is not None:
@@ -397,7 +450,10 @@ class NonNegativePartition(Partition):
         a = max(1.0 / self._sp_cnt[month], 1.0 / sp['memory_years'])
         self._sp_clim[:, month] += a * (m - self._sp_clim[:, month])
         if sp.get('save'):
-            np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt)
+            if sp.get('interannual') and self._sp_ia is not None:
+                np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
+            else:
+                np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt)
         seen = self._sp_cnt > 0
         return self._sp_clim[:, month] - self._sp_clim[:, seen].mean(1)
 
@@ -410,15 +466,36 @@ class NonNegativePartition(Partition):
                              % (path, clim.shape, cnt.shape, n_obs))
         self._sp_clim = clim.copy()
         self._sp_cnt = np.where(cnt > 0, np.maximum(cnt, self.seasonal_split['memory_years']), 0.0)
+        if self.seasonal_split.get('interannual') and 'ia_lp' in z.files:
+            ia = np.asarray(z['ia_lp'], dtype=float)
+            if ia.shape == (n_obs,):
+                self._sp_ia = ia.copy()
+                print('non_negative partition: seasonal_split interannual low-pass started from %s' % path)
         self.stats['sp_init'] = dict(path=str(path), months_known=int((cnt > 0).sum()))
         print('non_negative partition: seasonal_split climatology started from %s (%d months known)'
               % (path, int((cnt > 0).sum())))
 
-    def _seasonal_split(self, S, delta):
-        """dX = S (delta - c) + S_fast c, see seasonal_split"""
+    def _seasonal_split(self, S, delta, offset=None):
+        """dX = S (delta - c) + S_fast (c + offset), see seasonal_split; offset (n_obs,) or None: an extra sub-basin
+        increment placed in the fast storages only, the same for every member (innovation_bias "fast_only")"""
         f = self.f
         m = np.mean(delta, 1)
-        c = self.seasonal_split['fraction'] * self._fast_part(m)
+        ia = self.seasonal_split.get('interannual')
+        if ia:
+            cfull = self._fast_part(m)
+            c = self.seasonal_split['fraction'] * cfull
+            r = m - cfull                                               # non-seasonal remainder
+            if self._sp_ia is None:
+                self._sp_ia = r.copy()                                  # neutral start: b = 0
+            else:
+                self._sp_ia = self._sp_ia + (r - self._sp_ia) / ia['tau_months']
+            b = ia['fraction'] * (r - self._sp_ia)
+            self.stats['sp_ia_abs_sum'] += float(np.abs(b).sum())
+            if self.seasonal_split.get('save') and self._sp_clim is not None:
+                np.savez(self.seasonal_split['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
+            c = c + b
+        else:
+            c = self.seasonal_split['fraction'] * self._fast_part(m)
         slow = np.isin(f._var_idx, self._sp_idx).astype(float)
         Sf = sparse.csc_matrix(S.multiply((1.0 - slow)[:, None]))
         hs = f._DM(states=Sf).diagonal().copy()
@@ -429,6 +506,12 @@ class NonNegativePartition(Partition):
         self.stats['sp_n'] += 1
         self.stats['sp_fast_abs_sum'] += float(np.abs(c).sum())
         self.stats['sp_mean_abs_sum'] += float(np.abs(m).sum())
+        if offset is not None:
+            o = np.where(okf, np.asarray(offset, dtype=float), 0.0)
+            self.stats['fast_offset_sum'] = self.stats.get('fast_offset_sum', 0.0) + float(o.sum())
+            self.stats['fast_offset_unplaced_sum'] = (self.stats.get('fast_offset_unplaced_sum', 0.0)
+                                                      + float(np.abs(np.asarray(offset) - o).sum()))
+            return np.asarray(S @ (delta - c[:, None])) + np.asarray(Sf @ (c + o))[:, None]
         return np.asarray(S @ (delta - c[:, None])) + np.asarray(Sf @ c)[:, None]
 
     def _setup_storage_shares(self, f):
@@ -449,6 +532,24 @@ class NonNegativePartition(Partition):
         src = Path(b.res_permanent) / b.case / 'Res_OL.h5'
         n_obs = f._L_state.shape[1]
         amp = seasonal_amplitude_table(src, sto, n_obs)                         # (n_obs, n_group) mm
+        rs = self.storage_shares.get('residence')
+        if rs:
+            tau = residence_time_table(src, sto, n_obs, tau_min=rs['tau_min_days'], tau_max=rs['tau_max_days'])
+            fac = tau / (tau + rs['tau_ref_days'])
+            amp = amp * fac
+            self._ss_tau = tau
+            try:
+                out = Path(b.res_permanent) / b.case / 'storage_shares_residence.csv'
+                with open(out, 'w') as fh:
+                    fh.write('sub_basin,' + ','.join('tau_days_%s,factor_%s' % (v, v) for v in sto) + '\n')
+                    for j in range(n_obs):
+                        fh.write('%d,' % (j + 1) + ','.join('%.3f,%.4f' % (tau[j, k], fac[j, k])
+                                                             for k in range(len(sto))) + '\n')
+            except OSError as err:
+                print('non_negative partition: could not write %s (%s)' % (out, err))
+            print('non_negative partition: residence weighting tau_ref %.1f d; median tau (d) %s, median factor %s'
+                  % (rs['tau_ref_days'], {v: round(float(np.median(tau[:, k])), 1) for k, v in enumerate(sto)},
+                     {v: round(float(np.median(fac[:, k])), 3) for k, v in enumerate(sto)}))
         tot = amp.sum(1, keepdims=True)
         self._ss_table = np.where(tot > 0, amp / np.where(tot > 0, tot, 1.0), 0.0)
         med = {v: round(float(np.median(self._ss_table[:, k])), 3) for k, v in enumerate(sto)}
@@ -833,6 +934,57 @@ def seasonal_amplitude_table(path, storages, n_sub):
                 clim = np.array([np.nanmean(x[mon == k]) for k in range(1, 13) if (mon == k).any()])
                 out[j, i] = float(np.nanstd(clim)) if len(clim) > 1 else 0.0
     return np.nan_to_num(np.maximum(out, 0.0))
+
+
+def residence_time_table(path, storages, n_sub, tau_min=0.5, tau_max=3650.0):
+    """
+    E-folding time (days) per sub-basin and storage of the open loop's deseasonalised daily ensemble-mean unit
+    series (Res_OL.h5, members as in seasonal_amplitude_table): anomaly = series - its calendar-day mean (day of year
+    1..366), tau = -1 / ln(rho_1) with rho_1 its lag-1 autocorrelation, clipped to [tau_min, tau_max]. A storage
+    missing in the file or without variance gets tau = 0 (its amplitude is 0 there as well). Returns (n_sub, n_storage).
+    """
+    import h5py, datetime as dt
+    from pathlib import Path
+    if not Path(path).exists():
+        raise FileNotFoundError('storage_shares residence needs the open-loop basin series %s' % path)
+    out = np.zeros((n_sub, len(storages)))
+    with h5py.File(path, 'r') as h:
+        t = h['time'][:]
+
+        def doy_of(x):
+            y = int(x)
+            n = (dt.date(y + 1, 1, 1) - dt.date(y, 1, 1)).days
+            return min(int(round((x - y) * n)), n - 1) + 1
+        doy = np.array([doy_of(x) for x in t])
+        for j in range(n_sub):
+            for i, v in enumerate(storages):
+                key = 'sub_basin_%d/%s' % (j + 1, v)
+                if key not in h:
+                    continue
+                mem = [m for m in h[key] if m != '0'] or list(h[key])
+                x = np.mean([h[key][m][:] for m in mem], axis=0).astype(float)
+                ok = np.isfinite(x)
+                if ok.sum() < 30:
+                    continue
+                clim = np.zeros(367)
+                for d in np.unique(doy[ok]):
+                    clim[d] = np.mean(x[ok & (doy == d)])
+                a = np.where(ok, x - clim[doy], np.nan)
+                a0, a1 = a[:-1], a[1:]
+                k = np.isfinite(a0) & np.isfinite(a1)
+                if k.sum() < 30 or np.std(a0[k]) == 0 or np.std(a1[k]) == 0:
+                    continue
+                rho = float(np.corrcoef(a0[k], a1[k])[0, 1])
+                if not np.isfinite(rho):
+                    continue
+                if rho <= np.exp(-1.0 / tau_min):
+                    tau = tau_min
+                elif rho >= np.exp(-1.0 / tau_max):
+                    tau = tau_max
+                else:
+                    tau = -1.0 / np.log(rho)
+                out[j, i] = tau
+    return out
 
 
 PARTITIONS = {c.KIND: c for c in (EnKFPartition, NonNegativePartition)}

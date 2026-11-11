@@ -58,6 +58,12 @@ class EnKF:
         smax.nc x land fraction x this factor, applied with the land fraction in run_mpi'''
         self._smax_multiplier = self._member_smax_multiplier()
 
+        '''storages outside the DA state (lakes, reservoirs, canopy, river in v1.1/v1.2) that are subtracted from GRACE
+        (method block "excluded_storage", default = the full member anomaly, the behaviour of all runs so far): see
+        _excluded_config (DA review 243)'''
+        self._excl = self._excluded_config()
+        self._excl_log = []                 # OL rank: (obs date, full subtracted vector, used vector) per window
+
         '''obtain info; epochs listed by obs "withhold" are not assimilated (held-out validation, see withhold_epochs)'''
         obs_aux, self._withheld = self.withhold_epochs(obs.get_obs_aux(), getattr(self.DA_setting.obs, 'withhold', None),
                                                        self.DA_setting.basic.fromdate, self.DA_setting.basic.todate)
@@ -104,6 +110,115 @@ class EnKF:
             print('increment_release %s: no storage of the DA state %s or days < 2 - off' % (cfg, names))
             return None
         return dict(storages=storages, days=days, var_idx=[names.index(v) for v in storages], nvar=len(names))
+
+    def _excluded_config(self):
+        """
+        "excluded_storage" in the method block of DA_setting.json (DA review 243). Absent, null or {"mode": "full"} =
+        current behaviour: each member's observation is GRACE minus the window mean of its own excluded storages
+        (trend included). Keys:
+          "mode": "full" | "climatology"
+              climatology: subtract clim[calendar month] instead, the open-loop calendar-month climatology of the
+              excluded unit storage (same operator, same units and order as the observation vector), so that the
+              trend and interannual part of lake / reservoir / river storage are neither imposed on the state nor
+              removed from GRACE.
+          "clim": path of an npz with clim (12, n_obs) float (mode climatology), built by
+              temp/exp_logs/da_dev/review243/excluded_climatology.py from the log of a "full" run.
+          "layers": [..] (mode climatology, optional): only these excluded storages (e.g. ["reservoirstor"]) are
+              replaced by their climatology; the other excluded storages keep the full member subtraction. Absent =
+              all excluded storages. The log and the climatology then hold this part only.
+          "member_deviation": true (default) adds the member's deviation from the open loop in this window,
+              (H_excl x_member - H_excl x_OL), so the excluded storages keep their spread in observation space;
+              false subtracts the climatology alone.
+          "log": true writes, on the open-loop rank, the full subtracted vector of every window to
+              <DA_output_temp_dir>/<case>/excluded_storage_log.npz (input of the climatology builder); it does not
+              change any result.
+        """
+        cfg = getattr(self.DA_setting.method, 'excluded_storage', None)
+        if not cfg:
+            return None
+        cfg = dict(cfg)
+        mode = cfg.get('mode', 'full')
+        if mode not in ('full', 'climatology'):
+            raise ValueError('excluded_storage mode %s: use "full" or "climatology"' % mode)
+        out = dict(mode=mode, log=bool(cfg.get('log', False)), dev=bool(cfg.get('member_deviation', True)), clim=None,
+                   layers=None, mask=None)
+        if self._sv_excluded.DM.vertical_dim == 0:
+            print('excluded_storage %s: no storage is excluded from the DA state - off' % cfg)
+            return None
+        layers = cfg.get('layers', None)
+        if layers:
+            names = list(self._sv_excluded.DM.statesnn)
+            unknown = [v for v in layers if v not in names]
+            if unknown:
+                raise ValueError('excluded_storage layers %s are not excluded storages %s' % (unknown, names))
+            out['layers'] = list(layers)
+            out['layer_idx'] = [names.index(v) for v in layers]
+            out['nvar'] = len(names)
+        if mode == 'climatology':
+            z = np.load(cfg['clim'])
+            clim = np.asarray(z['clim'], dtype=float)
+            n_obs = self._sv_excluded.DM.getDM().shape[0]
+            if clim.shape != (12, n_obs):
+                raise ValueError('excluded_storage clim %s has shape %s, expected (12, %d)' % (cfg['clim'], clim.shape, n_obs))
+            if not np.isfinite(clim).all():
+                raise ValueError('excluded_storage clim %s has non-finite values' % cfg['clim'])
+            out['clim'] = clim
+            out['path'] = str(cfg['clim'])
+        if mode == 'full' and not out['log']:
+            return None
+        return out
+
+    @staticmethod
+    def _obs_month(date):
+        """calendar month (1-12) of an observation date (datetime/date or 'YYYY-MM...' string)"""
+        return date.month if hasattr(date, 'month') else int(str(date)[5:7])
+
+    def _excluded_part(self, x_excl):
+        """H_excl applied to the listed excluded layers only (cell-major state: element c * nvar + k is layer k of
+        cell c); all excluded layers when "layers" is absent"""
+        cfg = self._excl
+        H = self._sv_excluded.DM.getDM()
+        if cfg is None or cfg.get('layers') is None:
+            return H @ x_excl
+        if cfg.get('mask') is None or cfg['mask'].shape != np.shape(x_excl):
+            m = np.zeros(np.shape(x_excl), dtype=float)
+            for k in cfg['layer_idx']:
+                m[k::cfg['nvar']] = 1.0
+            cfg['mask'] = m
+        return H @ (x_excl * cfg['mask'])
+
+    def _excluded_for_obs(self, excl_full, date, comm, rank, OL_thread, excl_part=None):
+        """the vector subtracted from this member's observation (see _excluded_config). excl_full = H_excl x_excl,
+        excl_part = the same for the "layers" only (None = excl_full). Collective: every rank calls it at every
+        analysis (bcast from the open-loop rank)."""
+        cfg = self._excl
+        if cfg is None:
+            return excl_full
+        part = excl_full if excl_part is None else excl_part
+        used = excl_full
+        if cfg['mode'] == 'climatology':
+            clim_part = cfg['clim'][self._obs_month(date) - 1].copy()
+            if cfg['dev']:
+                ol = comm.bcast(part if rank == OL_thread else None, root=OL_thread)
+                clim_part = clim_part + (part - ol)
+            used = excl_full - part + clim_part
+        if cfg['log'] and rank == OL_thread:
+            self._excl_log.append((str(date), np.array(part, dtype=float), np.array(used, dtype=float)))
+        return used
+
+    def _save_excluded_log(self):
+        """open-loop rank: the full and the used subtracted vector of every window (mode, path in the attributes)"""
+        from pathlib import Path
+        if not self._excl_log:
+            return
+        out = Path(self.DA_setting.basic.DA_output_temp_dir) / self.DA_setting.basic.case / 'excluded_storage_log.npz'
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(out, dates=np.array([d for d, _, _ in self._excl_log]),
+                 excl_full=np.stack([f for _, f, _ in self._excl_log]),
+                 excl_used=np.stack([u for _, _, u in self._excl_log]),
+                 mode=self._excl['mode'], clim_path=self._excl.get('path', ''),
+                 layers=np.array(self._excl.get('layers') or ['all excluded']))
+        print('excluded_storage log written: %s (%d windows)' % (out, len(self._excl_log)))
 
     def _soil_cap_config(self):
         """
@@ -360,6 +475,8 @@ class EnKF:
 
             '''====================start assimilation================================'''
             print('|', end='')
+            if hasattr(self, 'refresh_lake_floor'):
+                self.refresh_lake_floor()        # lakes in the state: bounds from the current max storages (review 251)
             rr += 1
             '''get obs and cov'''
             info = self._obs_helper['AssimilationInfo'][rr]
@@ -373,7 +490,11 @@ class EnKF:
                 pass
             else:
                 historic_mean_states_excluded = historic_mean_states_excluded / len(info[1])
-                obs = obs - self._sv_excluded.DM.getDM() @ historic_mean_states_excluded
+                excl_full = self._sv_excluded.DM.getDM() @ historic_mean_states_excluded
+                excl_part = None
+                if self._excl is not None and self._excl.get('layers') is not None:
+                    excl_part = self._excluded_part(historic_mean_states_excluded)
+                obs = obs - self._excluded_for_obs(excl_full, info[0], comm, rank, OL_thread, excl_part)
                 historic_mean_states_excluded = None # free memory
 
             obs_cov = self._obs.get_cov()
@@ -546,6 +667,12 @@ class EnKF:
 
         if rank != OL_thread:
             self._flush_increment()
+
+        if self._excl is not None and self._excl['log'] and rank == OL_thread:
+            try:
+                self._save_excluded_log()
+            except Exception as err:            # logging must never stop the run
+                print('excluded_storage log not written: %s' % err)
 
         '''clipping statistics of this member (printed to the rank log, saved next to its daily output)'''
         if rank != OL_thread:

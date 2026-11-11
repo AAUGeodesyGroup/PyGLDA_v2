@@ -1,0 +1,74 @@
+--- upstream/model/lateralwaterbalance/lakes_wetlands.py
++++ local/model/lateralwaterbalance/lakes_wetlands.py
+@@ -23,6 +23,29 @@
+ 
+ 
+ @njit(cache=True)
++def _limit_ratio(petgwr_max, petgwr):
++    """
++    Share of the outgoing fluxes (open-water evaporation, point recharge, net abstraction) that the storage can
++    still supply when they exceed petgwr_max (PyGLDA guard, DA review 246).
++
++    In a free model run the storage never lies below its floor (-max_storage for lakes, 0 for wetlands), so
++    petgwr_max >= 0 and petgwr > petgwr_max >= 0 whenever this is called: the ratio is petgwr_max / petgwr in
++    [0, 1), exactly as before. After a data-assimilation write-back the storage can sit a round-off below the
++    floor; then petgwr_max < 0 and, with the area at zero, petgwr = 0, and the plain ratio is 0 / 0
++    (ZeroDivisionError in numba) or negative (negative evaporation / recharge). Here: 0 if petgwr <= 0, and the
++    ratio clipped to [0, 1]. The storage itself is set to the floor by the caller, as before.
++    """
++    if petgwr <= 0.0:
++        return 0.0
++    r = petgwr_max / petgwr
++    if r < 0.0:
++        return 0.0
++    if r > 1.0:
++        return 1.0
++    return r
++
++
++@njit(cache=True)
+ def lake_wetland_water_balance(x, y,
+                                choose_swb, storage, precipitation,
+                                openwater_pot_evap, aridity, drainage_direction,
+@@ -307,16 +330,16 @@
+             outflow = 0
+             storage = storage_limit
+ 
+-            gwr_lakewet *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
++            gwr_lakewet *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
+ 
+-            openwater_evapo_cor *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
++            openwater_evapo_cor *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
+ 
+             # Reduce potential water use from global lake after partial
+             # satisfaction.
+             if accumulated_unsatisfied_potential_netabs_glolake > 0:
+                 accumulated_unsatisfied_potential_netabs_glolake -= \
+                     accumulated_unsatisfied_potential_netabs_glolake * \
+-                    (petgwr_netabs_sw_max/petgwr_netabs_sw)
++                    _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
+             else:
+                 accumulated_unsatisfied_potential_netabs_glolake = 0
+         else:
+@@ -339,8 +362,8 @@
+         if petgwr_netabs_sw > petgwr_netabs_sw_max:
+             outflow = 0
+             storage = storage_limit
+-            gwr_lakewet *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
+-            openwater_evapo_cor *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
++            gwr_lakewet *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
++            openwater_evapo_cor *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
+         else:
+             outflow = net_in + storage_prevstep - storage
+ 
+@@ -352,8 +375,8 @@
+ 
+         if petgwr_netabs_sw > petgwr_netabs_sw_max:
+             storage = storage_limit
+-            gwr_lakewet *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
+-            openwater_evapo_cor *= (petgwr_netabs_sw_max/petgwr_netabs_sw)
++            gwr_lakewet *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
++            openwater_evapo_cor *= _limit_ratio(petgwr_netabs_sw_max, petgwr_netabs_sw)
+ 
+         # choose storage type to calculate outflow (current or previous)
+         # but all should be previous.

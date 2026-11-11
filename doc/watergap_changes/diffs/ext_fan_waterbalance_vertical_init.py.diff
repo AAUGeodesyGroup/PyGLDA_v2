@@ -1,0 +1,92 @@
+--- upstream/model/verticalwaterbalance/waterbalance_vertical_init.py
++++ Extension/fan_waterbalance_vertical_init.py
+@@ -101,6 +101,10 @@
+             self.forcings_static.static_data.canopy_snow_soil_parameters
+         self.lai_param = \
+             lai_init.LeafAreaIndex(self.land_cover, parameters_lai)
++        # PyGLDA ensemble multiplier (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
++        lai_mult = self.parameters.lai_multiplier.values.astype(np.float64)
++        self.lai_param.max_leaf_area_index = self.lai_param.max_leaf_area_index * lai_mult
++        self.lai_param.min_leaf_area_index = self.lai_param.min_leaf_area_index * lai_mult
+ 
+         # =====================================================================
+         #                   Canopy
+@@ -125,6 +129,10 @@
+             self.degreeday[self.land_cover[:, :] == parameters_snow.loc[i, 'Number']] = \
+                parameters_snow.loc[i, 'degree-day']
+ 
++        # PyGLDA ensemble multiplier (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
++        self.degreeday = self.degreeday * \
++            self.parameters.degreeday_multiplier.values.astype(np.float64)
++
+         self.elevation = self.forcings_static.static_data.gtopo30_elevation
+ 
+         # Snow water storage divided into 100 subgrids based on GTOPO30 (U.S.
+@@ -160,6 +168,14 @@
+             np.where(total_avail_water_content > 0,
+                      total_avail_water_content * rooting_depth, np.nan)
+ 
++        # PyGLDA ensemble multipliers (model/parameters.py MULTIPLIERS; 1.0 = standard WaterGAP)
++        self.max_soil_water_content = self.max_soil_water_content * \
++            self.parameters.smax_multiplier.values.astype(np.float64)
++        self.groundwater_recharge_factor = self.groundwater_recharge_factor * \
++            self.parameters.gw_recharge_factor_multiplier.values.astype(np.float64)
++        self.max_groundwater_recharge = self.max_groundwater_recharge * \
++            self.parameters.max_gw_recharge_multiplier.values.astype(np.float64)
++
+         # =====================================================================
+         #   Storage to be transfered to runoff when land area fraction is zero
+         # =====================================================================
+@@ -204,12 +220,11 @@
+ 
+         precipitation = self.forcings_static.climate_forcing.precipitation.sel(
+             time=str(date))
+-
+         #  Checking negative precipittaion
+-        check_or_convert.check_neg_precipitation(precipitation.pr)
++        check_or_convert.check_neg_precipitation(precipitation)
+ 
+         # Covert precipitation units to mm/day
+-        precipitation = check_or_convert.to_mm_per_day(precipitation.pr)
++        precipitation = check_or_convert.to_mm_per_day(precipitation)
+ 
+         #                  =============================
+         #                  ||     Air tempeature (K)  ||
+@@ -218,7 +233,7 @@
+             time=str(date))
+ 
+         # Covert air tempeature from degree celcius to Kelvin
+-        temperature = check_or_convert.to_kelvin(temperature.tas)
++        temperature = check_or_convert.to_kelvin(temperature)
+ 
+         #                  =========================================
+         #                  || Downward shortwave radiation (Wm−2) ||
+@@ -228,7 +243,7 @@
+                 time=str(date))
+ 
+         down_shortwave_radiation = \
+-            down_shortwave_radiation.rsds.values.astype(np.float64)
++            down_shortwave_radiation.values.astype(np.float64)
+ 
+         #                  =========================================
+         #                  ||  Downward longwave radiation (Wm−2) ||
+@@ -238,7 +253,7 @@
+                 time=str(date))
+ 
+         down_longwave_radiation = \
+-            down_longwave_radiation.rlds.values.astype(np.float64)
++            down_longwave_radiation.values.astype(np.float64)
+ 
+         # check data dimension make sure dimensions are 360*720 for 0.5 degree
+         if precipitation.shape != basin.shape:
+@@ -331,6 +346,10 @@
+         # write out data per continental fraction
+         per_contfrac = current_landarea_frac / self.cont_frac
+ 
++        # Cache for DA: EnKF needs this to undo the scaling when injecting
++        # updated disk states back into the in-memory model state.
++        self._per_contfrac = per_contfrac
++
+         VerticalWaterBalance.storages.\
+             update({'canopystor': self.canopy_storage * per_contfrac,
+                     'swe': self.snow_water_storage * per_contfrac,

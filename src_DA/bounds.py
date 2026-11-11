@@ -211,6 +211,10 @@ class StateBounds:
 
 
 LAKE_FLOOR_ATTRS = {'locallakestor': 'max_loclake_storage', 'globallakestor': 'max_glolake_storage'}
+'''reservoirs in the DA state (DA review 260): bounds 0 .. capacity (WaterGAP keeps 0 <= S <= capacity,
+reservoir_regulated_lakes.py); capacity is the runtime glores_capacity (set on 1 January at commissioning)'''
+RES_BOUND_ATTRS = {'reservoirstor': 'glores_capacity'}
+SWB_BOUND_ATTRS = dict(LAKE_FLOOR_ATTRS, **RES_BOUND_ATTRS)
 '''the floor is set a little ABOVE WaterGAP's -max_storage: the state goes mm -> km3 when it is written back, and a
 value at exactly -max can come out a few 1e-16 below it; WaterGAP's lake balance then has
 petgwr_netabs_sw_max = S + max + inflow < 0 with petgwr_netabs_sw = 0 (lake area 0 at the floor) and divides by
@@ -220,7 +224,7 @@ LAKE_FLOOR_MARGIN = 1e-6
 
 def lake_max_mm(lateral, converter, shape, var):
     """WaterGAP's maximum storage of a lake storage in mm on the DA box (2-D, shape = the box)"""
-    km3 = np.asarray(getattr(lateral, LAKE_FLOOR_ATTRS[var]), dtype=float)
+    km3 = np.asarray(getattr(lateral, SWB_BOUND_ATTRS[var]), dtype=float)
     if km3.shape != tuple(shape):
         r0, r1, c0, c1 = converter._r0, converter._r1, converter._c0, converter._c1
         km3 = km3[r0:r1, c0:c1]
@@ -231,7 +235,8 @@ def lake_max_mm(lateral, converter, shape, var):
 def lake_floor_fields(lateral, converter, mask_2d, names):
     """
     Per-cell bounds of the lake storages in the DA state (mm, state-cell order) from WaterGAP's static maximum lake
-    storages (km3): lower = -max_storage (WaterGAP's floor), and lower = upper = 0 where max_storage = 0 (no lake).
+    storages (km3): lower = -max_storage (WaterGAP's floor), upper = +max_storage (WaterGAP spills anything above it as
+    outflow on the next day; capped since DA review 258, was +inf), and lower = upper = 0 where max_storage = 0 (no lake).
     lateral   : the member's lateral water balance (attributes max_loclake_storage / max_glolake_storage, km3, grid)
     converter : src_GHM UnitConverter of the DA box (to_disk: km3 -> mm; _r0.._c1 = box in the model grid)
     mask_2d   : basin_2d of the DA box (bool), selects the state cells
@@ -239,21 +244,22 @@ def lake_floor_fields(lateral, converter, mask_2d, names):
     """
     lower, upper = {}, {}
     mk = np.asarray(mask_2d).astype(bool)
-    for v in LAKE_FLOOR_ATTRS:
+    for v in SWB_BOUND_ATTRS:
         if v not in names:
             continue
         mm = lake_max_mm(lateral, converter, mk.shape, v)[mk]
-        lower[v] = -mm * (1.0 - LAKE_FLOOR_MARGIN)
-        upper[v] = np.where(mm > 0, np.inf, 0.0)
+        lower[v] = np.zeros_like(mm) if v in RES_BOUND_ATTRS else -mm * (1.0 - LAKE_FLOOR_MARGIN)
+        upper[v] = np.where(mm > 0, mm, 0.0)   # cap at +max (DA review 258): above +max WaterGAP spills the excess as outflow
     return lower, upper
 
 
 def lake_floor_grids(lateral, converter, shape, names):
     """the same lake bounds as 2-D boxes for src_DA.Threshold (applied to every day written back):
-    {storage: (lower, upper)}, lower = -max (1 - margin), lower = upper = 0 where the cell has no lake"""
+    {storage: (lower, upper)}, lower = -max (1 - margin), upper = +max, lower = upper = 0 where the cell has no lake"""
     out = {}
-    for v in LAKE_FLOOR_ATTRS:
+    for v in SWB_BOUND_ATTRS:
         if v in names:
             mm = lake_max_mm(lateral, converter, shape, v)
-            out[v] = (-mm * (1.0 - LAKE_FLOOR_MARGIN), np.where(mm > 0, np.inf, 0.0))
+            lo = np.zeros_like(mm) if v in RES_BOUND_ATTRS else -mm * (1.0 - LAKE_FLOOR_MARGIN)
+            out[v] = (lo, np.where(mm > 0, mm, 0.0))   # cap at +max (review 258); reservoirs 0 .. capacity (review 260)
     return out

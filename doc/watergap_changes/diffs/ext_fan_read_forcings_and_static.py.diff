@@ -1,0 +1,20 @@
+--- upstream/controller/read_forcings_and_static.py
++++ Extension/fan_read_forcings_and_static.py
+@@ -19,7 +19,7 @@
+ 
+ import numpy as np
+ from termcolor import colored
+-from controller import climateforcing_handler as cf
++from src_GHM.Extension import fan_climateforcing_handler as cf
+ from controller import staticdata_handler as sd
+ from controller import configuration_module as cm
+ 
+@@ -34,7 +34,7 @@
+         # Please see staticdata and climateforcing handlers for varibale units
+         # =====================================================================
+         self.static_data = sd.StaticData(run_calib)
+-        self.climate_forcing = cf.ClimateForcing(run_calib)
++        self.climate_forcing = cf.fan_ClimateForcing(run_calib)
+         if run_calib is False:
+             self.climate_forcing.check_unitandvarname()
+ 
