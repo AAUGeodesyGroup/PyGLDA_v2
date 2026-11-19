@@ -44,6 +44,11 @@ Options of "non_negative" (all default off):
         storages keep their own increment and take no overflow: the overflow goes to the other free elements only.
         If those have no room, the remainder is left unplaced (fallback false, it reappears in the next innovation) or
         given to the excluded storages as before (fallback true).
+        "fallback_from": ["localwetlandstor", "globalwetlandstor"] (optional sensitivity option): with fallback false, the
+        part of the unplaced POSITIVE remainder that comes from the listed storages hitting their UPPER bound (water a
+        full wetland cannot hold) goes to the excluded storages (groundwater) of the sub-basin, in proportion to their
+        shares, at most the water those storages lost to their upper bound. Everything else stays unplaced as before.
+        Absent = off.
     "seasonal_split": {"storages_slow": ["groundwstor"], "method": "lowpass", "tau_months": 12}
         keeps the fast (seasonal) part of each sub-basin's ensemble-mean increment out of the slow storages. The
         ensemble-mean increment m_j = mean_n(delta_j) is split into a slow part and a fast part c_j: "lowpass": slow =
@@ -175,14 +180,19 @@ class NonNegativePartition(Partition):
         bo = dict(bound_overflow or {})
         self.bound_overflow = None
         if bo:
-            unknown_keys = set(bo) - {'exclude', 'fallback'}
+            unknown_keys = set(bo) - {'exclude', 'fallback', 'fallback_from'}
             if unknown_keys:
                 raise ValueError('bound_overflow: unknown keys %s' % sorted(unknown_keys))
             excl = [str(v) for v in bo.get('exclude', [])]
             if not excl:
                 raise ValueError('bound_overflow needs "exclude", e.g. ["groundwstor"]')
-            self.bound_overflow = dict(exclude=excl, fallback=bool(bo.get('fallback', False)))
+            self.bound_overflow = dict(exclude=excl, fallback=bool(bo.get('fallback', False)),
+                                       fallback_from=[str(v) for v in (bo.get('fallback_from') or [])])
+            if self.bound_overflow['fallback_from'] and self.bound_overflow['fallback']:
+                raise ValueError('bound_overflow: "fallback_from" is for fallback false (with fallback true all overflow '
+                                 'already goes to the excluded storages)')
         self._bo_idx = np.zeros(0, dtype=int)   # storage indices that take no overflow (setup)
+        self._bo_from_idx = np.zeros(0, dtype=int)   # storages whose upper-bound overflow may fall back (setup)
         bs = dict(boundary_smoothing or {})
         self.boundary_smoothing = None
         if bs:
@@ -393,8 +403,13 @@ class NonNegativePartition(Partition):
             if unknown:
                 print('non_negative partition: bound_overflow exclude %s not in the DA state %s - ignored' % (unknown, names))
             self._bo_idx = np.array([names.index(v) for v in self.bound_overflow['exclude'] if v in names], dtype=int)
-            print('non_negative partition: bound overflow kept out of %s (fallback %s)'
-                  % ([names[i] for i in self._bo_idx], self.bound_overflow['fallback']))
+            self._bo_from_idx = np.array([names.index(v) for v in self.bound_overflow.get('fallback_from', [])
+                                          if v in names], dtype=int)
+            print('non_negative partition: bound overflow kept out of %s (fallback %s; upper-bound overflow of %s may '
+                  'fall back to them)' % ([names[i] for i in self._bo_idx], self.bound_overflow['fallback'],
+                                          [names[i] for i in self._bo_from_idx]))
+            self.stats.setdefault('bo_fallback_from_mm_sum', 0.0)
+            self.stats.setdefault('bo_fallback_from_n', 0)
         if isinstance(self.max_weight_ratio, dict):
             unknown = [v for v in self.max_weight_ratio if v not in f.bounds.names]
             if unknown:
@@ -888,6 +903,7 @@ class NonNegativePartition(Partition):
                         cb[nm] = cb.get(nm, 0) + int(only_cell[vi == iv].sum())
                 lo_j, hi_j = lo_c, hi_c
             dj = out[rows, :]                                 # current increments of sub-basin j (n_E x N)
+            dj0 = dj.copy() if len(self._bo_from_idx) else None   # before the bounds (fallback_from)
             fixed = np.zeros_like(dj, dtype=bool)
             frozen = np.zeros_like(dj, dtype=bool)            # bound_overflow: elements that keep their increment
             if len(self._bo_idx):
@@ -941,6 +957,22 @@ class NonNegativePartition(Partition):
                     rem = delta[j] - hj @ np.where(fixed, dj, 0.0)               # (N,)
                     scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
                     dj = np.where(fixed, dj, s[:, None] * scale[None, :])
+            if dj0 is not None and frozen.any():
+                '''fallback_from: positive remainder caused by the listed storages at their PHYSICAL upper
+                bound (a full wetland) -> the excluded storages (groundwater) of the sub-basin, by their shares, at most
+                the water the listed storages could not hold; the cell limits of the excluded storages still apply'''
+                src = np.isin(f._var_idx[rows], self._bo_from_idx)[:, None] & fixed & (np.abs(dj - ph_hi) <= 1e-9)
+                lost = hj @ np.where(src, np.maximum(dj0 - dj, 0.0), 0.0)                # (N,)
+                give = np.clip(np.minimum(delta[j] - hj @ dj, lost), 0.0, None)          # (N,)
+                sf = np.where(frozen, s[:, None], 0.0)
+                den = hj @ sf                                                            # (N,)
+                okf = (den > 1e-12) & (give > 0)
+                if okf.any():
+                    add = sf * np.where(okf, give / np.where(okf, den, 1.0), 0.0)[None, :]
+                    before = hj @ np.where(frozen, dj, 0.0)
+                    dj = np.where(frozen, np.minimum(dj + add, hi_j), dj)
+                    self.stats['bo_fallback_from_mm_sum'] += float(np.mean(hj @ np.where(frozen, dj, 0.0) - before))
+                    self.stats['bo_fallback_from_n'] += int(okf.sum())
             miss = float(np.abs(delta[j] - hj @ dj).max())                       # increment that found no room
             if frozen.any():
                 self.stats['bo_unplaced_mm_sum'] += float(np.abs(np.mean(delta[j] - hj @ dj)))
