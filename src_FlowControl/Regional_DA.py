@@ -425,14 +425,9 @@ class RDA:
         if rank == 1:
             print('step 2/2: basin-average time series of all storages -> Res/%s/%s/Ens_k/basin_ts_%s.h5' %
                   (RDA.case, stage.name, stage.name))
-        from src_DA.obs_operator import operator_config, load_contfrac_global
-        _op = operator_config(configDA)
-        _cf = None if _op is None else load_contfrac_global(_op['contfrac_file'], _op.get('contfrac_var', 'contfrac'))
-        if rank == 1 and _cf is not None:
-            print('basin-average series with the mass-consistent operator (contfrac %s)' % _op['contfrac_file'])
         analysis = BasinAverageAnalysis(
             basin_mask_path=configDA.basic.basin_mask,
-            state_dir=configDA.basic.res_permanent, stage=stage, ens_id=rank, case_name=RDA.case, contfrac=_cf)
+            state_dir=configDA.basic.res_permanent, stage=stage, ens_id=rank, case_name=RDA.case)
 
         try:
             analysis.load_nc_files(start_date=RDA.sim_begin_time, end_date=RDA.sim_end_time).\

@@ -14,9 +14,8 @@ class BasinAverageAnalysis:
     This script is for real time analysis to extract basin time series signal for each ensemble member
     """
 
-    def __init__(self, basin_mask_path, state_dir='', stage=Stage.OL, ens_id=0, case_name = '', contfrac=None):
+    def __init__(self, basin_mask_path, state_dir='', stage=Stage.OL, ens_id=0, case_name = ''):
         self.ds = None
-        self.contfrac = contfrac            # mass-consistent unit means (src_DA.obs_operator); None = cos-lat only
         self.__variable_list = None
         self.bm = h5py.File(name=basin_mask_path, mode='r')
         self.__state_dir = Path(state_dir) / case_name / stage.name / f'Ens_{ens_id}'
@@ -41,8 +40,7 @@ class BasinAverageAnalysis:
         """
         from src_auxiliary.shp2mask import unit_weights
 
-        W, keys = unit_weights(self.bm.filename, self.ds['lat'].values, self.ds['lon'].values,
-                               contfrac=getattr(self, 'contfrac', None))
+        W, keys = unit_weights(self.bm.filename, self.ds['lat'].values, self.ds['lon'].values)
 
         '''reading the blocks through the multi-file dataset would grow the memory of every rank with the number
         of yearly files (the decompressed chunks of all open files are kept). Therefore every yearly file is opened
