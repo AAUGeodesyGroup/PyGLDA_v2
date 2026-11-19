@@ -408,7 +408,7 @@ def load_mask(mask_path: dir):
     return box_crop, local_mask
 
 
-def unit_weights(mask_path, lat, lon, include_basin=True):
+def unit_weights(mask_path, lat, lon, include_basin=True, contfrac=None):
     """
     Sparse averaging matrix of a basin mask on the grid (lat, lon) of a 0.5-degree file: one row per key ('basin' first
     if include_basin, then 'sub_basin_1', 'sub_basin_2', ...), cos(lat) weights of the key's cells normalised to 1, so
@@ -416,6 +416,9 @@ def unit_weights(mask_path, lat, lon, include_basin=True):
     for a time series). The file grid may be the global grid or a box cropped from it (the regional daily output); a key
     without a cell on the grid gets an all-zero row. A NaN cell inside a key gives NaN for that key, as a plain mean would.
     Used by statistical_analysis.BasinAverageAnalysis (regional) and Global_DA.collect_and_statistics (global).
+    contfrac: optional continental fraction 0..1 on the global 0.5-degree grid (360 x 720, src_DA.obs_operator):
+    mass-consistent unit means, weights cos(lat) * cf / sum cos(lat) (not re-normalised), the same operator as the
+    filter's design matrix. None = the default cos(lat) weights.
     returns W (scipy.sparse.csr_matrix, n_key x n_lat*n_lon), keys (list)
     """
     from scipy import sparse
@@ -435,7 +438,10 @@ def unit_weights(mask_path, lat, lon, include_basin=True):
             w = np.cos(np.deg2rad(lat[ii]))
             rows.append(np.full(len(ii), r))
             cols.append(ii * len(lon) + jj)
-            vals.append(w / w.sum())
+            wn = w / w.sum()
+            if contfrac is not None:
+                wn = wn * np.asarray(contfrac, dtype=float)[i[ii], j[jj]]
+            vals.append(wn)
     if rows:
         rows, cols, vals = np.concatenate(rows), np.concatenate(cols), np.concatenate(vals)
     W = sparse.csr_matrix((vals, (rows, cols)), shape=(len(keys), len(lat) * len(lon)))

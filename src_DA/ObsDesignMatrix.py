@@ -71,7 +71,7 @@ class DM_basin_average:
 
         return self
 
-    def horizontal_aggregation(self):
+    def horizontal_aggregation(self, cell_factor=None):
         """
         design matrix H [n_sub_basin x n_cell * vertical_dim] of the sub-basin means: row i holds, for every cell of
         sub-basin i and every vertical layer, the cos(lat) weight of the cell normalised over the sub-basin (the
@@ -79,17 +79,26 @@ class DM_basin_average:
         non-zero per state element of the sub-basins and is stored as scipy.sparse CSR: a dense matrix of the
         global case (772 x 166 383 for 3 layers, 772 x 388 227 for the 7 excluded layers) would take 1 + 2.4 GB on
         every MPI rank; the sparse one is a few MB.
+        cell_factor: optional (n_cell,) continental fraction 0..1 of every cell (src_DA.obs_operator, mass-consistent
+        operator): the weights become cos(lat) * cf / sum cos(lat), NOT re-normalised, because the model storages are
+        mm per continental area while GRACE is mm per whole cell. None = the default cos(lat) operator.
         """
         sub_basin_num = self.local_mask['basin_num']
         N = self.vertical_dim
         n_cell = len(self.local_mask['lat'])
         lat_cos = np.cos(np.deg2rad(self.local_mask['lat']))
+        if cell_factor is not None:
+            cell_factor = np.asarray(cell_factor, dtype=float).ravel()
+            if cell_factor.size != n_cell:
+                raise ValueError('horizontal_aggregation: cell_factor has %d values for %d cells' % (cell_factor.size, n_cell))
 
         rows, cols, vals = [], [], []
         for i in range(1, sub_basin_num + 1):
             '''cells of the sub-basin and their normalised area weights'''
             idx = np.flatnonzero(self.local_mask['sub_basin_%s' % i])
             w = lat_cos[idx] / np.sum(lat_cos[idx])
+            if cell_factor is not None:
+                w = w * cell_factor[idx]                 # mass-consistent: not re-normalised
             '''the same weight for every vertical layer of the cell'''
             rows.append(np.full(idx.size * N, i - 1))
             cols.append((idx[:, None] * N + np.arange(N)[None, :]).ravel())

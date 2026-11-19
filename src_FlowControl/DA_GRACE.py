@@ -235,15 +235,23 @@ class DA_GRACE:
                                    force=force, comm=comm, monthly=monthly)
 
     def prepare_design_matrix(self):
+        '''mass-consistent operator ("obs": {"operator": {...}}, src_DA.obs_operator; absent = the default cos(lat) weights)'''
+        from src_DA.obs_operator import operator_config, load_contfrac_global, cell_factor_for_state, describe
+        op = operator_config(self.configDA)
         dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)
         dm.configure_mask(mask_path=self.configDA.basic.basin_mask)
-        dm.vertical_aggregation().horizontal_aggregation()
+        cf = None
+        if op is not None:
+            cf = cell_factor_for_state(load_contfrac_global(op['contfrac_file'], op.get('contfrac_var', 'contfrac')),
+                                       dm.local_mask)
+            print(describe(cf))
+        dm.vertical_aggregation().horizontal_aggregation(cell_factor=cf)
         self.dm_included = dm
 
         dm2 = DM_basin_average(layer=self.configDA.model.layer, is_residual=True)
 
         dm2.configure_mask(mask_path=self.configDA.basic.basin_mask)
-        dm2.vertical_aggregation().horizontal_aggregation()
+        dm2.vertical_aggregation().horizontal_aggregation(cell_factor=cf)
         self.dm_excluded = dm2
         pass
 
