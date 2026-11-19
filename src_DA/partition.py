@@ -28,6 +28,16 @@ Options of "non_negative" (all default off):
         keep their ensemble weights. GRACE sees only the sum; the ensemble's soil / groundwater covariance follows how
         the inflation noise is split rather than where the model's seasonal error is, so the model's own seasonal
         partition is the better prior. H dX = delta is unchanged.
+        "residence": {"tau_ref_days": 30} (optional sensitivity option, default off) weights each group storage's amplitude share by how
+        long that storage keeps water in the open loop of the sub-basin: s_vj ~ amp_vj * tau_vj / (tau_vj + tau_ref),
+        tau_vj = e-folding time (days) of the deseasonalised daily ensemble-mean unit series, -1 / ln(rho_1) from its
+        lag-1 autocorrelation (calendar-day climatology removed; clipped to [tau_min_days, tau_max_days], default
+        [0.5, 3650]; over a few years long times are biased low, e.g. 400 d read as ~150-250 d, which hardly changes
+        the factor of slow stores). Storages that drain within days (small and medium rivers) get a small share, storages that hold
+        water for months (soil, wetlands, floodplains, large rivers) keep theirs. Put "riverstor" into "storages" for
+        the river to be weighted at all (otherwise its share follows the ensemble weights). Writes
+        <res_permanent>/<case>/storage_shares_residence.csv (tau and factor per sub-basin and storage). Motivation:
+        the DA's river increments leave the cell within the month and widen the discharge variability.
     "boundary_smoothing": {"storages": ["groundwstor"], "length_km": 50, "n_iter": 10, "alpha": 1.0, "cutoff": 2.0}
         with one observation per sub-basin the increment field is built inside every sub-basin from that sub-basin's
         increment alone and steps at sub-basin boundaries. Mass-preserving (pycnophylactic, Tobler 1979) smoothing of
@@ -232,7 +242,7 @@ class NonNegativePartition(Partition):
         ss = dict(storage_shares or {})
         self.storage_shares = None
         if ss:
-            unknown_keys = set(ss) - {'storages', 'mix'}
+            unknown_keys = set(ss) - {'storages', 'mix', 'residence'}
             if unknown_keys:
                 raise ValueError('storage_shares: unknown keys %s' % sorted(unknown_keys))
             mix = float(ss.get('mix', 1.0))
@@ -241,9 +251,21 @@ class NonNegativePartition(Partition):
             sto = [str(v) for v in ss.get('storages', ['soilmoist', 'groundwstor'])]
             if len(sto) < 2:
                 raise ValueError('storage_shares needs at least two storages, got %s' % sto)
-            self.storage_shares = dict(storages=sto, mix=mix)
+            rs = ss.get('residence')
+            if rs:
+                rs = dict(rs)
+                bad_k = set(rs) - {'tau_ref_days', 'tau_min_days', 'tau_max_days'}
+                if bad_k:
+                    raise ValueError('storage_shares residence: unknown keys %s' % sorted(bad_k))
+                rs = dict(tau_ref_days=float(rs.get('tau_ref_days', 30.0)), tau_min_days=float(rs.get('tau_min_days', 0.5)),
+                          tau_max_days=float(rs.get('tau_max_days', 3650.0)))
+                if not (rs['tau_ref_days'] > 0 and 0 < rs['tau_min_days'] < rs['tau_max_days']):
+                    raise ValueError('storage_shares residence needs tau_ref_days > 0 and 0 < tau_min_days < '
+                                     'tau_max_days, got %s' % rs)
+            self.storage_shares = dict(storages=sto, mix=mix, residence=rs or None)
         self._ss_idx = []                   # storage indices of the group
         self._ss_table = None               # (n_obs, n_group) open-loop amplitude shares within the group
+        self._ss_tau = None                 # (n_obs, n_group) open-loop residence times [d] (residence option)
         self.spatial_blend = {str(v): float(b) for v, b in (spatial_blend or {}).items() if b}
         bad_b = {v: b for v, b in self.spatial_blend.items() if not 0.0 < b <= 1.0}
         if bad_b:
@@ -678,6 +700,24 @@ class NonNegativePartition(Partition):
         src = Path(b.res_permanent) / b.case / 'Res_OL.h5'
         n_obs = f._L_state.shape[1]
         amp = seasonal_amplitude_table(src, sto, n_obs)                         # (n_obs, n_group) mm
+        rs = self.storage_shares.get('residence')
+        if rs:
+            tau = residence_time_table(src, sto, n_obs, tau_min=rs['tau_min_days'], tau_max=rs['tau_max_days'])
+            fac = tau / (tau + rs['tau_ref_days'])
+            amp = amp * fac
+            self._ss_tau = tau
+            try:
+                out = Path(b.res_permanent) / b.case / 'storage_shares_residence.csv'
+                with open(out, 'w') as fh:
+                    fh.write('sub_basin,' + ','.join('tau_days_%s,factor_%s' % (v, v) for v in sto) + '\n')
+                    for j in range(n_obs):
+                        fh.write('%d,' % (j + 1) + ','.join('%.3f,%.4f' % (tau[j, k], fac[j, k])
+                                                             for k in range(len(sto))) + '\n')
+            except OSError as err:
+                print('non_negative partition: could not write %s (%s)' % (out, err))
+            print('non_negative partition: residence weighting tau_ref %.1f d; median tau (d) %s, median factor %s'
+                  % (rs['tau_ref_days'], {v: round(float(np.median(tau[:, k])), 1) for k, v in enumerate(sto)},
+                     {v: round(float(np.median(fac[:, k])), 3) for k, v in enumerate(sto)}))
         for k, v in enumerate(sto):                                             # unit_storage_mask
             if v in self._um_flag:
                 amp[~self._um_flag[v], k] = 0.0
@@ -1085,6 +1125,57 @@ def seasonal_amplitude_table(path, storages, n_sub):
                 clim = np.array([np.nanmean(x[mon == k]) for k in range(1, 13) if (mon == k).any()])
                 out[j, i] = float(np.nanstd(clim)) if len(clim) > 1 else 0.0
     return np.nan_to_num(np.maximum(out, 0.0))
+
+
+def residence_time_table(path, storages, n_sub, tau_min=0.5, tau_max=3650.0):
+    """
+    E-folding time (days) per sub-basin and storage of the open loop's deseasonalised daily ensemble-mean unit
+    series (Res_OL.h5, members as in seasonal_amplitude_table): anomaly = series - its calendar-day mean (day of year
+    1..366), tau = -1 / ln(rho_1) with rho_1 its lag-1 autocorrelation, clipped to [tau_min, tau_max]. A storage
+    missing in the file or without variance gets tau = 0 (its amplitude is 0 there as well). Returns (n_sub, n_storage).
+    """
+    import h5py, datetime as dt
+    from pathlib import Path
+    if not Path(path).exists():
+        raise FileNotFoundError('storage_shares residence needs the open-loop basin series %s' % path)
+    out = np.zeros((n_sub, len(storages)))
+    with h5py.File(path, 'r') as h:
+        t = h['time'][:]
+
+        def doy_of(x):
+            y = int(x)
+            n = (dt.date(y + 1, 1, 1) - dt.date(y, 1, 1)).days
+            return min(int(round((x - y) * n)), n - 1) + 1
+        doy = np.array([doy_of(x) for x in t])
+        for j in range(n_sub):
+            for i, v in enumerate(storages):
+                key = 'sub_basin_%d/%s' % (j + 1, v)
+                if key not in h:
+                    continue
+                mem = [m for m in h[key] if m != '0'] or list(h[key])
+                x = np.mean([h[key][m][:] for m in mem], axis=0).astype(float)
+                ok = np.isfinite(x)
+                if ok.sum() < 30:
+                    continue
+                clim = np.zeros(367)
+                for d in np.unique(doy[ok]):
+                    clim[d] = np.mean(x[ok & (doy == d)])
+                a = np.where(ok, x - clim[doy], np.nan)
+                a0, a1 = a[:-1], a[1:]
+                k = np.isfinite(a0) & np.isfinite(a1)
+                if k.sum() < 30 or np.std(a0[k]) == 0 or np.std(a1[k]) == 0:
+                    continue
+                rho = float(np.corrcoef(a0[k], a1[k])[0, 1])
+                if not np.isfinite(rho):
+                    continue
+                if rho <= np.exp(-1.0 / tau_min):
+                    tau = tau_min
+                elif rho >= np.exp(-1.0 / tau_max):
+                    tau = tau_max
+                else:
+                    tau = -1.0 / np.log(rho)
+                out[j, i] = tau
+    return out
 
 
 PARTITIONS = {c.KIND: c for c in (EnKFPartition, NonNegativePartition)}
