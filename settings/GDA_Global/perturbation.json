@@ -2,8 +2,8 @@
     "ensemble": 30,
     "seed": 2026,
     "dir": {
-        "in": "/work/PyGLDA_v2_external_data/Input_data",
-        "out": "/work/PyGLDA_v2_external_data/Ensemble_input"
+        "in": "${DATA_ROOT}/Input_data",
+        "out": "${DATA_ROOT}/Ensemble_input"
     },
     "correlation": {
         "forcing": {
