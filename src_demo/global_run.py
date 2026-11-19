@@ -20,7 +20,9 @@ sys.path.insert(0, str(CODE_ROOT))
 from src_FlowControl.Global_DA import GDA
 from src_DA.EnumDA import Stage
 
-DATA_ROOT = os.environ.get('PYGLDA_DATA', '/work/PyGLDA_v2_external_data')
+DATA_ROOT = os.environ.get('PYGLDA_DATA')
+if not DATA_ROOT:
+    sys.exit('set the environment variable PYGLDA_DATA to the data root (see doc/installation.md)')
 
 GDA.case = 'GDA_Global'
 GDA.basin = 'GlobalBasins_v2.0'

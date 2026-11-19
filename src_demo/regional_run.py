@@ -25,7 +25,9 @@ sys.path.insert(0, str(CODE_ROOT))
 from src_FlowControl.Regional_DA import RDA
 from src_DA.EnumDA import Stage
 
-DATA_ROOT = os.environ.get('PYGLDA_DATA', '/work/PyGLDA_v2_external_data')
+DATA_ROOT = os.environ.get('PYGLDA_DATA')
+if not DATA_ROOT:
+    sys.exit('set the environment variable PYGLDA_DATA to the data root (see doc/installation.md)')
 
 CASES = {'Danube': dict(case='RDA_Danube', basin='Danube', shp='Basin/shp/Danube/Danube.shp'),
          'Amazon': dict(case='RDA_Amazon', basin='Amazon', shp='Basin/shp/Amazon/Amazon.shp')}

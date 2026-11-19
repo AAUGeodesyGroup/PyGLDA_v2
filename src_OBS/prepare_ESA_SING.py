@@ -66,7 +66,7 @@ class ESA_SING_5daily(GRACE_preparation):
 
         '''load basin mask'''
         res = 0.5
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         basins_num = len(list(mf.keys())) - 1
 
         '''load EWH'''
@@ -115,7 +115,7 @@ class ESA_SING_5daily(GRACE_preparation):
 
         '''load basin mask'''
         res = 0.5
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
 
         '''load EWH'''
         name = Path(dir_in) / 'gravity_signal_cov' / ('%s_%s_Danube_v5.hdf5' % (
@@ -163,7 +163,7 @@ class ESA_SING_5daily(GRACE_preparation):
 
         '''load mask'''
         res = 0.5
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         mask = mf['basin'][:] * self._05deg_mask
 
         '''load EWH'''
@@ -243,7 +243,7 @@ class ESA_SING_ESM2(GRACE_preparation):
 
         '''load basin mask'''
         res = 1
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         basins_num = len(list(mf.keys())) - 1
 
         '''load EWH'''
@@ -310,7 +310,7 @@ class ESA_SING_ESM2(GRACE_preparation):
 
         '''load basin mask'''
         res = 1
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         basins_num = len(list(mf.keys())) - 1
 
         '''load EWH'''
@@ -379,7 +379,7 @@ class ESA_SING_ESM2(GRACE_preparation):
 
         '''load basin mask'''
         res = 1
-        mf = h5py.File('../data/basin/mask/%s_res_%s.h5' % (self.basin_name, res), 'r')
+        mf = h5py.File(Path(getattr(self, 'save_mask_dir', '../data/basin/mask')) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         mask = mf['basin'][:] * self._1deg_mask
 
         '''load EWH'''
