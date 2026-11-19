@@ -68,13 +68,6 @@ Options of "non_negative" (all default off):
         (0 = no split, i.e. the standard partition; 1 = full split). The climatology / low-pass state still learns
         from the full m_j. One knob between U2-like (0) and the full split (1) for the configuration choice
         (DA review 194, 2 Nov 2026).
-        "interannual" {"tau_months": 36, "fraction": 1}: optional second split of the remainder r_j = m_j - c_j (the
-        non-seasonal part, full c_j before "fraction"). A recursive low-pass s_j of r_j over the windows (time constant
-        tau_months, neutral start s_j = first r_j) is the slow part that the slow storages keep; b_j = fraction (r_j - s_j),
-        the 1-3-year part and noise, also bypasses them: c_j -> c_j + b_j. Motivation: v1.1 gw loses skill at wells in
-        the 13-36-month band and in the low-flow test while its trend and > 36-month skill improve, and gw increments
-        persist (DA reviews 218 / 221, 4 Nov 2026). With "save" the low-pass state is written with the climatology
-        ("ia_lp"), and "init" loads it when present. Absent = previous behaviour, bit-identical.
     "hotspot_redistribution": {"field": "<npz with pnag_mm_yr (360 x 720, global grid, row 0 = 89.75 N)>",
                                "threshold_mm_yr": 50, "p_ref_mm_yr": 20, "fraction": 1.0}
         (review 296; absent = previous behaviour, bit-identical). Last step of the partition, groundwater only. In a
@@ -164,8 +157,7 @@ class NonNegativePartition(Partition):
         sp = dict(seasonal_split or {})
         self.seasonal_split = None
         if sp:
-            unknown_keys = set(sp) - {'storages_slow', 'method', 'tau_months', 'memory_years', 'init', 'save', 'fraction',
-                                      'interannual'}
+            unknown_keys = set(sp) - {'storages_slow', 'method', 'tau_months', 'memory_years', 'init', 'save', 'fraction'}
             if unknown_keys:
                 raise ValueError('seasonal_split: unknown keys %s' % sorted(unknown_keys))
             meth = str(sp.get('method', 'lowpass')).lower()
@@ -183,22 +175,10 @@ class NonNegativePartition(Partition):
                                        method=meth, tau_months=tau, memory_years=mem,
                                        init=str(sp['init']) if sp.get('init') else None,
                                        save=str(sp['save']) if sp.get('save') else None, fraction=frac)
-            ia = sp.get('interannual')
-            if ia:
-                ia = dict(ia)
-                bad_k = set(ia) - {'tau_months', 'fraction'}
-                if bad_k:
-                    raise ValueError('seasonal_split interannual: unknown keys %s' % sorted(bad_k))
-                ia = dict(tau_months=float(ia.get('tau_months', 36.0)), fraction=float(ia.get('fraction', 1.0)))
-                if ia['tau_months'] < 2.0 or not 0.0 <= ia['fraction'] <= 1.0:
-                    raise ValueError('seasonal_split interannual needs tau_months >= 2 and 0 <= fraction <= 1, got %s'
-                                     % ia)
-                self.seasonal_split['interannual'] = ia
         self._sp_idx = np.zeros(0, dtype=int)   # slow storage indices (setup)
         self._sp_lp = None                      # lowpass state (n_obs,)
         self._sp_clim = None                    # climatology state (n_obs, 12) and visit counts (12,)
         self._sp_cnt = np.zeros(12)
-        self._sp_ia = None                      # interannual low-pass state of the non-seasonal remainder (n_obs,)
         bo = dict(bound_overflow or {})
         self.bound_overflow = None
         if bo:
@@ -283,8 +263,6 @@ class NonNegativePartition(Partition):
                           bs_moved_mm_sum=0.0, bound_overflow=self.bound_overflow, bo_unplaced_mm_sum=0.0,
                           bo_n_fallback=0, seasonal_split=self.seasonal_split, sp_n=0, sp_fast_abs_sum=0.0,
                           sp_mean_abs_sum=0.0, sp_n_obs_no_fast_share=0)
-        if self.seasonal_split is not None and self.seasonal_split.get('interannual'):
-            self.stats['sp_ia_abs_sum'] = 0.0   # sum |b_j|: the non-seasonal part kept out of the slow storages
 
     def _ratio(self, var):
         """cap for one storage (None = not capped)"""
@@ -604,10 +582,7 @@ class NonNegativePartition(Partition):
             a = max(r / self._sp_cnt[month], per_window(1.0 / sp['memory_years'], r))
         self._sp_clim[:, month] += a * (m - self._sp_clim[:, month])
         if sp.get('save'):
-            if sp.get('interannual') and self._sp_ia is not None:
-                np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
-            else:
-                np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt)
+            np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt)
         seen = self._sp_cnt > 0
         return self._sp_clim[:, month] - self._sp_clim[:, seen].mean(1)
 
@@ -620,11 +595,6 @@ class NonNegativePartition(Partition):
                              % (path, clim.shape, cnt.shape, n_obs))
         self._sp_clim = clim.copy()
         self._sp_cnt = np.where(cnt > 0, np.maximum(cnt, self.seasonal_split['memory_years']), 0.0)
-        if self.seasonal_split.get('interannual') and 'ia_lp' in z.files:
-            ia = np.asarray(z['ia_lp'], dtype=float)
-            if ia.shape == (n_obs,):
-                self._sp_ia = ia.copy()
-                print('non_negative partition: seasonal_split interannual low-pass started from %s' % path)
         self.stats['sp_init'] = dict(path=str(path), months_known=int((cnt > 0).sum()))
         print('non_negative partition: seasonal_split climatology started from %s (%d months known)'
               % (path, int((cnt > 0).sum())))
@@ -633,25 +603,7 @@ class NonNegativePartition(Partition):
         """dX = S (delta - c) + S_fast c, see seasonal_split"""
         f = self.f
         m = np.mean(delta, 1)
-        ia = self.seasonal_split.get('interannual')
-        if ia:
-            cfull = self._fast_part(m)
-            c = self.seasonal_split['fraction'] * cfull
-            r = m - cfull                                               # non-seasonal remainder
-            if self._sp_ia is None:
-                self._sp_ia = r.copy()                                  # neutral start: b = 0
-            else:
-                from src_DA.window_scaling import window_ratio, per_window
-                q = window_ratio(f)                                     # None: window_scaling off (as before)
-                self._sp_ia = self._sp_ia + (r - self._sp_ia) * (1.0 / ia['tau_months'] if q is None
-                                                                  else per_window(1.0 / ia['tau_months'], q))
-            b = ia['fraction'] * (r - self._sp_ia)
-            self.stats['sp_ia_abs_sum'] += float(np.abs(b).sum())
-            if self.seasonal_split.get('save') and self._sp_clim is not None:
-                np.savez(self.seasonal_split['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
-            c = c + b
-        else:
-            c = self.seasonal_split['fraction'] * self._fast_part(m)
+        c = self.seasonal_split['fraction'] * self._fast_part(m)
         slow = np.isin(f._var_idx, self._sp_idx).astype(float)
         Sf = sparse.csc_matrix(S.multiply((1.0 - slow)[:, None]))
         hs = f._DM(states=Sf).diagonal().copy()
