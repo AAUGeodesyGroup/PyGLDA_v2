@@ -4,7 +4,7 @@ Optional scaling of the per-window constants of the filter by the length of the 
 
 Several settings act once per analysis window and were tuned for monthly windows: the adaptive additive inflation
 (weight_current, bias_memory, min_sigma) and the seasonal split of the non-negative partition (climatology counts /
-memory_years, lowpass tau_months). With 5-day windows they would act about six times per month. With
+memory_years, lowpass and interannual tau_months). With 5-day windows they would act about six times per month. With
 window_scaling on, a window of n days counts as r = n / reference_days "reference windows":
     rate per window      a  ->  1 - (1 - a)^r         (weight_current, bias_memory, 1/tau_months, 1/memory_years)
     variance floor       min_sigma -> min_sigma * sqrt(r)   (white additive noise accumulates with the number of windows)
