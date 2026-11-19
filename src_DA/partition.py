@@ -237,8 +237,6 @@ class NonNegativePartition(Partition):
         self._sp_clim = None                    # climatology state (n_obs, 12) and visit counts (12,)
         self._sp_cnt = np.zeros(12)
         self._sp_ia = None                      # interannual low-pass state of the non-seasonal remainder (n_obs,)
-        self._fast_offset = None                # (n_obs,) set by the filter for one update: added to the sub-basin
-                                                # increment through the fast storages only (innovation_bias "fast_only")
         bo = dict(bound_overflow or {})
         self.bound_overflow = None
         if bo:
@@ -666,15 +664,9 @@ class NonNegativePartition(Partition):
         S = (W @ sparse.diags(scale)).tocsc()                                      # normalised shares, H S = I (block)
         if self.storage_shares is not None:
             S = self._storage_share_mix(S, L, X)                                   # also the shares used by the bounds
-        off, self._fast_offset = self._fast_offset, None                           # one update only
         if self.seasonal_split is not None and len(self._sp_idx):
-            dX_new = self._seasonal_split(S, delta, off)
-            if off is not None:
-                '''the sub-basin totals now include the fast-only offset; the bounds and smoothing preserve these'''
-                delta = delta + off[:, None]
+            dX_new = self._seasonal_split(S, delta)
         else:
-            if off is not None:
-                raise ValueError('partition: a fast-only offset (innovation_bias "fast_only") needs seasonal_split')
             dX_new = np.asarray(S @ delta)                                         # n_state x N
 
         if self._pt:
@@ -756,9 +748,8 @@ class NonNegativePartition(Partition):
         print('non_negative partition: seasonal_split climatology started from %s (%d months known)'
               % (path, int((cnt > 0).sum())))
 
-    def _seasonal_split(self, S, delta, offset=None):
-        """dX = S (delta - c) + S_fast (c + offset), see seasonal_split; offset (n_obs,) or None: an extra sub-basin
-        increment placed in the fast storages only, the same for every member (innovation_bias "fast_only")"""
+    def _seasonal_split(self, S, delta):
+        """dX = S (delta - c) + S_fast c, see seasonal_split"""
         f = self.f
         m = np.mean(delta, 1)
         ia = self.seasonal_split.get('interannual')
@@ -790,12 +781,6 @@ class NonNegativePartition(Partition):
         self.stats['sp_n'] += 1
         self.stats['sp_fast_abs_sum'] += float(np.abs(c).sum())
         self.stats['sp_mean_abs_sum'] += float(np.abs(m).sum())
-        if offset is not None:
-            o = np.where(okf, np.asarray(offset, dtype=float), 0.0)
-            self.stats['fast_offset_sum'] = self.stats.get('fast_offset_sum', 0.0) + float(o.sum())
-            self.stats['fast_offset_unplaced_sum'] = (self.stats.get('fast_offset_unplaced_sum', 0.0)
-                                                      + float(np.abs(np.asarray(offset) - o).sum()))
-            return np.asarray(S @ (delta - c[:, None])) + np.asarray(Sf @ (c + o))[:, None]
         return np.asarray(S @ (delta - c[:, None])) + np.asarray(Sf @ c)[:, None]
 
     def _setup_storage_shares(self, f):
