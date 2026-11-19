@@ -17,10 +17,8 @@ import numpy as np
 import h5py
 import netCDF4 as nc
 from src_OBS.prepare_GRACE import GRACE_preparation
-from src_auxiliary.GeoMathKit import GeoMathKit
-import os
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 
 from src_OBS.obs_auxiliary import aux_ESAsing_5daily, aux_ESM3_5daily

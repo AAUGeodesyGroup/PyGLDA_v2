@@ -2,7 +2,6 @@ from src_DA.EnumDA import WaterGap_storage_variables
 from src_auxiliary.shp2mask import load_mask
 import numpy as np
 from scipy import sparse
-from scipy.linalg import block_diag
 import h5py
 from pathlib import Path
 import xarray as xr

@@ -25,7 +25,6 @@ import pandas as pd
 import h5py
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 
 CODE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CODE_ROOT))

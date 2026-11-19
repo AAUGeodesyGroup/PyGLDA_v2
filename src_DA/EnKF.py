@@ -9,7 +9,6 @@ from mpi4py import MPI
 from datetime import datetime
 
 from src_DA.Threshold import model_state_threshold
-from src_DA.EnumDA import WaterGap_storage_variables
 
 
 class EnKF:
@@ -282,7 +281,7 @@ class EnKF:
         """
         parallelized running with MPI4py
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         '''main process'''
         main_thread = 1

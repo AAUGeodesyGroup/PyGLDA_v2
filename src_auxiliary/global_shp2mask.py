@@ -35,7 +35,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src_auxiliary.shp2mask import basin_shp_process, load_mask, mask_05_to_1
+from src_auxiliary.shp2mask import basin_shp_process
 
 
 class global_shp_process(basin_shp_process):

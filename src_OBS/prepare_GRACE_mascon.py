@@ -4,7 +4,6 @@ import h5py
 import netCDF4 as nc
 from src_OBS.prepare_GRACE import GRACE_preparation
 from src_auxiliary.GeoMathKit import GeoMathKit
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from src_OBS.obs_auxiliary import aux_GRACE_mascon_monthly

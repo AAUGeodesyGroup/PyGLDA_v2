@@ -74,9 +74,6 @@ class config_DA:
         # 3. Safely dump the dictionary into a new JSON file
         save_path = Path(save_path)
 
-        # Automatically create the parent directory if it does not exist
-        # save_path.parent.mkdir(parents=True, exist_ok=True)
-
         with open(save_path, 'w') as f:
             json.dump(out_dict, f, indent=4)
 

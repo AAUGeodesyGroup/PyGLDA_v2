@@ -16,7 +16,6 @@ Written once and kept permanently under GRACE/global_mask of the external data:
     watergap_land_mask(continental_area_nc=<external_data>/Input_data/static_input/watergap_22e_continentalarea.nc,
                        out_dir=<external_data>/GRACE/global_mask)
 """
-import sys
 from pathlib import Path
 import numpy as np
 import h5py

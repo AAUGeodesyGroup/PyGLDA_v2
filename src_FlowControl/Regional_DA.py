@@ -1,7 +1,7 @@
 from src_auxiliary.banner import print_pyglda_banner
 from src_DA.EnumDA import Stage
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def _abort_with_report(comm, rank, stage):

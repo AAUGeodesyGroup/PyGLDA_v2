@@ -8,11 +8,10 @@ here).
 """
 import numpy as np
 from enum import Enum
-import json
 from pathlib import Path
 import xarray as xr
 
-from src_DA.perturbation_par import perturbation_base, error_distribution, DOELL2024
+from src_DA.perturbation_par import perturbation_base, error_distribution
 
 
 class perturb_method(Enum):
