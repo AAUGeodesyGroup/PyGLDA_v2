@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from src_DA.configure_DA import config_DA
+from src_DA.configure_DA import config_DA, grace_option
 from src_DA.ObsDesignMatrix import DM_basin_average
 import h5py
 import numpy as np
@@ -203,8 +203,7 @@ class DA_GRACE:
             '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
             return aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
-                                                     filename=configDA.obs.GRACE.get(
-                                                         'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
+                                                     filename=grace_option(configDA.obs.GRACE, 'ewh_file'))
         raise ValueError('unknown observation kind %s (Mascon_monthly | TUD_5daily)' % kind)
 
     def make_state_envelope(self, variables=None, force=False, comm=None):
