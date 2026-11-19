@@ -13,6 +13,8 @@ Builds the localized EnKF from the "method" block of DA_setting.json (used by sr
         "soil_upper_bound": true | false        (soil <= smax inside the bound-aware partition; default true)
         "soil_daily_bounds": false | true       (every day of the window within the soil bounds; src_DA.EnKF)
         "increment_release": {"storages": ["riverstor"], "days": 10}   (src_DA.EnKF; default off)
+        "innovation_bias": {"tau_months": 36, "fraction": 1.0}   (src_DA.EnKF_localized; default off: bias-aware
+                                                 reference, the running mean innovation per sub-basin is removed)
         "snow_bounds": {"lower_factor": 0.5,                          snow >= f x forecast
                         "upper_factor": 2.0, "upper_offset_mm": 20,   snow <= f x forecast + o
                         "envelope_factor": 1.5, "envelope_offset_mm": 10}
@@ -53,6 +55,9 @@ def build_filter(configDA, model, obs, sv, sv_excluded):
               obs_perturbation_centering=getattr(m, 'obs_perturbation_centering', False),
               soil_upper_bound=getattr(m, 'soil_upper_bound', True),
               snow_bounds=snow_bounds(m))
+    ib = getattr(m, 'innovation_bias', None)
+    if ib:
+        kw['innovation_bias'] = ib
     name = fusion_method_name(m)
     if name == 'LETKF':
         from src_DA.LETKF import LETKF_localized

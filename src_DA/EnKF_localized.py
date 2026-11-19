@@ -40,7 +40,8 @@ class EnKF_localized(EnKF):
     def __init__(self, DA_setting: config_DA, model: model_run_daily, obs: GRACE_obs, sv: EnsStates,
                  sv_excluded: EnsStates, localization: Localization = None, inflation: Inflation = None,
                  partition: Partition = None, obs_error_inflation=None, obs_error_correlation: str = 'full',
-                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_bounds: dict = None):
+                 obs_perturbation_centering: bool = False, soil_upper_bound: bool = True, snow_bounds: dict = None,
+                 innovation_bias: dict = None):
         super().__init__(DA_setting, model, obs, sv, sv_excluded)
         self.localization = localization or BlockLocalization()
         self.inflation = inflation or NoInflation()
@@ -153,6 +154,11 @@ class EnKF_localized(EnKF):
         self._n_obs_centered = 0
         self._obs_mean_shift_rms = []
 
+        # bias-aware reference (optional "innovation_bias", sensitivity option; absent / null = off): the systematic
+        # part of the forecast-minus-GRACE misfit of every sub-basin is estimated from past innovations and removed
+        # from the member observations before the analysis (Dee & da Silva 1998), see _bias_reference
+        self._ib = self._innovation_bias_config(innovation_bias, n_obs)
+
         '''reservoirs in the state during their filling years ("reservoir_state", sensitivity option; absent = off):
         reservoir cells outside their filling window are moved to the observation side in every
         analysis, exactly as in the subtraction runs, see src_DA.reservoir_state'''
@@ -239,6 +245,8 @@ class EnKF_localized(EnKF):
             obs, R = self._decorrelate(obs, obs_cov, R)
         if self._obs_centering:
             obs = self._center_perturbations(obs)
+        if self._ib is not None:
+            obs = self._bias_reference(obs, ens_states)
         scale = getattr(self, '_ens_soil_scale', None)
         upper_scale = {'soilmoist': scale} if (self._soil_upper_bound and scale is not None and
                                                np.shape(scale) == (ens_states.shape[0] // len(self.bounds.names),
@@ -279,6 +287,8 @@ class EnKF_localized(EnKF):
 
         HX = self._DM(states=X)
         HA = HX - np.mean(HX, 1)[:, None]
+        if self._ib is not None and self._ib['mode'] == 'fast_only':
+            self.partition._fast_offset = self._fast_only_offset(HA, R, N)
         dX = self.analysis_increment(X, A, HX, HA, obs, R, N)
 
         dX = self.partition.split(dX, A, HA, N, X)
@@ -303,6 +313,94 @@ class EnKF_localized(EnKF):
         Pxy = self.tapered_cross_cov(A, HA, N)                                    # localized cross-covariance (sparse)
         '''K (obs - HX) with K = Pxy Pyy^-1, without forming the n_state x n_obs gain'''
         return Pxy @ np.linalg.solve(Pyy, obs - HX)
+
+    # ------------------------------------------------------------------ bias-aware reference
+    @staticmethod
+    def _innovation_bias_config(cfg, n_obs):
+        """
+        "innovation_bias": {"tau_months": 36, "fraction": 1.0, "init": null, "save": null}
+          tau_months  memory of the running mean of the ensemble-mean innovation per sub-basin (in analyses = months):
+                      the plain mean of all past innovations until tau analyses are seen, then an exponential mean
+                      with weight 1/tau (no ramp-up from zero)
+          fraction    share of the estimated bias removed (0 = estimate and log only)
+          mode        "observation": the member observations are shifted by -fraction*b (the whole increment changes);
+                      "fast_only": the observations are kept; the change of the sub-basin increment that the shift
+                      would cause, o = -(Pyy - R) Pyy^-1 fraction*b, is placed in the fast storages only (needs the
+                      seasonal split of the non-negative partition), so groundwater increments are not touched
+          init/save   .npz with "bias" (n_obs,) and "count" (scalar): start state / state written after every update
+          freeze      true: b is taken from "init" and never updated (a fixed per-unit bias, e.g. the mean innovation
+                      of an earlier run); a constant b shifts the level only and leaves trends and seasonal cycles
+        None, {} or false: off.
+        """
+        if not cfg:
+            return None
+        cfg = dict(cfg)
+        tau = float(cfg.get('tau_months', 36))
+        mode = str(cfg.get('mode', 'observation')).lower()
+        if mode not in ('observation', 'fast_only'):
+            raise ValueError('innovation_bias: mode must be "observation" or "fast_only", got %s' % mode)
+        frac = float(cfg.get('fraction', 1.0))
+        if tau < 1 or not (0.0 <= frac <= 1.0):
+            raise ValueError('innovation_bias: tau_months >= 1 and 0 <= fraction <= 1 required, got %s / %s' % (tau, frac))
+        freeze = bool(cfg.get('freeze', False))
+        if freeze and not cfg.get('init'):
+            raise ValueError('innovation_bias: freeze needs "init" (a .npz with the fixed bias per sub-basin)')
+        st = dict(tau=tau, fraction=frac, mode=mode, freeze=freeze, shift=None, save=cfg.get('save'), init=cfg.get('init'),
+                  bias=np.zeros(n_obs), count=0, n_updates=0, log=[])
+        if st['init']:
+            z = np.load(st['init'])
+            if np.shape(z['bias']) != (n_obs,):
+                raise ValueError('innovation_bias init: %s has %s sub-basins, the filter %d'
+                                 % (st['init'], np.shape(z['bias']), n_obs))
+            st['bias'] = np.array(z['bias'], dtype=float)
+            st['count'] = int(z['count'])
+            if freeze:
+                st['count'] = max(st['count'], 1)          # a frozen bias is always applied
+        return st
+
+    def _bias_reference(self, obs, ens_states):
+        """
+        obs (n_obs x N) -> obs - fraction * b, with b the running mean of the PAST ensemble-mean innovations
+        d = mean_i(obs_i) - H mean_i(x_i) (forecast window means before inflation). b is updated with this window's d
+        after it was used, so the correction is causal. Only the mean observation of every sub-basin is shifted: the
+        member spread, R and the seasonal cycle of the innovations are unchanged.
+        """
+        ib = self._ib
+        xm = np.mean(ens_states, 1)[:, None]
+        d = np.mean(obs, 1) - np.asarray(self._DM(states=xm)).reshape(-1)
+        shift = ib['fraction'] * ib['bias'] if ib['count'] > 0 else np.zeros_like(d)
+        ib['shift'] = shift
+        if ib['mode'] == 'fast_only':
+            out = obs                                                    # offset applied in the partition
+        else:
+            out = obs - shift[:, None]
+            if getattr(self, '_obs_deterministic', None) is not None:
+                self._obs_deterministic = self._obs_deterministic - shift
+        # update with the raw innovation of this window (not when frozen)
+        if not ib['freeze']:
+            ib['count'] += 1
+            w = 1.0 / min(ib['count'], ib['tau'])
+            ib['bias'] = ib['bias'] + w * (d - ib['bias'])
+        ib['n_updates'] += 1
+        ib['log'].append(dict(window=list(getattr(self, '_window_months', []) or []),
+                              innovation_mean_mm=float(np.mean(d)),
+                              shift_mean_mm=float(np.mean(shift)),
+                              shift_abs_mean_mm=float(np.mean(np.abs(shift))),
+                              innovation_after_mean_mm=float(np.mean(d - shift))))
+        if ib['save']:
+            np.savez(ib['save'], bias=ib['bias'], count=ib['count'])
+        return out
+
+    def _fast_only_offset(self, HA, R, N):
+        """sub-basin increment change caused by shifting the observations by -shift, o = -(Pyy - R) Pyy^-1 shift
+        (ensemble-mean, observation space; the gain is linear in the observations)"""
+        shift = self._ib['shift']
+        if shift is None or not np.any(shift):
+            return None
+        Pf = self._L_obs * (HA @ HA.T) / (N - 1)
+        o = -Pf @ np.linalg.solve(Pf + R, shift)
+        self._ib['log'][-1]['fast_offset_mean_mm'] = float(np.mean(o))
+        return o
 
     def _snow_cap_window(self):
         """{'swe': cap per state cell} for the months of the current window, or None"""
@@ -399,6 +497,13 @@ class EnKF_localized(EnKF):
                     obs_error_inflation=self._oei,
                     obs_error_correlation=self._obs_corr, n_obs_decorrelated=self._n_obs_decorrelated,
                     obs_perturbation_centering=self._obs_centering, n_obs_centered=self._n_obs_centered,
+                    innovation_bias=None if self._ib is None else
+                    dict(tau_months=self._ib['tau'], fraction=self._ib['fraction'], mode=self._ib['mode'],
+                         freeze=self._ib['freeze'],
+                         n_updates=self._ib['n_updates'],
+                         final_bias_mean_mm=float(np.mean(self._ib['bias'])),
+                         final_bias_abs_mean_mm=float(np.mean(np.abs(self._ib['bias']))),
+                         per_window=self._ib['log']),
                     mean_perturbation_removed_rms_mm=(float(np.mean(self._obs_mean_shift_rms))
                                                       if self._obs_mean_shift_rms else None),
                     reservoir_state=None if getattr(self, '_res_sched', None) is None else self._res_sched.summary())
