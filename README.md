@@ -28,32 +28,31 @@ PyGLDA_v2/
 ├── src_postprocessing/    # collection, evaluation, figures, product export
 ├── src_GUI/               # results viewer (streamlit)
 ├── src_demo/              # drivers: global_run.py, regional_run.py
-├── settings/              # one folder per case: DA_setting.json, perturbation.json, Config_ReWaterGAP.json
-├── doc/                   # installation and configuration guides
+├── settings/              # templates (GDA_Global, RDA_Regional) and the GMD paper cases: DA_setting.json,
+│                          #   perturbation.json, Config_ReWaterGAP.json
+├── doc/                   # installation and configuration guides, settings reference
 ├── installation/          # environment files and setup script
 └── parallel_logs/         # MPI run logs (written at run time)
 ```
 
 ## Modifications to WaterGAP 2.2e
 
-PyGLDA v2 makes the following minimal modifications to the WaterGAP 2.2e source, each confined to a single file. All other WaterGAP 2.2e files remain unmodified.
+WaterGAP 2.2e (ReWaterGAP, upstream commit 2ebcdd1) is included in `src_GHM/ReWaterGAP/`. PyGLDA v2 changes a few
+of its files in place, none of which changes a standard (non-assimilation) WaterGAP run:
 
-1. **`src_GHM/ReWaterGAP/model/land_surfacewater_fraction.py`** — A new `update_setting()` function was added to allow PyGLDA to refresh WaterGAP's run-mode globals (`anthropogenic`, `reservoir_operation`) between ensemble iterations without reloading the module.
+- `model/land_surfacewater_fraction.py`: new `update_setting()` to refresh the run-mode globals between members.
+- `controller/configuration_module.py`: the configuration reading is wrapped in `init_config()`, so that PyGLDA can
+  configure WaterGAP from Python.
+- `model/verticalwaterbalance/waterbalance_vertical.py`: a redundant 207 MB copy of the sub-grid snow storage per
+  model day is avoided (bit-identical results).
+- `model/parameters.py`, `model/lateralwaterbalance/waterbalance_lateral.py`: the ensemble parameter multipliers
+  (1.0 when absent from the parameter file).
+- `model/lateralwaterbalance/lakes_wetlands.py`: a guard against 0 / 0 for lakes and wetlands written back at their
+  floor by the assimilation.
 
-2. **`src_GHM/ReWaterGAP/controller/configuration_module.py`** — Rewritten to expose WaterGAP's configuration parameters to PyGLDA's assimilation interface. The original file is preserved in the git history.
-
-3. **`src_GHM/ReWaterGAP/model/verticalwaterbalance/waterbalance_vertical.py`** (performance only) — In `vert_water_balance`, the line `snow_water_storage_subgrid_out = snow_water_storage_subgrid.copy()` was replaced by `snow_water_storage_subgrid_out = snow_water_storage_subgrid`. `snow_water_balance` receives a view of each cell's 100 elevation-band storages and already updates them in place, so the copy (100 x 360 x 720 float64, 207 MB per model day and per ensemble member) only duplicated values that are overwritten cell by cell. Results are bit-identical (the original and the modified routine were compared on the same input, restart states and daily output). To revert, restore the `.copy()` on that line.
-
-4. **`src_GHM/ReWaterGAP/model/parameters.py`** (ensemble perturbation) — After the parameter file is opened, the multipliers listed in `MULTIPLIERS` (`lai_multiplier`, `degreeday_multiplier`, `smax_multiplier`, `gw_recharge_factor_multiplier`, `max_gw_recharge_multiplier`, `netabs_gw_multiplier`, `netabs_sw_multiplier`) are added as fields of 1.0 when the file does not contain them. `src_DA/perturbation_par.py` writes them into the parameter file of each ensemble member (`perturbation.json`, `"type": "multiplier"`). They are applied once where WaterGAP reads the quantity: the leaf area index (min and max), the degree-day factor, the maximum soil water content, the groundwater recharge factor and the maximum groundwater recharge in PyGLDA's `src_GHM/Extension/fan_waterbalance_vertical_init.py` (the vertical-balance initialisation PyGLDA uses), and the potential net abstraction from groundwater and surface water in item 5. With the original parameter file (all multipliers 1.0) the model is bit-identical.
-
-5. **`src_GHM/ReWaterGAP/model/lateralwaterbalance/waterbalance_lateral.py`** (ensemble perturbation) — In `calculate`, the monthly potential net abstraction from groundwater (`pnag`) and surface water (`pnas`) is multiplied by `netabs_gw_multiplier` / `netabs_sw_multiplier` right after it is read, before the unit conversion and the riparian aggregation.
-
-## Requirements
-
-- Linux, conda / mamba; Python 3.10 with the versions pinned in `installation/environment.yml` (WaterGAP 2.2e is
-  locked to numpy 1.23.5 / numba 0.56.4)
-- mpich and mpi4py from the same environment
-- about 2.2 GB of memory per ensemble member (each member runs WaterGAP on the global grid)
+Modified copies of further WaterGAP modules (ensemble multipliers, monthly forcing files, daily output, restart
+paths) are in `src_GHM/Extension/`; the originals are unchanged. Every change, its reason and its test are listed in
+`src_GHM/WATERGAP_CHANGES.md`, with unified diffs against the upstream version in `doc/watergap_changes/diffs/`.
 
 ## Installation
 
@@ -82,8 +81,9 @@ bash installation/setup_env.sh install
 
 ## Usage
 
-Experiments are run by the drivers in `src_demo/`, one stage at a time; the settings of each case are in
-`settings/<case>/DA_setting.json` (see [doc/configuration.md](doc/configuration.md)).
+Experiments are run by the drivers in `src_demo/`, one stage at a time; the settings are in
+`settings/<folder>/DA_setting.json` (see [doc/configuration.md](doc/configuration.md) and the one-page
+[doc/settings_reference.md](doc/settings_reference.md)).
 
 ```bash
 export PYGLDA_DATA=/path/to/PyGLDA_v2_external_data     # inputs, GRACE, masks; outputs are written here

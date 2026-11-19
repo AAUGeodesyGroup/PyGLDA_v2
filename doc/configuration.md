@@ -24,13 +24,19 @@ output (`Input_data`, `Basin`, `GRACE`, `Ensemble_input`, `Ensemble_Initializati
 `Res`, `Auxiliary`; see `doc/installation.md`). The drivers take the data root from the environment variable
 `PYGLDA_DATA`.
 
-At the start of every stage the driver calls `RDA.prepare_settings(settings/<case>)`. It copies the three files
+At the start of every stage the driver calls `RDA.prepare_settings(settings/<folder>)`. It copies the three files
 to `${DATA_ROOT}/settings/<case>/`, replaces `${DATA_ROOT}` by the data root of the machine, and writes the case,
 basin, shapefile, mask, ensemble size and period of the driver into `DA_setting.json`. All stages read this run copy (`RDA.setting_dir`); the files in the repository are never
 modified, and the run copy documents exactly what a run used.
 
-Defaults: a key that is missing in `DA_setting.json` takes the default of `src_DA/configure_DA.py` (top-level keys)
-or of the component class (keys inside a block). The settings files list only what differs from these defaults.
+Defaults: a key that is missing in `DA_setting.json` takes the default of `src_DA/configure_DA.py` (top-level keys
+and the optional `obs.GRACE` entries, `GRACE_DEFAULTS`) or of the component class (keys inside a block). Each default
+is defined in one place. `doc/settings_reference.md` lists every key with its allowed values and default on one page.
+
+Settings written for an older code version are translated with
+`python -m src_auxiliary.translate_settings <old DA_setting.json or folder> <new file or folder>`: options removed
+from the code are dropped when they are switched off; a file in which one is switched on is refused (that run needs
+the code version it was made with). The removed options are listed at the end of `doc/settings_reference.md`.
 
 ---
 
@@ -47,6 +53,7 @@ Four blocks: `basic`, `obs`, `model`, `method`.
 | `DA_output_temp_dir` | temporary daily output of the assimilation, `DA_output/<case>/Ens_k/`, plus the filter and threshold logs |
 | `Ensemble_ini_dir` | restart states written by the spin-up and read by the open loop and the assimilation |
 | `Ensemble_input_dir` | perturbed forcing and parameters of every member, written by `model_perturbation()` |
+| `DA_restart_dir` | where a DA run saves its end states; `null` (default) = `DA_output/<case>/restart`, never the ensemble folder |
 | `Auxiliary_dir` | `smax.nc` (maximum soil water content) and `state_envelope_<basin>.nc` (open-loop envelope, rebuilt at every DA start) |
 
 Set by the drivers (not in the repository files): `fromdate`, `todate` (assimilation period), `ensemble` (number of
@@ -59,6 +66,7 @@ the analysis), `case`, `basin`, `basin_shp`, `basin_mask`.
 |---|---|
 | `dir` | where the observation file of a run is written: `<dir>/<basin>_obs_GRACE.hdf5` (epochs, windows, unperturbed and perturbed unit TWS, covariance) |
 | `GRACE` | the product, see below |
+| `withhold` | held-out validation: `{"every": 4, "offset": 0}` (every 4th epoch of the period, starting at position 0) or `{"epochs": ["2003-03", ...]}`; these epochs are not assimilated. Default `null` |
 
 `obs.GRACE`:
 
@@ -72,6 +80,7 @@ the analysis), `case`, `basin`, `basin_shp`, `basin_mask`.
 | `OL_mean` | open-loop mean per case (`<case>_<basin>.hdf5`), the datum to which the GRACE anomalies are referenced |
 | `resample` | mascons: how the 0.25° grid is brought to the 0.5° model grid, `subsample` (every second cell, default) or `block_mean` (mean of the four cells, recommended) |
 | `earthquake_correction` | mascons, optional (default off): co- and post-seismic signals removed from the grid before averaging (`src_OBS/earthquake_correction.py`). Within `cap_km` (1000) of each rupture of `events` (default: Sumatra 2004, Nias 2005, Maule 2010, Tohoku 2011) every cell is fitted with bias, trend, acceleration, annual and semi-annual terms, a step and post-seismic exponentials (relaxation times of Tanaka and Heki 2014), tapered over `taper_km` (200). `significance` `{"n_placebo": 10, "z_lo": 2.0, "z_hi": 4.0}`: the step is refitted at `n_placebo` fake dates and applied with the weight clip((\|S\|/σ_p − z_lo)/(z_hi − z_lo), 0, 1), so that hydrological signals are not mistaken for deformation. |
+| `lake_leakage` | mascons, optional (default off): npz with `months` ('YYYY-MM') and `leak_mm` (n, 360, 720) on the 0.5° grid (row 0 = 89.75° N), the signal of water bodies outside the model domain (e.g. the Caspian Sea) as seen by GRACE; it is subtracted from every cell before the unit averaging and in the gridded signal |
 | `ewh_file`, `unc_file`, `unit` (`cm`), `corr_length_km` (300), `add_gia` (`false`) | `TUD_5daily` only: file names, unit of the grids, spatial error correlation length used when the unit covariance is propagated from the per-cell uncertainty (ρ = exp(−d/L)), and whether the static GIA field is added |
 
 `get_GRACE_obs(is_diagonal=False)` of the regional driver keeps the full unit covariance; `is_diagonal=True` keeps
@@ -104,8 +113,10 @@ lower bound.
 | `soil_upper_bound` | `true` | soil ≤ smax (`Auxiliary_dir/smax.nc` × land fraction × the member's smax multiplier) inside the bound-aware partition: the water soil cannot hold goes to the other storages of the unit instead of being clipped after the update |
 | `soil_daily_bounds` | `false` | `true`: the soil bounds act on the window mean, and the window-mean soil increment δ is distributed over the days in proportion to what each day can take (δ > 0: the room to capacity, δ < 0: the water available), so that every day stays within [0, smax] and mean(d_t) = δ. Without it every day gets the same increment, and a soil that touches a bound on one day blocks the increment of the whole window. |
 | `increment_release` | off | `{"storages": ["riverstor"], "days": 10}`: the increment of the listed (fast) storages is not put into the restart state; it is added in equal parts on the first `days` days of the next window (incremental analysis update). The stored daily analysis keeps the full increment. Avoids a discharge pulse at every window start. |
-| `window_scaling` | off | `{"reference_days": 30.44}`: scales the per-window constants by the length of the observation window, r = window days / reference_days (`src_DA/window_scaling.py`), for windows shorter than a month (e.g. the TU Delft 5-day product). Adaptive additive inflation: `weight_current` and `bias_memory` → 1 − (1 − a)^r, `min_sigma` × √r; seasonal split of the non-negative partition: climatology counts in months (+= r, weight max(r/count, 1 − (1 − 1/memory_years)^r)), lowpass / interannual 1/`tau_months` → 1 − (1 − 1/tau)^r; `increment_release.days` capped at the window length. Absent = unchanged behaviour (bit-identical). Not for monthly production runs (months of 28–31 d ≠ 30.44 d). |
+| `window_scaling` | off | `{"reference_days": 30.44}`: scales the per-window constants by the length of the observation window, r = window days / reference_days (`src_DA/window_scaling.py`), for windows shorter than a month (e.g. the TU Delft 5-day product). Adaptive additive inflation: `weight_current` and `bias_memory` → 1 − (1 − a)^r, `min_sigma` × √r; seasonal split of the non-negative partition: climatology counts in months (+= r, weight max(r/count, 1 − (1 − 1/memory_years)^r)), lowpass 1/`tau_months` → 1 − (1 − 1/tau)^r; `increment_release.days` capped at the window length. Absent = off. Not for monthly windows (months of 28–31 d ≠ 30.44 d). |
 | `snow_bounds` | see below | limits of the analysed snow |
+| `wetland_bounds` | off | `{"upper": true}`: wetlands in the state are kept between 0 and WaterGAP's maximum wetland storage (wetland area × active wetland depth of the member); WaterGAP would spill anything above it on the same day |
+| `log_applied_increment` | `false` | `true`: the monthly sums of the increment that enters each member's state are written to `DA_output/<case>/` (diagnostic, changes no result) |
 
 Analysis of one window (`src_DA/EnKF_localized.py`):
 
@@ -134,7 +145,7 @@ every day of the window (window-aware bounds, `src_DA/bounds.py`), and the post-
 | `multiplicative` | `factor` (1.0) | forecast anomalies multiplied by `factor` before the gain (Anderson and Anderson 1999) |
 | `rtps` | `alpha` (0.7) | relaxation to prior spread, element-wise (Whitaker and Hamill 2012), limited so that no member crosses a bound |
 | `additive` | `sigma` ({storage: std in mm}), `seed` | zero-mean random perturbations added before the gain, one number per member, unit and storage, centred over the members. Unbounded storages (groundwater) get the same value in every cell of the unit; bounded storages are weighted by the room to the nearer bound (empty cells stay empty) and limited to 50 % of the storage. The perturbations stay in the members (model error). |
-| `adaptive_additive` | `split_storages` (all state storages), `weight_current` (0.5), `max_factor` (3.0), `min_sigma` (5.0), `remove_bias` (`true`), `bias_memory` (0.05), `seed` | as `additive`, but the std of the added noise is estimated every window and unit from the innovations: s² = (1−w) s²_prev + w (d − b)², σ = clip(√(s² − var(HX) − R), `min_sigma`, `max_factor` √R), with d the innovation of the ensemble mean and b its slowly varying mean (bias memory). The added variance is shared among `split_storages` per calendar month and unit in proportion to the open-loop ensemble variance of each storage (computed once from `Res/<case>/Res_OL.h5`, so the open loop must be collected first). Variance a bounded storage cannot take goes to the unbounded ones. |
+| `adaptive_additive` | `split_storages` (all state storages), `split` (`ol_spread`; `ol_seasonal`: shares from the squared open-loop seasonal amplitude of each storage, the same in every month), `weight_current` (0.5), `max_factor` (3.0), `min_sigma` (5.0), `remove_bias` (`true`), `bias_memory` (0.05), `seed` | as `additive`, but the std of the added noise is estimated every window and unit from the innovations: s² = (1−w) s²_prev + w (d − b)², σ = clip(√(s² − var(HX) − R), `min_sigma`, `max_factor` √R), with d the innovation of the ensemble mean and b its slowly varying mean (bias memory). The added variance is shared among `split_storages` per calendar month and unit in proportion to the open-loop ensemble variance of each storage (computed once from `Res/<case>/Res_OL.h5`, so the open loop must be collected first). Variance a bounded storage cannot take goes to the unbounded ones. |
 
 #### `increment_partition`
 
@@ -152,6 +163,10 @@ Options of `non_negative` (default off):
 | `max_cell_factor` | `{"soilmoist": 2}` or `3` | no element may change by more than f × the unit increment of its member, \|dX_i\| ≤ f \|δ_j\|; the excess is redistributed like a bound |
 | `storage_shares` | `{"storages": ["soilmoist", "groundwstor"], "mix": 1.0}` | the total share of the listed storages in a unit increment is kept as the ensemble gives it, but re-split among them in proportion to each storage's seasonal amplitude in the open loop of that unit (`Res/<case>/Res_OL.h5`), s' = (1 − mix) s_ens + mix s_OL. Within a storage the cells keep their ensemble weights. GRACE sees only the sum; the ensemble's soil/groundwater covariance follows how the inflation noise is split rather than where the model's seasonal error is. |
 | `boundary_smoothing` | `{"storages": ["groundwstor"], "length_km": 50}` | with one observation per unit, the increment field is built inside each unit from that unit's increment and steps at unit boundaries. Mass-preserving (pycnophylactic, Tobler 1979) smoothing of the listed storages: `n_iter` (10) passes of a Gaussian kernel of `length_km` (50, zero beyond `cutoff` (2.0) × `length_km`), each followed by restoring the unit mean of the storage; `alpha` (1.0) blends with the unsmoothed field. H dX = δ is kept exactly. Meant for unbounded storages: smoothing bounded storages moves water into cells at their limits. |
+| `bound_overflow` | `{"exclude": ["groundwstor"], "fallback": true}` | where an element hits a bound its share normally goes to all free elements of the unit; the `exclude` storages keep their own increment and take no overflow. If the other free elements have no room, the remainder stays unplaced (`fallback` false, default) or goes to the excluded storages (`fallback` true) |
+| `seasonal_split` | `{"storages_slow": ["groundwstor"], "method": "climatology", "memory_years": 3}` | the seasonal part c_j of each unit's ensemble-mean increment bypasses the slow storages: dX = S (δ − c) + S_fast c, H dX = δ. `method` `lowpass` (default; slow part = low-pass of the mean increment, `tau_months` 12) or `climatology` (c_j = running calendar-month mean minus its mean, `memory_years`); `fraction` (1.0) scales c_j; climatology only: `save` (npz written after every window) and `init` (such a file of an earlier run on the same units) |
+| `hotspot_redistribution` | `{"field": "<npz with pnag_mm_yr>", "threshold_mm_yr": 50, "p_ref_mm_yr": 20, "fraction": 1.0}` | last step, groundwater only: in a unit with pumping hotspots (WaterGAP potential net groundwater abstraction above `threshold_mm_yr`) a part f_j = fraction × P_j / (P_j + p_ref) of the unit's groundwater increment is moved to the hotspot cells in proportion to their abstraction; H dX is unchanged |
+| `unit_storage_mask` | `{"riverstor": "<npz with unit_flag (n_units,)>"}` | the listed storage receives increments only in the flagged units; elsewhere it is treated as a storage outside the state (subtracted from the observation, no weight, not clipped by the threshold) |
 
 #### `snow_bounds`
 
@@ -228,7 +243,7 @@ The drivers set the case on the class `RDA` (`GDA` for the global case) and run 
 
 | stage | call | processes |
 |---|---|---|
-| settings | `prepare_settings(settings/<case>)` | one |
+| settings | `prepare_settings(settings/<folder>)` | one |
 | unit set / mask | `GDA.check_units()` / `RDA.config_basin_mask()` | one |
 | GRACE observations | `get_GRACE_obs()` | one |
 | perturbation, spin-up, open loop | `model_perturbation()`, `spin_up()`, `OL_run()` | `ens + 1` MPI ranks |
