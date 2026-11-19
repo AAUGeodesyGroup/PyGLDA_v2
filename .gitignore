@@ -18,7 +18,7 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# PyCharm / IDE
+# IDE
 .idea/
 *.iml
 .vscode/
@@ -27,36 +27,56 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project-specific
-temp/
+# Sync and assistant folders
+.stfolder/
+.stignore
+.stversions/
+.claude/
 
-# NetCDF / HDF / large data files
+# Experiment logs, run folders and MPI logs (kept outside the repository;
+# parallel_logs/.gitkeep stays tracked)
+temp/
+parallel_logs/
+installation/env_setup.log
+
+# Data and model output (inputs and results live in the data root, PYGLDA_DATA)
 *.nc
+*.nc4
 *.h5
 *.hdf5
 *.h5df
+*.he5
 *.mat
 *.npy
 *.npz
 *.zarr
+*.pkl
+*.pickle
+*.grib
+*.grb
+*.tif
+*.tiff
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
 
-# Logs
+# Logs and MPI output
 *.log
-
-# MPI output
 *.out
 *.err
 
-# internal notes and run folders
+# Internal notes (not part of the code release)
 doc/ucloud_notes.md
-doc/cowork_review_*.md
-parallel_logs/
-installation/env_setup.log
-parallel_logs/
-.stfolder/
-.stignore
-.claude/
 doc/cowork_*.md
-doc/ucloud_notes.md
 doc/code_5day_notes.md
 doc/*_RECOVERED_*.md
+
+# Discharge observations (GRDC) are licensed data and are never committed
+*GRDC*
+*grdc*
