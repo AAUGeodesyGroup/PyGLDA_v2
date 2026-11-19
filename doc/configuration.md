@@ -9,13 +9,13 @@ An experiment is described by three JSON files and a short driver script:
 | `settings/<case>/Config_ReWaterGAP.json` | the WaterGAP 2.2e model: input paths, run options, variables written |
 | `src_demo/global_run.py`, `src_demo/regional_run.py` | the drivers: case name, basin, ensemble size, periods, stages |
 
-Each case folder is self-contained and holds all three files. The repository ships three cases:
+Each settings folder is self-contained and holds all three files. The repository ships these folders:
 
-| case | units | description |
+| folder | units | description |
 |---|---|---|
-| `GDA_Global` | 737 units of GlobalBasins v2.0 | global experiment (`src_demo/global_run.py`) |
-| `RDA_Danube` | 6 sub-basins | regional experiment (`src_demo/regional_run.py Danube ...`) |
-| `RDA_Amazon` | 18 sub-basins | regional experiment (`src_demo/regional_run.py Amazon ...`) |
+| `GDA_Global` | 737 units of GlobalBasins v2.0 | default template, global experiment (`src_demo/global_run.py`, case `GDA_Global`) |
+| `RDA_Regional` | 6 (Danube) or 18 (Amazon) sub-basins | regional experiments (`src_demo/regional_run.py Danube ...` / `Amazon ...`, cases `RDA_Danube` / `RDA_Amazon`) |
+| `GMD_Global`, `GMD_Amazon`, `GMD_Danube` | GlobalBasins T9, Amazon, Danube | the configurations of the GMD paper experiments (run copies with `${DATA_ROOT}` paths) |
 
 ## 0. Paths and the run copy of the settings
 

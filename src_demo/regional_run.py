@@ -1,6 +1,7 @@
 """
 PyGLDA v2 - regional experiments: GRACE (CSR RL06.3 mascons) assimilated into WaterGAP 2.2e for the sub-basins of the
-Danube (6) or the Amazon (18), 30 members (settings/RDA_Danube, settings/RDA_Amazon). WaterGAP always runs on the
+Danube (6) or the Amazon (18), 30 members. Both cases use the template settings/RDA_Regional (the case name, basin,
+shapefile and mask are written into the run copy by prepare_settings). WaterGAP always runs on the
 global grid, so the regional cases use the global open loop of src_demo/global_run.py (same ensemble folders and
 period): only its collection for the sub-basins of the case is needed. Without a global open loop, the stage
 "ensemble" builds one (it writes the shared ensemble folders).
@@ -45,7 +46,7 @@ def configure(name):
     '''open loop and data assimilation'''
     RDA.sim_begin_time = '2002-01-01'
     RDA.sim_end_time = '2006-12-31'
-    return CODE_ROOT / 'settings' / RDA.case
+    return CODE_ROOT / 'settings' / 'RDA_Regional'
 
 
 def settings(source, mpi):
