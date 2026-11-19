@@ -156,7 +156,15 @@ class yearly_merge:
 
             # 4. embed the mask and blank everything outside the basin (both stages)
             ds_year['region_mask'] = self.__mask.copy()
-            ds_out = ds_year.where(self.__mask, drop=True) if apply_mask else ds_year
+            # keep the whole bounding box of the basin: where(..., drop=True) would also drop the rows / columns
+            # that lie between disjoint parts of a multi-basin mask (review 286 B3: 151x196 -> 132x107), and the
+            # yearly files would no longer match basin_2d of load_mask. For a mask without such gaps the result is
+            # the same as before (cells outside the basin are NaN either way).
+            ds_out = ds_year.where(self.__mask) if apply_mask else ds_year
+            _lat = ds_out['lat'].values
+            _lon = ds_out['lon'].values
+            ds_out = ds_out.isel(lat=np.flatnonzero((_lat >= lat_min) & (_lat <= lat_max)),
+                                 lon=np.flatnonzero((_lon >= lon_min) & (_lon <= lon_max)))
 
             # 5. save with zlib compression (level 1: good ratio, fast)
             output_filename = os.path.join(self.__output_dir, f"daily_output_{year}.nc")

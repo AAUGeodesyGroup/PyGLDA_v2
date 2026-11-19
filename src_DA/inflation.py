@@ -324,15 +324,19 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
         sf2 = np.var(HX, axis=1, ddof=1)
         so2 = np.diag(R).copy()
         dp = d - self._bias if self.remove_bias else d
-        w = self.weight_current
+        from src_DA.window_scaling import window_ratio, per_window
+        r = window_ratio(f)                                            # None: window_scaling off (as before)
+        w = self.weight_current if r is None else per_window(self.weight_current, r)
+        bm = self.bias_memory if r is None else per_window(self.bias_memory, r)
+        smin = self.min_sigma if r is None else self.min_sigma * np.sqrt(r)
         s2_prev = self._s2 if self._s2 is not None else sf2 + so2       # neutral start
         s2 = (1.0 - w) * s2_prev + w * dp ** 2
         self._s2 = s2
         if self.remove_bias:
-            self._bias = self._bias + self.bias_memory * (d - self._bias)
+            self._bias = self._bias + bm * (d - self._bias)
         sa2 = s2 - sf2 - so2
         sigma = np.sqrt(np.maximum(sa2, 0.0))
-        sigma = np.clip(sigma, self.min_sigma, self.max_factor * np.sqrt(so2))
+        sigma = np.clip(sigma, smin, self.max_factor * np.sqrt(so2))
         shares = self.shares_now(len(d))
         for j in range(len(d)):
             row = dict(date=str(getattr(f, '_today', '')), sub_basin=j + 1,

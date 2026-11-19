@@ -143,7 +143,8 @@ class GDA(RDA, metaclass=_CaseToRDA):
 
         GR = GRACE_CSR_mascon(basin_name=GDA.basin, shp_path=GDA.shp_path)
         GR.set_options(resample=configDA.obs.GRACE.get('resample', 'subsample'),
-                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'))
+                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'),
+                       lake_leakage=configDA.obs.GRACE.get('lake_leakage'))
         GR.configure_global_land_ocean_mask(fn=RDA._land_mask())
         GR.use_mask(mask_dir=Path(configDA.basic.basin_mask).parent)
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['EWH_grid_dir'], dir_out=dir_out)

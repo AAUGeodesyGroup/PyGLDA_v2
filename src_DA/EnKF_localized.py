@@ -87,17 +87,26 @@ class EnKF_localized(EnKF):
         no lake (a lake written back below its floor stops the lake balance of WaterGAP)'''
         lower = {}
         self._lake_floor_ctx = None                     # lakes in the state: what refresh_lake_floor needs
-        if any(v in names for v in ('locallakestor', 'globallakestor', 'reservoirstor')):   # + reservoirs (review 260)
+        '''wetland upper bound ("wetland_bounds": {"upper": true}, review 292; absent / false = previous bounds): wetlands
+        0 .. WaterGAP's maximum wetland storage, like the lakes; per member through the depth ratio (_wet_scale)'''
+        _wb = dict(getattr(self.DA_setting.method, 'wetland_bounds', None) or {})
+        self._wet_upper = bool(_wb.get('upper', False)) and any(
+            v in names for v in ('localwetlandstor', 'globalwetlandstor'))
+        self._ens_wet_scale = None                      # (N,) member depth / main-rank depth, set by EnKF.run_mpi
+        _wet_names = ('localwetlandstor', 'globalwetlandstor') if self._wet_upper else ()
+        if any(v in names for v in ('locallakestor', 'globallakestor', 'reservoirstor') + _wet_names):   # + reservoirs (review 260)
             from src_DA.bounds import lake_floor_fields
             lw = getattr(self._model, 'lateral_waterbalance', None)
             if lw is None:
                 raise ValueError('%s: lakes are in the DA state but the model has no lateral_waterbalance for their '
                                  'maximum storages' % self.METHOD)
-            lower, up_l = lake_floor_fields(lw, self._model.unit_converter, sv.DM.local_mask['basin_2d'], names)
+            lower, up_l = lake_floor_fields(lw, self._model.unit_converter, sv.DM.local_mask['basin_2d'], names,
+                                            include_wetlands=self._wet_upper)
             upper.update(up_l)
             from src_DA.bounds import lake_floor_grids
             box = np.shape(sv.DM.local_mask['basin_2d'])
-            self._thresholder.set_lake_floor(lake_floor_grids(lw, self._model.unit_converter, box, names))
+            self._thresholder.set_lake_floor(lake_floor_grids(lw, self._model.unit_converter, box, names,
+                                                              include_wetlands=self._wet_upper))
             print('%s: lake bounds - %s' % (self.METHOD, {v: dict(cells_with_lake=int((up_l[v] > 0).sum()),
                                                                    no_lake_cells=int((up_l[v] == 0).sum()))
                                                           for v in lower}))
@@ -150,6 +159,16 @@ class EnKF_localized(EnKF):
         # the member observations before the analysis (Dee & da Silva 1998), see _bias_reference
         self._ib = self._innovation_bias_config(innovation_bias, n_obs)
 
+        '''reservoirs in the state during their filling years ("reservoir_state", DA review 280 Part B; absent = off,
+        bit-identical): reservoir cells outside their filling window are moved to the observation side in every
+        analysis, exactly as in the subtraction runs, see src_DA.reservoir_state'''
+        from src_DA.reservoir_state import ReservoirSchedule
+        from pathlib import Path as _P
+        self._res_sched = ReservoirSchedule.from_setting(
+            getattr(self.DA_setting.method, 'reservoir_state', None), names, n_cell, sv.DM.local_mask,
+            out_dir=_P(self.DA_setting.basic.DA_output_temp_dir) / self.DA_setting.basic.case)
+        self._res_ctx = None
+
         self.inflation.setup(self)
         self.partition.setup(self)
         print('%s: %d states x %d observations; localization %s (mean taper weight %.3f); inflation: %s; '
@@ -180,7 +199,8 @@ class EnKF_localized(EnKF):
         if ctx is None:
             return
         from src_DA.bounds import lake_floor_fields, lake_floor_grids, LOWER, UPPER
-        lower, up_l = lake_floor_fields(ctx['lw'], self._model.unit_converter, ctx['mask'], ctx['names'])
+        lower, up_l = lake_floor_fields(ctx['lw'], self._model.unit_converter, ctx['mask'], ctx['names'],
+                                        include_wetlands=getattr(self, '_wet_upper', False))
         st = self._lake_floor_refresh
         st['n_calls'] += 1
         ctx.setdefault('upper', {})
@@ -197,7 +217,7 @@ class EnKF_localized(EnKF):
             ctx['upper'][v] = np.array(up_l[v], dtype=float)
             st['cells_changed'][v] = st['cells_changed'].get(v, 0) + changed[v]
         self._thresholder.set_lake_floor(lake_floor_grids(ctx['lw'], self._model.unit_converter, ctx['box'],
-                                                          ctx['names']))
+                                                          ctx['names'], include_wetlands=getattr(self, '_wet_upper', False)))
         st['n_changes'] += 1
         print('%s: lake bounds refreshed from the current maximum lake storages - cells changed %s'
               % (self.METHOD, changed))
@@ -208,6 +228,12 @@ class EnKF_localized(EnKF):
         obs_cov    : R (n_obs x n_obs)
         ens_states : forecast states (n_state x N), window means
         """
+        rs = getattr(self, '_res_sched', None)
+        if rs is not None:                                   # reservoirs outside their filling window -> obs side
+            obs, ens_states, self._res_ctx = rs.before_update(self, obs, ens_states, self._today)
+        um = getattr(self.partition, '_um_rows', None)      # AMZ-E unit_storage_mask (review 369): masked rows -> obs side
+        if um is not None:
+            obs, ens_states, um_X = self.partition.um_before_update(self, obs, ens_states)
         R = obs_cov * self._R_scale
         N = ens_states.shape[1]
         '''unperturbed observation of this window (deterministic filters, src_DA.LETKF): GRACE ens_0 minus the
@@ -225,6 +251,15 @@ class EnKF_localized(EnKF):
         upper_scale = {'soilmoist': scale} if (self._soil_upper_bound and scale is not None and
                                                np.shape(scale) == (ens_states.shape[0] // len(self.bounds.names),
                                                                    ens_states.shape[1])) else None
+        ws = getattr(self, '_ens_wet_scale', None)
+        if getattr(self, '_wet_upper', False) and ws is not None and np.size(ws) == ens_states.shape[1]:
+            '''wetland maximum of every member = main-rank maximum x (member depth / main-rank depth) (review 292)'''
+            n_cell = ens_states.shape[0] // len(self.bounds.names)
+            wsc = np.broadcast_to(np.asarray(ws, dtype=float)[None, :], (n_cell, ens_states.shape[1]))
+            upper_scale = dict(upper_scale or {})
+            for v in ('localwetlandstor', 'globalwetlandstor'):
+                if v in self.bounds.names:
+                    upper_scale[v] = wsc
         '''snow cap of this window (None = off), also used by the inflation to weight the snow noise'''
         self._snow_cap_now = self._snow_cap_window()
         ens_max = getattr(self, '_ens_max', None)
@@ -241,6 +276,10 @@ class EnKF_localized(EnKF):
                 ens_min[r] = ens_states[r]
         self.bounds.set_window(ens_states, ens_min, ens_max,
                                upper_scale=upper_scale, upper_window=self._snow_cap_now)
+        if rs is not None:
+            rs.pin_bounds(self.bounds, self._res_ctx)        # moved reservoir rows: LB = UB = 0
+        if um is not None:
+            self.partition.um_pin_bounds(self.bounds)        # AMZ-E: moved rows LB = UB = 0
 
         xm = np.mean(ens_states, 1)[:, None]
         A = self.inflation.prior(ens_states - xm, xm, obs, R)
@@ -253,7 +292,12 @@ class EnKF_localized(EnKF):
         dX = self.analysis_increment(X, A, HX, HA, obs, R, N)
 
         dX = self.partition.split(dX, A, HA, N, X)
-        return self.inflation.posterior(X + dX, A, HA)
+        Xa = self.inflation.posterior(X + dX, A, HA)
+        if rs is not None:                                   # moved reservoir rows keep their forecast
+            Xa = rs.after_update(Xa, self._res_ctx, self.bounds)
+        if um is not None:
+            Xa = self.partition.um_after_update(Xa, um_X)    # AMZ-E: moved rows keep their forecast
+        return Xa
 
     def analysis_increment(self, X, A, HX, HA, obs, R, N):
         """
@@ -461,7 +505,8 @@ class EnKF_localized(EnKF):
                          final_bias_abs_mean_mm=float(np.mean(np.abs(self._ib['bias']))),
                          per_window=self._ib['log']),
                     mean_perturbation_removed_rms_mm=(float(np.mean(self._obs_mean_shift_rms))
-                                                      if self._obs_mean_shift_rms else None))
+                                                      if self._obs_mean_shift_rms else None),
+                    reservoir_state=None if getattr(self, '_res_sched', None) is None else self._res_sched.summary())
 
     def save_filter_log(self, out_dir):
         """filter_summary.json and, for the adaptive inflation, adaptive_inflation_log.csv (one row per window and
@@ -469,6 +514,11 @@ class EnKF_localized(EnKF):
         import json, csv
         from pathlib import Path
         out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(self, '_res_sched', None) is not None:
+            try:
+                self._res_sched.save_log()
+            except Exception as err:                         # logging must never stop the run
+                print('reservoir_state log not written: %s' % err)
         json.dump(self.filter_summary(), open(out_dir / 'filter_summary.json', 'w'), indent=1,
                   default=lambda o: np.asarray(o).tolist())
         rows = self.inflation.log_rows()

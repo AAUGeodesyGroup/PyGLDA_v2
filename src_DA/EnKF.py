@@ -76,6 +76,29 @@ class EnKF:
                                                    cell_area_global=self._model.unit_converter.cell_area_global,
                                                    contfrac_global=self._model.unit_converter.contfrac_global)
 
+    def _member_wetland_depth(self):
+        """active wetland depth of this member's model, km (max wetland storage / max wetland area over the cells with a
+        wetland; WaterGAP: max_*wet_storage = area x activewetland_depth x 1e-3), None if the model has no wetland.
+        One value per member (activewetland_depth is a global parameter); a spatially varying depth raises."""
+        lw = getattr(self._model, 'lateral_waterbalance', None)
+        if lw is None:
+            return None
+        vals = []
+        for s_attr, a_attr in (('max_locwet_storage', 'max_locwet_area'), ('max_glowet_storage', 'max_glowet_area')):
+            s = np.asarray(getattr(lw, s_attr, np.nan), dtype=float)
+            a = np.asarray(getattr(lw, a_attr, np.nan), dtype=float)
+            if s.shape != a.shape:
+                continue
+            ok = np.isfinite(s) & np.isfinite(a) & (a > 0)
+            if ok.any():
+                vals.append(s[ok] / a[ok])
+        if not vals:
+            return None
+        v = np.concatenate(vals)
+        if np.ptp(v) > 1e-9 * max(abs(float(np.median(v))), 1e-12):
+            raise ValueError('wetland_bounds: activewetland_depth varies in space; the per-member scaling needs one value')
+        return float(np.median(v))
+
     def _member_smax_multiplier(self):
         """smax_multiplier of the member this rank runs (one value per member), 1.0 if the parameter file has none"""
         try:
@@ -520,6 +543,9 @@ class EnKF:
             land_ratio_cells = None if historic_land_ratio is None else \
                 historic_land_ratio[np.asarray(self._sv.DM.local_mask['basin_2d']).astype(bool)]
             ens_land_ratio = comm.gather(root=main_thread, sendobj=land_ratio_cells)
+            '''wetland upper bound (review 292): every member's active wetland depth, gathered only when it is on'''
+            _wet_on = bool(getattr(self, '_wet_upper', False))
+            ens_wet_depth = comm.gather(root=main_thread, sendobj=self._member_wetland_depth()) if _wet_on else None
             historic_min_states = None
             historic_max_states = None
 
@@ -543,6 +569,14 @@ class EnKF:
                 del ens_min[OL_thread]
                 del ens_max[OL_thread]
                 del ens_land_ratio[OL_thread]
+                if ens_wet_depth is not None:
+                    '''member depth / main-rank depth: the filter's wetland maximum (main rank's) is scaled by it'''
+                    own = ens_wet_depth[main_thread]
+                    del ens_wet_depth[OL_thread]
+                    d = np.array([np.nan if x is None else x for x in ens_wet_depth], dtype=float)
+                    self._ens_wet_scale = None if (own is None or not np.isfinite(own) or own <= 0
+                                                   or not np.isfinite(d).all()) else d / own
+                    ens_wet_depth = None
                 '''soil capacity of the members in the units of the states (cells x members), see Threshold.set_soil_scale'''
                 self._ens_soil_scale = None if any(x is None for x in ens_land_ratio) else np.array(ens_land_ratio).T
                 ens_land_ratio = None
@@ -557,6 +591,8 @@ class EnKF:
 
                 '''calendar months of the window (monthly snow cap of EnKF_localized)'''
                 self._window_months = sorted({d.month for d in info[1]})
+                '''length of the window in days (method.window_scaling, src_DA.window_scaling; unused when off)'''
+                self._window_days = len(info[1])
 
                 '''kalman filter: update step'''
                 states_update = self.update(obs=ens_obs, obs_cov=obs_cov, ens_states=ens_states)
@@ -581,8 +617,10 @@ class EnKF:
                 delta_full = states_ens_update_delta.flatten()
                 mask = self._release_mask(delta_full.size)
                 carry = self._release_pending * self._release_left if self._release_left > 0 else None
-                self._release_pending = np.where(mask, delta_full, 0.0) / self._release['days']
-                self._release_left = self._release['days']
+                from src_DA.window_scaling import release_days
+                rel_days = release_days(self, self._release['days'], len(info[1]))   # = days when window_scaling is off
+                self._release_pending = np.where(mask, delta_full, 0.0) / rel_days
+                self._release_left = rel_days
                 self._release_windows += 1
             soil_cap_now = self._soil_cap is not None and rank != OL_thread
             if soil_cap_now:

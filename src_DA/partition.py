@@ -55,6 +55,11 @@ Options of "non_negative" (all default off):
         storages keep their own increment and take no overflow: the overflow goes to the other free elements only.
         If those have no room, the remainder is left unplaced (fallback false, it reappears in the next innovation) or
         given to the excluded storages as before (fallback true).
+        "fallback_from": ["localwetlandstor", "globalwetlandstor"] (review 292, optional): with fallback false, the
+        part of the unplaced POSITIVE remainder that comes from the listed storages hitting their UPPER bound (water a
+        full wetland cannot hold) goes to the excluded storages (groundwater) of the sub-basin, in proportion to their
+        shares, at most the water those storages lost to their upper bound. Everything else stays unplaced as before.
+        Absent = previous behaviour, bit-identical.
     "seasonal_split": {"storages_slow": ["groundwstor"], "method": "lowpass", "tau_months": 12}
         keeps the fast (seasonal) part of each sub-basin's ensemble-mean increment out of the slow storages. The
         ensemble-mean increment m_j = mean_n(delta_j) is split into a slow part and a fast part c_j: "lowpass": slow =
@@ -81,8 +86,39 @@ Options of "non_negative" (all default off):
         the 13-36-month band and in the low-flow test while its trend and > 36-month skill improve, and gw increments
         persist (DA reviews 218 / 221, 4 Nov 2026). With "save" the low-pass state is written with the climatology
         ("ia_lp"), and "init" loads it when present. Absent = previous behaviour, bit-identical.
-Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, boundary smoothing, bounds and
-per-cell limit.
+    "hotspot_redistribution": {"field": "<npz with pnag_mm_yr (360 x 720, global grid, row 0 = 89.75 N)>",
+                               "threshold_mm_yr": 50, "p_ref_mm_yr": 20, "fraction": 1.0}
+        (review 296; absent = previous behaviour, bit-identical). Last step of the partition, groundwater only. In a
+        sub-basin with pumping-hotspot cells (WaterGAP potential net groundwater abstraction > threshold), the open
+        loop's groundwater error sits mostly in those cells (the abstraction is demand-driven and uncertain), but the
+        weight cap, the blend, the smoothing and max_cell_factor spread the groundwater increment evenly, so a unit
+        correction lands in the neighbours (DA review 290 A: Tehran cell ~1x the unit increment). Here a part f_j of
+        the sub-basin's groundwater increment G_j (= sum_c h_c dX_gw,c, per member) is moved to the hotspot cells in
+        proportion to their abstraction:
+            dX_gw,c <- (1 - f_j) dX_gw,c + f_j G_j p_c / sum_c h_c p_c        (p_c = pnag of hotspot cells, else 0)
+            f_j = fraction * P_j / (P_j + p_ref),  P_j = sum_c h_c p_c / sum_c h_c   (abstraction-weighted unit share)
+        so H dX is unchanged, the member spread is kept, and units with little pumping are hardly touched.
+        Groundwater is unbounded; max_cell_factor is deliberately not applied to the redirected part.
+    "positive_to": {"mask": "<npz with unit_mask (360 x 720 bool, global grid, row 0 = 89.75 N)>",
+                    "from": ["soilmoist", "localwetlandstor", "globalwetlandstor"], "to": ["groundwstor"]}
+        (DA review 316, Cowork 13 Nov 2026; absent = previous behaviour, bit-identical). In sub-basins whose cells lie
+        mostly (H-weighted > 50 %) inside the mask (units where GRACE sees about 2x WaterGAP's wet-season storage, so
+        positive increments in soil / wetlands run off within days and raise discharge, DA review 314 / 316 G1), the
+        POSITIVE part of the increment of the "from" storages is moved, per member, to the "to" storages (slow
+        groundwater outflow, e-folding ~100 d) in proportion to their shares S of that sub-basin (H-uniform if those
+        are all 0). Negative increments are unchanged. H dX is unchanged. Applied after the seasonal split (it
+        overrides the split for these sub-basins) and before boundary smoothing and the bounds.
+    "unit_storage_mask": {"riverstor": "<npz with unit_flag (n_sub,) bool, index k-1 = sub_basin_k>"}
+        (AMZ-E, reviews 369 / 373; optional, absent = previous behaviour, bit-identical; doc/watergap_changes/
+        amzE_unit_storage_mask.md). A listed storage gets weight only in the sub-basins flagged True: its elements in every other
+        sub-basin (and in cells of no sub-basin) get zero weight right after the weights are formed (and again after
+        the variance-only fallback), zero open-loop amplitude share in "storage_shares", are left out of the bound
+        step and are set to 0 at the end, so they receive no increment. Their sub-basins' increments go to the other
+        storages exactly as if the storage were not in "storage_shares" / had no ensemble weight there. Meant for the
+        regional river-in-state rule of rc2 (OL river + wetland in-phase share >= 0.45 of the OL seasonal TWS
+        amplitude 2003-2016 and OL TWS amplitude >= 25 mm: 58 T9 units, amzE_unit_mask_045.npz, reviews 369 / 370).
+Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, positive_to, boundary smoothing,
+bounds and per-cell limit, hotspot redistribution.
 """
 import numpy as np
 from scipy import sparse
@@ -119,8 +155,50 @@ class NonNegativePartition(Partition):
     ACTIVE_WEIGHT_FRACTION = 0.01      # _cap_weights: an element counts as active above 1 % of the storage's largest weight
 
     def __init__(self, max_weight_ratio=None, spatial_blend=None, max_cell_factor=None, storage_shares=None,
-                 boundary_smoothing=None, bound_overflow=None, seasonal_split=None):
+                 boundary_smoothing=None, bound_overflow=None, seasonal_split=None, hotspot_redistribution=None,
+                 positive_to=None, unit_storage_mask=None):
         super().__init__()
+        um = dict(unit_storage_mask or {})                  # AMZ-E (review 369): per-unit storage mask, absent = off
+        self.unit_storage_mask = None
+        if um:
+            if not all(isinstance(v, str) and isinstance(x, str) and x for v, x in um.items()):
+                raise ValueError('unit_storage_mask: {"<storage>": "<npz with unit_flag>"} expected, got %s' % um)
+            self.unit_storage_mask = {str(v): str(x) for v, x in um.items()}
+        self._um_rows = None                    # setup: (n_state,) True = element of a masked storage outside its units
+        self._um_flag = {}                      # setup: storage -> (n_obs,) bool unit flags
+        pt = dict(positive_to or {})
+        self.positive_to = None
+        if pt:
+            bad_k = set(pt) - {'mask', 'from', 'to', 'min_share'}
+            if bad_k:
+                raise ValueError('positive_to: unknown keys %s' % sorted(bad_k))
+            if not pt.get('mask'):
+                raise ValueError('positive_to needs "mask" (npz with unit_mask on the global grid)')
+            self.positive_to = dict(mask=str(pt['mask']),
+                                    src=[str(v) for v in pt.get('from', ['soilmoist', 'localwetlandstor',
+                                                                         'globalwetlandstor'])],
+                                    dst=[str(v) for v in pt.get('to', ['groundwstor'])],
+                                    min_share=float(pt.get('min_share', 0.5)))
+            if set(self.positive_to['src']) & set(self.positive_to['dst']):
+                raise ValueError('positive_to: "from" and "to" overlap: %s' % pt)
+            if not 0.0 < self.positive_to['min_share'] <= 1.0:
+                raise ValueError('positive_to: min_share must be in (0, 1]')
+        self._pt = None                         # setup: per listed sub-basin (src rows, dst rows, h)
+        hr = dict(hotspot_redistribution or {})
+        self.hotspot = None
+        if hr:
+            bad_k = set(hr) - {'field', 'threshold_mm_yr', 'p_ref_mm_yr', 'fraction', 'storage'}
+            if bad_k:
+                raise ValueError('hotspot_redistribution: unknown keys %s' % sorted(bad_k))
+            if not hr.get('field'):
+                raise ValueError('hotspot_redistribution needs "field" (npz with pnag_mm_yr on the global grid)')
+            hs = dict(field=str(hr['field']), threshold=float(hr.get('threshold_mm_yr', 50.0)),
+                      p_ref=float(hr.get('p_ref_mm_yr', 20.0)), fraction=float(hr.get('fraction', 1.0)),
+                      storage=str(hr.get('storage', 'groundwstor')))
+            if not 0.0 < hs['fraction'] <= 1.0 or hs['p_ref'] <= 0 or hs['threshold'] < 0:
+                raise ValueError('hotspot_redistribution needs 0 < fraction <= 1, p_ref > 0, threshold >= 0: %s' % hr)
+            self.hotspot = hs
+        self._hot = None                        # setup: per sub-basin (rows of gw elements, h, p) of hotspot units
         sp = dict(seasonal_split or {})
         self.seasonal_split = None
         if sp:
@@ -164,14 +242,19 @@ class NonNegativePartition(Partition):
         bo = dict(bound_overflow or {})
         self.bound_overflow = None
         if bo:
-            unknown_keys = set(bo) - {'exclude', 'fallback'}
+            unknown_keys = set(bo) - {'exclude', 'fallback', 'fallback_from'}
             if unknown_keys:
                 raise ValueError('bound_overflow: unknown keys %s' % sorted(unknown_keys))
             excl = [str(v) for v in bo.get('exclude', [])]
             if not excl:
                 raise ValueError('bound_overflow needs "exclude", e.g. ["groundwstor"]')
-            self.bound_overflow = dict(exclude=excl, fallback=bool(bo.get('fallback', False)))
+            self.bound_overflow = dict(exclude=excl, fallback=bool(bo.get('fallback', False)),
+                                       fallback_from=[str(v) for v in (bo.get('fallback_from') or [])])
+            if self.bound_overflow['fallback_from'] and self.bound_overflow['fallback']:
+                raise ValueError('bound_overflow: "fallback_from" is for fallback false (with fallback true all overflow '
+                                 'already goes to the excluded storages)')
         self._bo_idx = np.zeros(0, dtype=int)   # storage indices that take no overflow (setup)
+        self._bo_from_idx = np.zeros(0, dtype=int)   # storages whose upper-bound overflow may fall back (setup)
         bs = dict(boundary_smoothing or {})
         self.boundary_smoothing = None
         if bs:
@@ -261,8 +344,182 @@ class NonNegativePartition(Partition):
             return self.max_weight_ratio.get(var)
         return self.max_weight_ratio
 
+    def _setup_hotspots(self, f):
+        """per sub-basin with hotspot cells: groundwater element rows, their H weights h_c, abstraction p_c (0 outside
+        hotspots) and f_j"""
+        hs = self.hotspot
+        names = list(f.bounds.names)
+        if hs['storage'] not in names:
+            print('non_negative partition: hotspot_redistribution ignored (%s not in the DA state)' % hs['storage'])
+            return
+        z = np.load(hs['field'])
+        p_glob = np.asarray(z['pnag_mm_yr'], dtype=float)
+        lm = f._sv.DM.local_mask
+        g = np.asarray(lm['global_2d']).astype(bool)
+        if p_glob.shape != g.shape:
+            raise ValueError('hotspot_redistribution: field %s vs global mask %s' % (p_glob.shape, g.shape))
+        p_cell = np.nan_to_num(p_glob[g])                                    # state-cell order
+        nvar = len(names)
+        iv = names.index(hs['storage'])
+        rows_all = np.arange(iv, nvar * p_cell.size, nvar)
+        owner = np.asarray(f._owner)[rows_all]
+        h = np.asarray(f._h_state, dtype=float)[rows_all]
+        hot = p_cell > hs['threshold']
+        self._hot = {}
+        for j in np.unique(owner[hot & (owner >= 0)]):
+            m = owner == j
+            r, hj, pj = rows_all[m], h[m], np.where(hot[m], p_cell[m], 0.0)
+            hp = float(hj @ pj)
+            if hp <= 0:
+                continue
+            P = hp / float(hj.sum())
+            fj = hs['fraction'] * P / (P + hs['p_ref'])
+            self._hot[int(j)] = dict(rows=r, h=hj, w=pj / hp, f=fj, n_hot=int((pj > 0).sum()))
+        self.stats.update(hotspot_units=len(self._hot), hotspot_moved_mm_sum=0.0, hotspot_n=0,
+                          hotspot_f={int(j): round(d['f'], 3) for j, d in self._hot.items()})
+        print('non_negative partition: hotspot_redistribution in %d sub-basins (threshold %.0f mm/yr, p_ref %.0f, '
+              'fraction %.2f)' % (len(self._hot), hs['threshold'], hs['p_ref'], hs['fraction']))
+
+    def _redistribute_hotspots(self, dX_new):
+        """see hotspot_redistribution: per hotspot sub-basin and member, a share f_j of the groundwater increment moves
+        to the hotspot cells by abstraction; the sub-basin's groundwater total (and H dX) is unchanged"""
+        out = dX_new.copy()
+        for j, d in self._hot.items():
+            r = d['rows']
+            G = d['h'] @ out[r]                                             # (N,) unit gw increment
+            new = (1.0 - d['f']) * out[r] + d['f'] * d['w'][:, None] * G[None, :]
+            self.stats['hotspot_moved_mm_sum'] += float(np.mean(np.abs(d['h'] @ np.abs(new - out[r]))))
+            out[r] = new
+            self.stats['hotspot_n'] += 1
+        return out
+
+    def _setup_positive_to(self, f):
+        """sub-basins mostly inside the mask: rows of the "from" and "to" storages and their H weights"""
+        pt = self.positive_to
+        names = list(f.bounds.names)
+        src = [names.index(v) for v in pt['src'] if v in names]
+        dst = [names.index(v) for v in pt['dst'] if v in names]
+        miss = [v for v in pt['src'] + pt['dst'] if v not in names]
+        if miss:
+            print('non_negative partition: positive_to storages %s not in the DA state %s - ignored' % (miss, names))
+        if not src or not dst:
+            print('non_negative partition: positive_to inactive (no "from" or no "to" storage in the state)')
+            self._pt = {}
+            return
+        z = np.load(pt['mask'])
+        m_glob = np.asarray(z['unit_mask']).astype(bool)
+        lm = f._sv.DM.local_mask
+        g = np.asarray(lm['global_2d']).astype(bool)
+        if m_glob.shape != g.shape:
+            raise ValueError('positive_to: mask %s vs global mask %s' % (m_glob.shape, g.shape))
+        m_cell = m_glob[g]                                                   # state-cell order
+        nvar, ncell = len(names), m_cell.size
+        owner_all = np.asarray(f._owner)
+        h_all = np.asarray(f._h_state, dtype=float)
+        rows_src = np.concatenate([np.arange(iv, nvar * ncell, nvar) for iv in src])
+        rows_dst = np.concatenate([np.arange(iv, nvar * ncell, nvar) for iv in dst])
+        cell_src, cell_dst = rows_src // nvar, rows_dst // nvar
+        ref = np.arange(dst[0], nvar * ncell, nvar)                          # one storage: cell membership by H weight
+        own_ref, h_ref, in_ref = owner_all[ref], h_all[ref], m_cell
+        self._pt = {}
+        for j in np.unique(own_ref[own_ref >= 0]):
+            mj = own_ref == j
+            hs = float(h_ref[mj].sum())
+            if hs <= 0 or float(h_ref[mj & in_ref].sum()) / hs <= pt['min_share']:
+                continue
+            ms = owner_all[rows_src] == j
+            md = owner_all[rows_dst] == j
+            if not md.any():
+                continue
+            self._pt[int(j)] = dict(src=rows_src[ms], hs=h_all[rows_src[ms]], dst=rows_dst[md], hd=h_all[rows_dst[md]])
+        self.stats.update(pt_units=len(self._pt), pt_moved_mm_sum=0.0, pt_n=0)
+        print('non_negative partition: positive_to in %d sub-basins (%s -> %s, min_share %.2f)'
+              % (len(self._pt), [names[i] for i in src], [names[i] for i in dst], pt['min_share']))
+
+    def _positive_to(self, dX_new, S):
+        """see positive_to: per listed sub-basin and member, the positive part of the "from" increments goes to the
+        "to" storages by their shares; H dX unchanged"""
+        out = dX_new.copy()
+        Sc = S.tocsc() if sparse.issparse(S) else S
+        for j, d in self._pt.items():
+            xs = out[d['src']]                                               # (n_src, N)
+            pos = np.maximum(xs, 0.0)
+            P = d['hs'] @ pos                                                # (N,) water moved per member
+            if not np.any(P > 0):
+                continue
+            col = np.asarray(Sc[:, j].todense()).ravel() if sparse.issparse(Sc) else np.asarray(Sc[:, j]).ravel()
+            w = np.maximum(col[d['dst']], 0.0)
+            hw = float(d['hd'] @ w)
+            if hw <= 0:
+                w, hw = np.ones_like(d['hd']), float(d['hd'].sum())
+            out[d['src']] = xs - pos
+            out[d['dst']] += (w / hw)[:, None] * P[None, :]
+            self.stats['pt_moved_mm_sum'] += float(np.mean(P))
+            self.stats['pt_n'] += 1
+        return out
+
+    def _setup_unit_storage_mask(self, f):
+        """AMZ-E (review 369): elements of each masked storage in sub-basins not flagged in its npz (unit_flag)"""
+        names = list(f.bounds.names)
+        n_obs = f._L_state.shape[1]
+        owner = np.asarray(f._owner)
+        rows = np.zeros(len(owner), dtype=bool)
+        for v, path in self.unit_storage_mask.items():
+            flag = np.asarray(np.load(path)['unit_flag']).astype(bool)
+            if flag.shape != (n_obs,):
+                raise ValueError('unit_storage_mask %s: unit_flag has shape %s, the DA has %d sub-basins' % (path, flag.shape, n_obs))
+            if v not in names:
+                print('non_negative partition: unit_storage_mask for %s ignored (not in the DA state %s)' % (v, names))
+                continue
+            self._um_flag[v] = flag
+            inside = np.zeros(len(owner), dtype=bool)
+            ok = owner >= 0
+            inside[ok] = flag[owner[ok]]
+            rows |= (f._var_idx == names.index(v)) & ~inside
+        self._um_rows = rows if rows.any() else None
+        self.stats.update(unit_storage_mask={v: dict(file=self.unit_storage_mask[v], units=int(fl.sum()))
+                                             for v, fl in self._um_flag.items()},
+                          um_rows=int(rows.sum()), um_nonzero_forced=0)
+        print('non_negative partition: unit_storage_mask %s - zero weight for %d elements outside the listed units'
+              % ({v: int(fl.sum()) for v, fl in self._um_flag.items()}, int(rows.sum())))
+
+    def _mask_weights(self, W):
+        """AMZ-E: zero weight for the masked elements (W sparse CSC, pattern kept)"""
+        W.data[self._um_rows[W.indices]] = 0.0
+        return W
+
+    def um_before_update(self, f, obs, ens_states):
+        """AMZ-E (called by EnKF_localized.update before the bounds / inflation, as reservoir_state.before_update):
+        the masked elements are moved to the observation side, i.e. exactly the subtraction of a run without the
+        storage there (it is then an excluded storage in those sub-basins): obs' = obs - H X_masked, X' = X with the
+        masked rows 0 (zero anomaly, zero amount). Returns (obs', X', X)."""
+        X = np.asarray(ens_states, dtype=float)
+        m = self._um_rows
+        obs2 = np.asarray(obs, dtype=float) - np.asarray(f._DM(states=np.where(m[:, None], X, 0.0)))
+        for nm in ('_ens_min', '_ens_max'):                       # window extremes of the moved rows: 0 as well
+            a = getattr(f, nm, None)
+            if a is not None and np.shape(a) == X.shape:
+                setattr(f, nm, np.where(m[:, None], 0.0, a))
+        self.stats['um_n_windows'] = self.stats.get('um_n_windows', 0) + 1
+        return obs2, np.where(m[:, None], 0.0, X), X
+
+    def um_pin_bounds(self, bounds):
+        """AMZ-E: after bounds.set_window the moved rows get LB = UB = 0 (no water can be placed there)"""
+        bounds.LB[self._um_rows] = 0.0
+        bounds.UB[self._um_rows] = 0.0
+
+    def um_after_update(self, Xa, X):
+        """AMZ-E: the moved rows get their forecast back (zero increment)"""
+        return np.where(self._um_rows[:, None], X, np.asarray(Xa, dtype=float))
+
     def setup(self, f):
         super().setup(f)
+        if self.unit_storage_mask is not None:
+            self._setup_unit_storage_mask(f)
+        if self.hotspot is not None:
+            self._setup_hotspots(f)
+        if self.positive_to is not None:
+            self._setup_positive_to(f)
         for v in self.spatial_blend:
             if v not in f.bounds.names:
                 print('non_negative partition: spatial_blend for %s ignored (not in the DA state %s)' % (v, f.bounds.names))
@@ -289,8 +546,13 @@ class NonNegativePartition(Partition):
             if unknown:
                 print('non_negative partition: bound_overflow exclude %s not in the DA state %s - ignored' % (unknown, names))
             self._bo_idx = np.array([names.index(v) for v in self.bound_overflow['exclude'] if v in names], dtype=int)
-            print('non_negative partition: bound overflow kept out of %s (fallback %s)'
-                  % ([names[i] for i in self._bo_idx], self.bound_overflow['fallback']))
+            self._bo_from_idx = np.array([names.index(v) for v in self.bound_overflow.get('fallback_from', [])
+                                          if v in names], dtype=int)
+            print('non_negative partition: bound overflow kept out of %s (fallback %s; upper-bound overflow of %s may '
+                  'fall back to them)' % ([names[i] for i in self._bo_idx], self.bound_overflow['fallback'],
+                                          [names[i] for i in self._bo_from_idx]))
+            self.stats.setdefault('bo_fallback_from_mm_sum', 0.0)
+            self.stats.setdefault('bo_fallback_from_n', 0)
         if isinstance(self.max_weight_ratio, dict):
             unknown = [v for v in self.max_weight_ratio if v not in f.bounds.names]
             if unknown:
@@ -379,6 +641,8 @@ class NonNegativePartition(Partition):
         corr = np.nan_to_num(corr)
         W = sparse.csr_matrix((Ls.data * var[rows] * np.maximum(corr, 0.0), pxy.indices, pxy.indptr),
                               shape=L.shape).tocsc()                            # explicit zeros kept (same pattern as L)
+        if self._um_rows is not None:
+            W = self._mask_weights(W)                                              # AMZ-E unit_storage_mask
         if self.max_weight_ratio is not None:
             W = self._cap_weights(W)
         if self.spatial_blend:
@@ -389,6 +653,8 @@ class NonNegativePartition(Partition):
             for j in np.where(bad)[0]:
                 a, b = W.indptr[j], W.indptr[j + 1]
                 W.data[a:b] = L.data[a:b] * var[L.indices[a:b]]
+            if self._um_rows is not None:
+                W = self._mask_weights(W)                                          # AMZ-E unit_storage_mask
             if self.max_weight_ratio is not None:
                 W = self._cap_weights(W, cols=np.where(bad)[0])
             if self.spatial_blend:
@@ -411,6 +677,8 @@ class NonNegativePartition(Partition):
                 raise ValueError('partition: a fast-only offset (innovation_bias "fast_only") needs seasonal_split')
             dX_new = np.asarray(S @ delta)                                         # n_state x N
 
+        if self._pt:
+            dX_new = self._positive_to(dX_new, S)
         if self._bs is not None:
             dX_new = self._smooth_boundaries(dX_new, S, delta)
         ss_before = np.abs(np.mean(dX_new, 1)) if self.storage_shares is not None else None
@@ -426,10 +694,15 @@ class NonNegativePartition(Partition):
                 b[v] = b.get(v, 0.0) + float(ss_before[m].sum())
                 a[v] = a.get(v, 0.0) + float(ss_after[m].sum())
 
+        if self._hot:
+            dX_new = self._redistribute_hotspots(dX_new)
         self.stats['n_updates'] += 1
         self.stats['n_obs_fallback'] += int(bad.sum())
         self.stats['n_obs_unresolved'] += int((~ok).sum())
         self.stats['max_abs_inc_enkf'] = max(self.stats['max_abs_inc_enkf'], float(np.abs(dX).max()))
+        if self._um_rows is not None:                                              # AMZ-E: no increment outside
+            self.stats['um_nonzero_forced'] += int(np.count_nonzero(dX_new[self._um_rows]))
+            dX_new[self._um_rows] = 0.0
         self._record_max(dX_new)
         self.stats['max_abs_inc_new'] = max(self.stats['max_abs_inc_new'], float(np.abs(dX_new).max()))
         return dX_new
@@ -437,17 +710,25 @@ class NonNegativePartition(Partition):
     def _fast_part(self, m):
         """ensemble-mean fast (seasonal) part c_j of the sub-basin increments m (n_obs,), updating the state"""
         sp = self.seasonal_split
+        from src_DA.window_scaling import window_ratio, per_window
+        r = window_ratio(self.f)                                        # None: window_scaling off (as before)
         if sp['method'] == 'lowpass':
             if self._sp_lp is None:
                 self._sp_lp = m.copy()                                          # neutral start: c = 0
-            else:
+            elif r is None:
                 self._sp_lp = self._sp_lp + (m - self._sp_lp) / sp['tau_months']
+            else:
+                self._sp_lp = self._sp_lp + (m - self._sp_lp) * per_window(1.0 / sp['tau_months'], r)
             return m - self._sp_lp
         month = int(str(getattr(self.f, '_today', '0000-01'))[5:7] or 1) - 1
         if self._sp_clim is None:
             self._sp_clim = np.zeros((len(m), 12))
-        self._sp_cnt[month] += 1
-        a = max(1.0 / self._sp_cnt[month], 1.0 / sp['memory_years'])
+        if r is None:
+            self._sp_cnt[month] += 1
+            a = max(1.0 / self._sp_cnt[month], 1.0 / sp['memory_years'])
+        else:                                                           # counts in reference windows (months)
+            self._sp_cnt[month] += r
+            a = max(r / self._sp_cnt[month], per_window(1.0 / sp['memory_years'], r))
         self._sp_clim[:, month] += a * (m - self._sp_clim[:, month])
         if sp.get('save'):
             if sp.get('interannual') and self._sp_ia is not None:
@@ -488,7 +769,10 @@ class NonNegativePartition(Partition):
             if self._sp_ia is None:
                 self._sp_ia = r.copy()                                  # neutral start: b = 0
             else:
-                self._sp_ia = self._sp_ia + (r - self._sp_ia) / ia['tau_months']
+                from src_DA.window_scaling import window_ratio, per_window
+                q = window_ratio(f)                                     # None: window_scaling off (as before)
+                self._sp_ia = self._sp_ia + (r - self._sp_ia) * (1.0 / ia['tau_months'] if q is None
+                                                                  else per_window(1.0 / ia['tau_months'], q))
             b = ia['fraction'] * (r - self._sp_ia)
             self.stats['sp_ia_abs_sum'] += float(np.abs(b).sum())
             if self.seasonal_split.get('save') and self._sp_clim is not None:
@@ -550,6 +834,9 @@ class NonNegativePartition(Partition):
             print('non_negative partition: residence weighting tau_ref %.1f d; median tau (d) %s, median factor %s'
                   % (rs['tau_ref_days'], {v: round(float(np.median(tau[:, k])), 1) for k, v in enumerate(sto)},
                      {v: round(float(np.median(fac[:, k])), 3) for k, v in enumerate(sto)}))
+        for k, v in enumerate(sto):                                             # AMZ-E unit_storage_mask
+            if v in self._um_flag:
+                amp[~self._um_flag[v], k] = 0.0
         tot = amp.sum(1, keepdims=True)
         self._ss_table = np.where(tot > 0, amp / np.where(tot > 0, tot, 1.0), 0.0)
         med = {v: round(float(np.median(self._ss_table[:, k])), 3) for k, v in enumerate(sto)}
@@ -641,6 +928,8 @@ class NonNegativePartition(Partition):
         if self.boundary_smoothing is None:
             for k in [k for k in out if k.startswith('bs_')] + ['boundary_smoothing']:
                 out.pop(k, None)
+        if self.positive_to is not None:
+            out['positive_to'] = self.positive_to
         return out
 
     def _blend_weights(self, W, L, cols=None):
@@ -791,6 +1080,9 @@ class NonNegativePartition(Partition):
                 hit = (k < len(rows)) & (rows[o][np.minimum(k, len(rows) - 1)] == allr) if len(rows) else np.zeros(len(allr), bool)
                 sa[hit] = s[o][k[hit]]
                 rows, s = allr, sa
+                if self._um_rows is not None:                 # AMZ-E: masked elements stay out of the bound step
+                    keep = ~self._um_rows[rows]
+                    rows, s = rows[keep], s[keep]
             if len(rows) == 0:
                 continue
             hj = f.h_row(j, rows)                             # row j of H on these elements (H S = I: sum(hj s) = 1)
@@ -815,6 +1107,7 @@ class NonNegativePartition(Partition):
                         cb[nm] = cb.get(nm, 0) + int(only_cell[vi == iv].sum())
                 lo_j, hi_j = lo_c, hi_c
             dj = out[rows, :]                                 # current increments of sub-basin j (n_E x N)
+            dj0 = dj.copy() if len(self._bo_from_idx) else None   # before the bounds (fallback_from)
             fixed = np.zeros_like(dj, dtype=bool)
             frozen = np.zeros_like(dj, dtype=bool)            # bound_overflow: elements that keep their increment
             if len(self._bo_idx):
@@ -868,6 +1161,22 @@ class NonNegativePartition(Partition):
                     rem = delta[j] - hj @ np.where(fixed, dj, 0.0)               # (N,)
                     scale = np.where(ok, rem / np.where(ok, denom, 1.0), 0.0)
                     dj = np.where(fixed, dj, s[:, None] * scale[None, :])
+            if dj0 is not None and frozen.any():
+                '''fallback_from (review 292): positive remainder caused by the listed storages at their PHYSICAL upper
+                bound (a full wetland) -> the excluded storages (groundwater) of the sub-basin, by their shares, at most
+                the water the listed storages could not hold; the cell limits of the excluded storages still apply'''
+                src = np.isin(f._var_idx[rows], self._bo_from_idx)[:, None] & fixed & (np.abs(dj - ph_hi) <= 1e-9)
+                lost = hj @ np.where(src, np.maximum(dj0 - dj, 0.0), 0.0)                # (N,)
+                give = np.clip(np.minimum(delta[j] - hj @ dj, lost), 0.0, None)          # (N,)
+                sf = np.where(frozen, s[:, None], 0.0)
+                den = hj @ sf                                                            # (N,)
+                okf = (den > 1e-12) & (give > 0)
+                if okf.any():
+                    add = sf * np.where(okf, give / np.where(okf, den, 1.0), 0.0)[None, :]
+                    before = hj @ np.where(frozen, dj, 0.0)
+                    dj = np.where(frozen, np.minimum(dj + add, hi_j), dj)
+                    self.stats['bo_fallback_from_mm_sum'] += float(np.mean(hj @ np.where(frozen, dj, 0.0) - before))
+                    self.stats['bo_fallback_from_n'] += int(okf.sum())
             miss = float(np.abs(delta[j] - hj @ dj).max())                       # increment that found no room
             if frozen.any():
                 self.stats['bo_unplaced_mm_sum'] += float(np.abs(np.mean(delta[j] - hj @ dj)))

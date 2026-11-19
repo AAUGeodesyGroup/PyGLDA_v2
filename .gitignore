@@ -52,3 +52,11 @@ doc/ucloud_notes.md
 doc/cowork_review_*.md
 parallel_logs/
 installation/env_setup.log
+parallel_logs/
+.stfolder/
+.stignore
+.claude/
+doc/cowork_*.md
+doc/ucloud_notes.md
+doc/code_5day_notes.md
+doc/*_RECOVERED_*.md

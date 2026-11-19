@@ -7,6 +7,17 @@ import csv
 from src_auxiliary.shp2mask import load_mask
 
 
+def unit_storage_cells(increment_partition, sub_labels):
+    """AMZ-E (review 369): {storage: 2-D bool, True in the cells of the sub-basins listed in the unit_flag npz of
+    increment_partition.unit_storage_mask}; {} when the key is absent"""
+    ip = increment_partition if isinstance(increment_partition, dict) else {}
+    out = {}
+    for v, p in dict(ip.get('unit_storage_mask') or {}).items():
+        fl = np.asarray(np.load(p)['unit_flag']).astype(bool)
+        out[str(v)] = (sub_labels > 0) & fl[np.clip(sub_labels - 1, 0, len(fl) - 1)]
+    return out
+
+
 class model_state_threshold:
     """
     Physical bounds applied to the WaterGAP storages after the EnKF analysis step (regional 2-D fields, mm).
@@ -50,6 +61,9 @@ class model_state_threshold:
         self._lat_slice = slice(box_crop['lat_max'], box_crop['lat_min'])   # descending latitude
         self._lon_slice = slice(box_crop['lon_min'], box_crop['lon_max'])
         self.sub_labels = self._sub_basin_labels(configDA.basic.basin_mask, box_crop)
+        # AMZ-E (review 369): storages of increment_partition.unit_storage_mask are clipped only in the cells of their
+        # listed sub-basins (elsewhere they are not analysed, as in a run without them in the state); absent = off
+        self.unit_cells = unit_storage_cells(getattr(configDA.method, 'increment_partition', None), self.sub_labels)
 
         '''maximum soil water content (per land area, WaterGAP output smax.nc) and the factor that converts it to the
         units of the daily files (per continental area), set for every window by set_soil_scale'''
@@ -186,6 +200,8 @@ class model_state_threshold:
             lo, hi = b
             old = state[var]
             new = np.clip(old, lo, hi)
+            if var in self.unit_cells and np.shape(self.unit_cells[var]) == np.shape(new):   # AMZ-E
+                new = np.where(self.unit_cells[var], new, old)
             diff = new - old
             finite = np.isfinite(diff)
             changed = finite & (diff != 0)

@@ -17,10 +17,12 @@ class GRACE_CSR_mascon(GRACE_preparation):
         super().__init__(basin_name=basin_name, shp_path=shp_path)
         self.resample = 'subsample'
         self.earthquake_correction = None
+        self.lake_leakage = None
         self._half_degree_cache = None
+        self._leak = None
         pass
 
-    def set_options(self, resample='subsample', earthquake_correction=None):
+    def set_options(self, resample='subsample', earthquake_correction=None, lake_leakage=None):
         """
         resample : how the 0.25-degree mascon grid is brought to the 0.5-degree mask grid.
             "subsample"  every second row / column ([0::2, 0::2]; default): the 0.5-degree
@@ -30,15 +32,42 @@ class GRACE_CSR_mascon(GRACE_preparation):
             {"cap_km": 1000, "taper_km": 200, "events": [...], "significance": {"n_placebo": 16, "z_lo": 3, "z_hi": 5}}:
             co- and post-seismic signals of great earthquakes are removed from the gridded mascons (fitted on the whole
             record of the file) before the unit averaging.
-        Both are read from DA_setting.json -> obs.GRACE ("resample", "earthquake_correction") by GDA / RDA.get_GRACE_obs.
+        lake_leakage : None (off, default) or the path of an npz with the leakage of lakes OUTSIDE the model domain
+            (Caspian Sea, review 296): `months` ('YYYY-MM', n) and `leak_mm` (n, 360, 720) on the PyGLDA grid (row 0 =
+            89.75 N, col 0 = -179.75 E), mm water equivalent; built outside src by the review-296 script (lake mass
+            from altimetry, spread like the mascon solution). It is subtracted from every 0.5-degree cell of the month
+            before the unit averaging (basin_TWS) and in the gridded signal (grid_TWS); a month missing in the file is
+            not corrected and is reported.
+        All are read from DA_setting.json -> obs.GRACE ("resample", "earthquake_correction", "lake_leakage") by
+        GDA / RDA.get_GRACE_obs.
         """
         r = str(resample or 'subsample').lower()
         if r not in ('subsample', 'block_mean'):
             raise ValueError('GRACE mascon resample must be "subsample" or "block_mean", got %s' % resample)
         self.resample = r
         self.earthquake_correction = dict(earthquake_correction) if earthquake_correction else None
+        self.lake_leakage = str(lake_leakage) if lake_leakage else None
         self._half_degree_cache = None
+        self._leak = None
         return self
+
+    def _leakage_mm(self, month):
+        """leakage field (360 x 720, PyGLDA grid, mm) of month 'YYYY-MM', or None (off / month not in the file)"""
+        if not getattr(self, 'lake_leakage', None):
+            return None
+        if self._leak is None:
+            z = np.load(self.lake_leakage)
+            months = [str(m) for m in z['months']]
+            leak = np.asarray(z['leak_mm'], dtype=float)
+            if leak.shape[1:] != (360, 720) or leak.shape[0] != len(months):
+                raise ValueError('lake_leakage %s: leak_mm %s does not match months (%d) x 360 x 720'
+                                 % (self.lake_leakage, leak.shape, len(months)))
+            self._leak = dict(zip(months, np.nan_to_num(leak)))
+            self._leak_missing = []
+        f = self._leak.get(month)
+        if f is None:
+            self._leak_missing.append(month)
+        return f
 
     def _mascon_half_degree(self, csr):
         """mascon lwe_thickness [cm] on the 0.5-degree grid in the file's orientation (latitude ascending from the
@@ -142,6 +171,9 @@ class GRACE_CSR_mascon(GRACE_preparation):
             '''convert to be compatible with the mask grid definition'''
             data = np.flipud(data)
             tws_one_month = np.roll(data, 360, axis=1)
+            leak = self._leakage_mm(this_month_shortname)
+            if leak is not None:
+                tws_one_month = tws_one_month - leak / 10.0             # mm -> cm (unit of this array)
 
             for i in range(1, basins_num + 1):
                 key = 'sub_basin_%d' % i
@@ -228,6 +260,9 @@ class GRACE_CSR_mascon(GRACE_preparation):
             '''convert to be compatible with the mask grid definition, convert unit from cm to mm'''
             data = np.flipud(data) * 10
             tws_one_month = np.roll(data, 360, axis=1)
+            leak = self._leakage_mm(this_month_shortname)
+            if leak is not None:
+                tws_one_month = tws_one_month - leak                    # mm
 
             a = tws_one_month[mask.astype(bool)]
             TWS.append(a)
