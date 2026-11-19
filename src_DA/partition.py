@@ -395,7 +395,7 @@ class NonNegativePartition(Partition):
         return W
 
     def um_before_update(self, f, obs, ens_states):
-        """AMZ-E (called by EnKF_localized.update before the bounds / inflation, as reservoir_state.before_update):
+        """AMZ-E (called by EnKF_localized.update before the bounds / inflation):
         the masked elements are moved to the observation side, i.e. exactly the subtraction of a run without the
         storage there (it is then an excluded storage in those sub-basins): obs' = obs - H X_masked, X' = X with the
         masked rows 0 (zero anomaly, zero amount). Returns (obs', X', X)."""
