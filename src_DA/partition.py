@@ -99,15 +99,6 @@ Options of "non_negative" (all default off):
             f_j = fraction * P_j / (P_j + p_ref),  P_j = sum_c h_c p_c / sum_c h_c   (abstraction-weighted unit share)
         so H dX is unchanged, the member spread is kept, and units with little pumping are hardly touched.
         Groundwater is unbounded; max_cell_factor is deliberately not applied to the redirected part.
-    "positive_to": {"mask": "<npz with unit_mask (360 x 720 bool, global grid, row 0 = 89.75 N)>",
-                    "from": ["soilmoist", "localwetlandstor", "globalwetlandstor"], "to": ["groundwstor"]}
-        (DA review 316, Cowork 13 Nov 2026; absent = previous behaviour, bit-identical). In sub-basins whose cells lie
-        mostly (H-weighted > 50 %) inside the mask (units where GRACE sees about 2x WaterGAP's wet-season storage, so
-        positive increments in soil / wetlands run off within days and raise discharge, DA review 314 / 316 G1), the
-        POSITIVE part of the increment of the "from" storages is moved, per member, to the "to" storages (slow
-        groundwater outflow, e-folding ~100 d) in proportion to their shares S of that sub-basin (H-uniform if those
-        are all 0). Negative increments are unchanged. H dX is unchanged. Applied after the seasonal split (it
-        overrides the split for these sub-basins) and before boundary smoothing and the bounds.
     "unit_storage_mask": {"riverstor": "<npz with unit_flag (n_sub,) bool, index k-1 = sub_basin_k>"}
         (AMZ-E, reviews 369 / 373; optional, absent = previous behaviour, bit-identical; doc/watergap_changes/
         amzE_unit_storage_mask.md). A listed storage gets weight only in the sub-basins flagged True: its elements in every other
@@ -117,7 +108,7 @@ Options of "non_negative" (all default off):
         storages exactly as if the storage were not in "storage_shares" / had no ensemble weight there. Meant for the
         regional river-in-state rule of rc2 (OL river + wetland in-phase share >= 0.45 of the OL seasonal TWS
         amplitude 2003-2016 and OL TWS amplitude >= 25 mm: 58 T9 units, amzE_unit_mask_045.npz, reviews 369 / 370).
-Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, positive_to, boundary smoothing,
+Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, boundary smoothing,
 bounds and per-cell limit, hotspot redistribution.
 """
 import numpy as np
@@ -156,7 +147,7 @@ class NonNegativePartition(Partition):
 
     def __init__(self, max_weight_ratio=None, spatial_blend=None, max_cell_factor=None, storage_shares=None,
                  boundary_smoothing=None, bound_overflow=None, seasonal_split=None, hotspot_redistribution=None,
-                 positive_to=None, unit_storage_mask=None):
+                 unit_storage_mask=None):
         super().__init__()
         um = dict(unit_storage_mask or {})                  # AMZ-E (review 369): per-unit storage mask, absent = off
         self.unit_storage_mask = None
@@ -166,24 +157,6 @@ class NonNegativePartition(Partition):
             self.unit_storage_mask = {str(v): str(x) for v, x in um.items()}
         self._um_rows = None                    # setup: (n_state,) True = element of a masked storage outside its units
         self._um_flag = {}                      # setup: storage -> (n_obs,) bool unit flags
-        pt = dict(positive_to or {})
-        self.positive_to = None
-        if pt:
-            bad_k = set(pt) - {'mask', 'from', 'to', 'min_share'}
-            if bad_k:
-                raise ValueError('positive_to: unknown keys %s' % sorted(bad_k))
-            if not pt.get('mask'):
-                raise ValueError('positive_to needs "mask" (npz with unit_mask on the global grid)')
-            self.positive_to = dict(mask=str(pt['mask']),
-                                    src=[str(v) for v in pt.get('from', ['soilmoist', 'localwetlandstor',
-                                                                         'globalwetlandstor'])],
-                                    dst=[str(v) for v in pt.get('to', ['groundwstor'])],
-                                    min_share=float(pt.get('min_share', 0.5)))
-            if set(self.positive_to['src']) & set(self.positive_to['dst']):
-                raise ValueError('positive_to: "from" and "to" overlap: %s' % pt)
-            if not 0.0 < self.positive_to['min_share'] <= 1.0:
-                raise ValueError('positive_to: min_share must be in (0, 1]')
-        self._pt = None                         # setup: per listed sub-basin (src rows, dst rows, h)
         hr = dict(hotspot_redistribution or {})
         self.hotspot = None
         if hr:
@@ -391,71 +364,6 @@ class NonNegativePartition(Partition):
             self.stats['hotspot_n'] += 1
         return out
 
-    def _setup_positive_to(self, f):
-        """sub-basins mostly inside the mask: rows of the "from" and "to" storages and their H weights"""
-        pt = self.positive_to
-        names = list(f.bounds.names)
-        src = [names.index(v) for v in pt['src'] if v in names]
-        dst = [names.index(v) for v in pt['dst'] if v in names]
-        miss = [v for v in pt['src'] + pt['dst'] if v not in names]
-        if miss:
-            print('non_negative partition: positive_to storages %s not in the DA state %s - ignored' % (miss, names))
-        if not src or not dst:
-            print('non_negative partition: positive_to inactive (no "from" or no "to" storage in the state)')
-            self._pt = {}
-            return
-        z = np.load(pt['mask'])
-        m_glob = np.asarray(z['unit_mask']).astype(bool)
-        lm = f._sv.DM.local_mask
-        g = np.asarray(lm['global_2d']).astype(bool)
-        if m_glob.shape != g.shape:
-            raise ValueError('positive_to: mask %s vs global mask %s' % (m_glob.shape, g.shape))
-        m_cell = m_glob[g]                                                   # state-cell order
-        nvar, ncell = len(names), m_cell.size
-        owner_all = np.asarray(f._owner)
-        h_all = np.asarray(f._h_state, dtype=float)
-        rows_src = np.concatenate([np.arange(iv, nvar * ncell, nvar) for iv in src])
-        rows_dst = np.concatenate([np.arange(iv, nvar * ncell, nvar) for iv in dst])
-        cell_src, cell_dst = rows_src // nvar, rows_dst // nvar
-        ref = np.arange(dst[0], nvar * ncell, nvar)                          # one storage: cell membership by H weight
-        own_ref, h_ref, in_ref = owner_all[ref], h_all[ref], m_cell
-        self._pt = {}
-        for j in np.unique(own_ref[own_ref >= 0]):
-            mj = own_ref == j
-            hs = float(h_ref[mj].sum())
-            if hs <= 0 or float(h_ref[mj & in_ref].sum()) / hs <= pt['min_share']:
-                continue
-            ms = owner_all[rows_src] == j
-            md = owner_all[rows_dst] == j
-            if not md.any():
-                continue
-            self._pt[int(j)] = dict(src=rows_src[ms], hs=h_all[rows_src[ms]], dst=rows_dst[md], hd=h_all[rows_dst[md]])
-        self.stats.update(pt_units=len(self._pt), pt_moved_mm_sum=0.0, pt_n=0)
-        print('non_negative partition: positive_to in %d sub-basins (%s -> %s, min_share %.2f)'
-              % (len(self._pt), [names[i] for i in src], [names[i] for i in dst], pt['min_share']))
-
-    def _positive_to(self, dX_new, S):
-        """see positive_to: per listed sub-basin and member, the positive part of the "from" increments goes to the
-        "to" storages by their shares; H dX unchanged"""
-        out = dX_new.copy()
-        Sc = S.tocsc() if sparse.issparse(S) else S
-        for j, d in self._pt.items():
-            xs = out[d['src']]                                               # (n_src, N)
-            pos = np.maximum(xs, 0.0)
-            P = d['hs'] @ pos                                                # (N,) water moved per member
-            if not np.any(P > 0):
-                continue
-            col = np.asarray(Sc[:, j].todense()).ravel() if sparse.issparse(Sc) else np.asarray(Sc[:, j]).ravel()
-            w = np.maximum(col[d['dst']], 0.0)
-            hw = float(d['hd'] @ w)
-            if hw <= 0:
-                w, hw = np.ones_like(d['hd']), float(d['hd'].sum())
-            out[d['src']] = xs - pos
-            out[d['dst']] += (w / hw)[:, None] * P[None, :]
-            self.stats['pt_moved_mm_sum'] += float(np.mean(P))
-            self.stats['pt_n'] += 1
-        return out
-
     def _setup_unit_storage_mask(self, f):
         """AMZ-E (review 369): elements of each masked storage in sub-basins not flagged in its npz (unit_flag)"""
         names = list(f.bounds.names)
@@ -516,8 +424,6 @@ class NonNegativePartition(Partition):
             self._setup_unit_storage_mask(f)
         if self.hotspot is not None:
             self._setup_hotspots(f)
-        if self.positive_to is not None:
-            self._setup_positive_to(f)
         for v in self.spatial_blend:
             if v not in f.bounds.names:
                 print('non_negative partition: spatial_blend for %s ignored (not in the DA state %s)' % (v, f.bounds.names))
@@ -669,8 +575,6 @@ class NonNegativePartition(Partition):
         else:
             dX_new = np.asarray(S @ delta)                                         # n_state x N
 
-        if self._pt:
-            dX_new = self._positive_to(dX_new, S)
         if self._bs is not None:
             dX_new = self._smooth_boundaries(dX_new, S, delta)
         ss_before = np.abs(np.mean(dX_new, 1)) if self.storage_shares is not None else None
@@ -913,8 +817,6 @@ class NonNegativePartition(Partition):
         if self.boundary_smoothing is None:
             for k in [k for k in out if k.startswith('bs_')] + ['boundary_smoothing']:
                 out.pop(k, None)
-        if self.positive_to is not None:
-            out['positive_to'] = self.positive_to
         return out
 
     def _blend_weights(self, W, L, cols=None):
