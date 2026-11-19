@@ -2,13 +2,14 @@
 Translate a DA_setting.json written for an older PyGLDA v2 code version (a template or the run copy of a run) to the
 keys of the current code.
 
-The settings clean-up of November 2026 removed options that no supported configuration used. Nothing was renamed, so
-the translation is mechanical:
+Rules (mechanical; REMOVED below lists the keys that the current code no longer reads):
   - a removed key that is present but switched off (null, false, {}, [] or its "off" value) is dropped;
   - a removed key that is switched ON stops the translation: the current code cannot reproduce that run (use the code
     version the run was made with);
   - every other key is kept as it is. If nothing is dropped, the file is copied byte for byte.
-perturbation.json and Config_ReWaterGAP.json are unchanged by the clean-up and are copied as they are.
+In v2.0 no key has been removed or renamed (the sensitivity options of the WRR and GMD experiments are all still
+read), so every settings file of the earlier code versions is read as it is and the tool only confirms this.
+perturbation.json and Config_ReWaterGAP.json are copied as they are.
 
     python -m src_auxiliary.translate_settings <old DA_setting.json | settings folder> <output file | folder>
     python -m src_auxiliary.translate_settings --check <old DA_setting.json | settings folder>
@@ -27,28 +28,8 @@ def _off(v):
     return v is None or v is False or v == {} or v == [] or v == ''
 
 
-def _excluded_storage_off(v):
-    """excluded_storage: no effect on the results when absent / null or mode "full" (the member subtraction every
-    run used; "log" and "layers" only wrote a diagnostic file in that mode)"""
-    return _off(v) or (isinstance(v, dict) and v.get('mode', 'full') == 'full')
-
-
-def _operator_off(v):
-    return _off(v) or (isinstance(v, dict) and not v.get('mass_consistent', False))
-
-
-'''removed keys: (path in DA_setting.json, test "switched off", what it was)'''
-REMOVED = [
-    (('obs', 'operator'), _operator_off, 'mass-consistent observation operator (continental-fraction weights)'),
-    (('method', 'innovation_bias'), _off, 'bias-aware reference (running mean innovation removed)'),
-    (('method', 'reservoir_state'), _off, 'reservoirs in the state during their filling years'),
-    (('method', 'excluded_storage'), _excluded_storage_off, 'climatology of the storages outside the DA state'),
-    (('method', 'increment_partition', 'positive_to'), _off, 'positive soil / wetland increments moved to groundwater'),
-    (('method', 'increment_partition', 'storage_shares', 'residence'), _off, 'residence-time weights of storage_shares'),
-    (('method', 'increment_partition', 'seasonal_split', 'interannual'), _off, 'second low-pass split of seasonal_split'),
-    (('method', 'increment_partition', 'bound_overflow', 'fallback_from'), _off,
-     'upper-bound overflow of listed storages to the excluded storages'),
-]
+'''removed keys: (path in DA_setting.json, test "switched off", what it was); empty in v2.0'''
+REMOVED = []
 
 
 def translate(setting):

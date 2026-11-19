@@ -6,7 +6,8 @@ missing takes the default. Each default is defined once in the code: top-level k
 component that reads it. `doc/configuration.md` explains the methods in more detail. Paths start with
 `${DATA_ROOT}`; `prepare_settings` replaces it by the data root (`PYGLDA_DATA`) in the run copy.
 
-Settings written for an older code version: `python -m src_auxiliary.translate_settings <old file or folder> <new>`.
+Settings written for an older code version: `python -m src_auxiliary.translate_settings --check <old file or folder>`
+(in v2.0 no key was removed or renamed, so older settings are read as they are).
 
 ## basic
 
@@ -96,19 +97,18 @@ hook `_perturb_*_customize` for user code.
 `Config_ReWaterGAP.json` is WaterGAP's own configuration (see `doc/configuration.md` §3); PyGLDA overwrites the
 simulation period and the restart options at run time.
 
-## Removed in the November 2026 clean-up
+## Sensitivity options
 
-These options were tested and not adopted; no supported configuration used them. The translator drops them when
-they are switched off and refuses a file in which one is switched on (such a run needs the code version it was made
-with).
+Options of the design and sensitivity experiments of the WRR and GMD papers. All are off unless set, and the default
+templates do not use them. Each is described in the docstring of the module that reads it.
 
-| key | what it did |
-|---|---|
-| `obs.operator` (`mass_consistent`, `contfrac_file`, `contfrac_var`) | continental-fraction weights in the unit means |
-| `method.innovation_bias` (`tau_months`, `fraction`, `mode`, `freeze`, `init`, `save`) | bias-aware reference |
-| `method.reservoir_state` (`schedule`, `log`) | reservoirs in the state only during their filling years |
-| `method.excluded_storage` (`mode`, `clim`, `layers`, `member_deviation`, `log`) | climatology of the storages outside the state |
-| `increment_partition.positive_to` (`mask`, `from`, `to`, `min_share`) | positive soil / wetland increments moved to groundwater |
-| `increment_partition.storage_shares.residence` (`tau_ref_days`, `tau_min_days`, `tau_max_days`) | residence-time weights |
-| `increment_partition.seasonal_split.interannual` (`tau_months`, `fraction`) | second low-pass split |
-| `increment_partition.bound_overflow.fallback_from` | wetland upper-bound overflow to groundwater with `fallback: false` |
+| key | what it does | status |
+|---|---|---|
+| `obs.operator` (`mass_consistent`, `contfrac_file`, `contfrac_var`) | continental-fraction weights in the unit means (`src_DA/obs_operator.py`); the open loop must be collected with the same operator | sensitivity option; not used in the default configuration |
+| `method.innovation_bias` (`tau_months`, `fraction`, `mode`, `freeze`, `init`, `save`) | bias-aware reference: the running mean innovation per unit is removed (`src_DA/EnKF_localized.py`) | sensitivity option; not used in the default configuration |
+| `method.reservoir_state` (`schedule`, `log`) | reservoirs in the state only during their filling years (`src_DA/reservoir_state.py`) | sensitivity option; not used in the default configuration |
+| `method.excluded_storage` (`mode`, `clim`, `layers`, `member_deviation`, `log`) | climatology instead of the member value for storages outside the state (`src_DA/EnKF.py`) | sensitivity option; not used in the default configuration |
+| `increment_partition.positive_to` (`mask`, `from`, `to`, `min_share`) | positive soil / wetland increments moved to groundwater in masked units | sensitivity option; not used in the default configuration |
+| `increment_partition.storage_shares.residence` (`tau_ref_days`, `tau_min_days`, `tau_max_days`) | storage shares weighted by the open loop's residence times | sensitivity option; not used in the default configuration |
+| `increment_partition.seasonal_split.interannual` (`tau_months`, `fraction`) | second low-pass split of the non-seasonal remainder | sensitivity option; not used in the default configuration |
+| `increment_partition.bound_overflow.fallback_from` | with `fallback: false`, upper-bound overflow of the listed storages goes to the excluded storages | sensitivity option; not used in the default configuration |

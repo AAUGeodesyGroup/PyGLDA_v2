@@ -33,10 +33,10 @@ Defaults: a key that is missing in `DA_setting.json` takes the default of `src_D
 and the optional `obs.GRACE` entries, `GRACE_DEFAULTS`) or of the component class (keys inside a block). Each default
 is defined in one place. `doc/settings_reference.md` lists every key with its allowed values and default on one page.
 
-Settings written for an older code version are translated with
-`python -m src_auxiliary.translate_settings <old DA_setting.json or folder> <new file or folder>`: options removed
-from the code are dropped when they are switched off; a file in which one is switched on is refused (that run needs
-the code version it was made with). The removed options are listed at the end of `doc/settings_reference.md`.
+Settings written for an older code version can be checked with
+`python -m src_auxiliary.translate_settings --check <old DA_setting.json or folder>`. In v2.0 no key was removed or
+renamed, so they are read as they are. The options of the design and sensitivity experiments (off by default) are
+listed at the end of `doc/settings_reference.md`.
 
 ---
 
