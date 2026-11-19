@@ -40,7 +40,7 @@ Options of "non_negative" (all default off):
     "bound_overflow": {"exclude": ["groundwstor"], "fallback": false}
         where an element hits a bound, its share of the sub-basin increment normally goes to all free elements of the
         sub-basin in proportion to their shares; unbounded groundwater then collects the seasonal correction that full
-        or empty soil and snow cannot take (diagnosis 1 Nov 2026, DA reviews 180/181). With "exclude", the listed
+        or empty soil and snow cannot take. With "exclude", the listed
         storages keep their own increment and take no overflow: the overflow goes to the other free elements only.
         If those have no room, the remainder is left unplaced (fallback false, it reappears in the next innovation) or
         given to the excluded storages as before (fallback true).
@@ -56,20 +56,19 @@ Options of "non_negative" (all default off):
         windows (one process per run, like the adaptive inflation). "climatology" only: "save": path of an .npz the
         monthly means and visit counts are written to after every window; "init": such a file from an earlier run
         (same sub-basins) to start from, so that the first year is not used to learn the climatology (its counts are
-        raised to memory_years, i.e. the loaded climatology is treated as established). Motivation: at wells the seasonal GRACE innovation
-        is anti-correlated with the open loop's groundwater error, its interannual part is positively correlated
-        (DA review 186, 1 Nov 2026).
+        raised to memory_years, i.e. the loaded climatology is treated as established). Motivation: at wells the
+        seasonal GRACE innovation is anti-correlated with the open loop's groundwater error, its interannual part is
+        positively correlated.
         "fraction" (0..1, default 1): only this share of the fast part bypasses the slow storages, c_j -> fraction * c_j
         (0 = no split, i.e. the standard partition; 1 = full split). The climatology / low-pass state still learns
-        from the full m_j. One knob between U2-like (0) and the full split (1) for the configuration choice
-        (DA review 194, 2 Nov 2026).
+        from the full m_j.
     "hotspot_redistribution": {"field": "<npz with pnag_mm_yr (360 x 720, global grid, row 0 = 89.75 N)>",
                                "threshold_mm_yr": 50, "p_ref_mm_yr": 20, "fraction": 1.0}
-        (review 296; absent = previous behaviour, bit-identical). Last step of the partition, groundwater only. In a
+        (optional, absent = off). Last step of the partition, groundwater only. In a
         sub-basin with pumping-hotspot cells (WaterGAP potential net groundwater abstraction > threshold), the open
         loop's groundwater error sits mostly in those cells (the abstraction is demand-driven and uncertain), but the
         weight cap, the blend, the smoothing and max_cell_factor spread the groundwater increment evenly, so a unit
-        correction lands in the neighbours (DA review 290 A: Tehran cell ~1x the unit increment). Here a part f_j of
+        correction lands in the neighbours. Here a part f_j of
         the sub-basin's groundwater increment G_j (= sum_c h_c dX_gw,c, per member) is moved to the hotspot cells in
         proportion to their abstraction:
             dX_gw,c <- (1 - f_j) dX_gw,c + f_j G_j p_c / sum_c h_c p_c        (p_c = pnag of hotspot cells, else 0)
@@ -77,14 +76,13 @@ Options of "non_negative" (all default off):
         so H dX is unchanged, the member spread is kept, and units with little pumping are hardly touched.
         Groundwater is unbounded; max_cell_factor is deliberately not applied to the redirected part.
     "unit_storage_mask": {"riverstor": "<npz with unit_flag (n_sub,) bool, index k-1 = sub_basin_k>"}
-        (AMZ-E, reviews 369 / 373; optional, absent = previous behaviour, bit-identical; doc/watergap_changes/
-        amzE_unit_storage_mask.md). A listed storage gets weight only in the sub-basins flagged True: its elements in every other
+        (optional, absent = off). A listed storage gets weight only in the sub-basins flagged True: its elements in every other
         sub-basin (and in cells of no sub-basin) get zero weight right after the weights are formed (and again after
         the variance-only fallback), zero open-loop amplitude share in "storage_shares", are left out of the bound
         step and are set to 0 at the end, so they receive no increment. Their sub-basins' increments go to the other
-        storages exactly as if the storage were not in "storage_shares" / had no ensemble weight there. Meant for the
-        regional river-in-state rule of rc2 (OL river + wetland in-phase share >= 0.45 of the OL seasonal TWS
-        amplitude 2003-2016 and OL TWS amplitude >= 25 mm: 58 T9 units, amzE_unit_mask_045.npz, reviews 369 / 370).
+        storages exactly as if the storage were not in "storage_shares" / had no ensemble weight there. Meant for a
+        regional rule such as river storage in the state only in the units where the open loop's river and wetland
+        storage carry a large part of the seasonal TWS amplitude.
 Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, boundary smoothing,
 bounds and per-cell limit, hotspot redistribution.
 """
@@ -126,7 +124,7 @@ class NonNegativePartition(Partition):
                  boundary_smoothing=None, bound_overflow=None, seasonal_split=None, hotspot_redistribution=None,
                  unit_storage_mask=None):
         super().__init__()
-        um = dict(unit_storage_mask or {})                  # AMZ-E (review 369): per-unit storage mask, absent = off
+        um = dict(unit_storage_mask or {})                  # per-unit storage mask, absent = off
         self.unit_storage_mask = None
         if um:
             if not all(isinstance(v, str) and isinstance(x, str) and x for v, x in um.items()):
@@ -310,7 +308,7 @@ class NonNegativePartition(Partition):
         return out
 
     def _setup_unit_storage_mask(self, f):
-        """AMZ-E (review 369): elements of each masked storage in sub-basins not flagged in its npz (unit_flag)"""
+        """unit_storage_mask: elements of each masked storage in sub-basins not flagged in its npz (unit_flag)"""
         names = list(f.bounds.names)
         n_obs = f._L_state.shape[1]
         owner = np.asarray(f._owner)
@@ -335,12 +333,12 @@ class NonNegativePartition(Partition):
               % ({v: int(fl.sum()) for v, fl in self._um_flag.items()}, int(rows.sum())))
 
     def _mask_weights(self, W):
-        """AMZ-E: zero weight for the masked elements (W sparse CSC, pattern kept)"""
+        """unit_storage_mask: zero weight for the masked elements (W sparse CSC, pattern kept)"""
         W.data[self._um_rows[W.indices]] = 0.0
         return W
 
     def um_before_update(self, f, obs, ens_states):
-        """AMZ-E (called by EnKF_localized.update before the bounds / inflation):
+        """unit_storage_mask (called by EnKF_localized.update before the bounds / inflation):
         the masked elements are moved to the observation side, i.e. exactly the subtraction of a run without the
         storage there (it is then an excluded storage in those sub-basins): obs' = obs - H X_masked, X' = X with the
         masked rows 0 (zero anomaly, zero amount). Returns (obs', X', X)."""
@@ -355,12 +353,12 @@ class NonNegativePartition(Partition):
         return obs2, np.where(m[:, None], 0.0, X), X
 
     def um_pin_bounds(self, bounds):
-        """AMZ-E: after bounds.set_window the moved rows get LB = UB = 0 (no water can be placed there)"""
+        """unit_storage_mask: after bounds.set_window the moved rows get LB = UB = 0 (no water can be placed there)"""
         bounds.LB[self._um_rows] = 0.0
         bounds.UB[self._um_rows] = 0.0
 
     def um_after_update(self, Xa, X):
-        """AMZ-E: the moved rows get their forecast back (zero increment)"""
+        """unit_storage_mask: the moved rows get their forecast back (zero increment)"""
         return np.where(self._um_rows[:, None], X, np.asarray(Xa, dtype=float))
 
     def setup(self, f):
@@ -486,7 +484,7 @@ class NonNegativePartition(Partition):
         W = sparse.csr_matrix((Ls.data * var[rows] * np.maximum(corr, 0.0), pxy.indices, pxy.indptr),
                               shape=L.shape).tocsc()                            # explicit zeros kept (same pattern as L)
         if self._um_rows is not None:
-            W = self._mask_weights(W)                                              # AMZ-E unit_storage_mask
+            W = self._mask_weights(W)                                              # unit_storage_mask
         if self.max_weight_ratio is not None:
             W = self._cap_weights(W)
         if self.spatial_blend:
@@ -498,7 +496,7 @@ class NonNegativePartition(Partition):
                 a, b = W.indptr[j], W.indptr[j + 1]
                 W.data[a:b] = L.data[a:b] * var[L.indices[a:b]]
             if self._um_rows is not None:
-                W = self._mask_weights(W)                                          # AMZ-E unit_storage_mask
+                W = self._mask_weights(W)                                          # unit_storage_mask
             if self.max_weight_ratio is not None:
                 W = self._cap_weights(W, cols=np.where(bad)[0])
             if self.spatial_blend:
@@ -536,7 +534,7 @@ class NonNegativePartition(Partition):
         self.stats['n_obs_fallback'] += int(bad.sum())
         self.stats['n_obs_unresolved'] += int((~ok).sum())
         self.stats['max_abs_inc_enkf'] = max(self.stats['max_abs_inc_enkf'], float(np.abs(dX).max()))
-        if self._um_rows is not None:                                              # AMZ-E: no increment outside
+        if self._um_rows is not None:                                              # unit_storage_mask: no increment outside
             self.stats['um_nonzero_forced'] += int(np.count_nonzero(dX_new[self._um_rows]))
             dX_new[self._um_rows] = 0.0
         self._record_max(dX_new)
@@ -619,7 +617,7 @@ class NonNegativePartition(Partition):
         src = Path(b.res_permanent) / b.case / 'Res_OL.h5'
         n_obs = f._L_state.shape[1]
         amp = seasonal_amplitude_table(src, sto, n_obs)                         # (n_obs, n_group) mm
-        for k, v in enumerate(sto):                                             # AMZ-E unit_storage_mask
+        for k, v in enumerate(sto):                                             # unit_storage_mask
             if v in self._um_flag:
                 amp[~self._um_flag[v], k] = 0.0
         tot = amp.sum(1, keepdims=True)
@@ -863,7 +861,7 @@ class NonNegativePartition(Partition):
                 hit = (k < len(rows)) & (rows[o][np.minimum(k, len(rows) - 1)] == allr) if len(rows) else np.zeros(len(allr), bool)
                 sa[hit] = s[o][k[hit]]
                 rows, s = allr, sa
-                if self._um_rows is not None:                 # AMZ-E: masked elements stay out of the bound step
+                if self._um_rows is not None:                 # unit_storage_mask: masked elements stay out of the bound step
                     keep = ~self._um_rows[rows]
                     rows, s = rows[keep], s[keep]
             if len(rows) == 0:

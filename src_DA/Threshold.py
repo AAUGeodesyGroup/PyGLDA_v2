@@ -8,7 +8,7 @@ from src_auxiliary.shp2mask import load_mask
 
 
 def unit_storage_cells(increment_partition, sub_labels):
-    """AMZ-E (review 369): {storage: 2-D bool, True in the cells of the sub-basins listed in the unit_flag npz of
+    """unit_storage_mask: {storage: 2-D bool, True in the cells of the sub-basins listed in the unit_flag npz of
     increment_partition.unit_storage_mask}; {} when the key is absent"""
     ip = increment_partition if isinstance(increment_partition, dict) else {}
     out = {}
@@ -61,7 +61,7 @@ class model_state_threshold:
         self._lat_slice = slice(box_crop['lat_max'], box_crop['lat_min'])   # descending latitude
         self._lon_slice = slice(box_crop['lon_min'], box_crop['lon_max'])
         self.sub_labels = self._sub_basin_labels(configDA.basic.basin_mask, box_crop)
-        # AMZ-E (review 369): storages of increment_partition.unit_storage_mask are clipped only in the cells of their
+        # storages of increment_partition.unit_storage_mask are clipped only in the cells of their
         # listed sub-basins (elsewhere they are not analysed, as in a run without them in the state); absent = off
         self.unit_cells = unit_storage_cells(getattr(configDA.method, 'increment_partition', None), self.sub_labels)
 
@@ -176,7 +176,7 @@ class model_state_threshold:
                 return np.maximum(lo, self.river_floor), hi
             return self.river_floor, np.inf
         if var in self.lake_floor:                      # lakes / reservoirs in the DA state (set_lake_floor):
-            lo, hi = self.lake_floor[var]               # lakes -max .. +max, reservoirs 0 .. capacity (review 260)
+            lo, hi = self.lake_floor[var]               # lakes -max .. +max, reservoirs 0 .. capacity
             if np.shape(lo) == np.shape(x):
                 return lo, hi
         if var in self.non_negative_vars:
@@ -200,7 +200,7 @@ class model_state_threshold:
             lo, hi = b
             old = state[var]
             new = np.clip(old, lo, hi)
-            if var in self.unit_cells and np.shape(self.unit_cells[var]) == np.shape(new):   # AMZ-E
+            if var in self.unit_cells and np.shape(self.unit_cells[var]) == np.shape(new):   # unit_storage_mask
                 new = np.where(self.unit_cells[var], new, old)
             diff = new - old
             finite = np.isfinite(diff)

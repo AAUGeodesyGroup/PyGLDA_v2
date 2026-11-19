@@ -384,7 +384,7 @@ class EnKF:
             '''====================start assimilation================================'''
             print('|', end='')
             if hasattr(self, 'refresh_lake_floor'):
-                self.refresh_lake_floor()        # lakes in the state: bounds from the current max storages (review 251)
+                self.refresh_lake_floor()        # lakes in the state: bounds from the current max storages
             rr += 1
             '''get obs and cov'''
             info = self._obs_helper['AssimilationInfo'][rr]
@@ -424,7 +424,7 @@ class EnKF:
             land_ratio_cells = None if historic_land_ratio is None else \
                 historic_land_ratio[np.asarray(self._sv.DM.local_mask['basin_2d']).astype(bool)]
             ens_land_ratio = comm.gather(root=main_thread, sendobj=land_ratio_cells)
-            '''wetland upper bound (review 292): every member's active wetland depth, gathered only when it is on'''
+            '''wetland upper bound: every member's active wetland depth, gathered only when it is on'''
             _wet_on = bool(getattr(self, '_wet_upper', False))
             ens_wet_depth = comm.gather(root=main_thread, sendobj=self._member_wetland_depth()) if _wet_on else None
             historic_min_states = None

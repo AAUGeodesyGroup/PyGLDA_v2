@@ -157,7 +157,7 @@ class yearly_merge:
             # 4. embed the mask and blank everything outside the basin (both stages)
             ds_year['region_mask'] = self.__mask.copy()
             # keep the whole bounding box of the basin: where(..., drop=True) would also drop the rows / columns
-            # that lie between disjoint parts of a multi-basin mask (review 286 B3: 151x196 -> 132x107), and the
+            # that lie between disjoint parts of a multi-basin mask (e.g. 151x196 -> 132x107), and the
             # yearly files would no longer match basin_2d of load_mask. For a mask without such gaps the result is
             # the same as before (cells outside the basin are NaN either way).
             ds_out = ds_year.where(self.__mask) if apply_mask else ds_year

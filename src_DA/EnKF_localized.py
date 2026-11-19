@@ -86,14 +86,14 @@ class EnKF_localized(EnKF):
         no lake (a lake written back below its floor stops the lake balance of WaterGAP)'''
         lower = {}
         self._lake_floor_ctx = None                     # lakes in the state: what refresh_lake_floor needs
-        '''wetland upper bound ("wetland_bounds": {"upper": true}, review 292; absent / false = previous bounds): wetlands
+        '''wetland upper bound ("wetland_bounds": {"upper": true}; absent / false = lower bound 0 only): wetlands
         0 .. WaterGAP's maximum wetland storage, like the lakes; per member through the depth ratio (_wet_scale)'''
         _wb = dict(getattr(self.DA_setting.method, 'wetland_bounds', None) or {})
         self._wet_upper = bool(_wb.get('upper', False)) and any(
             v in names for v in ('localwetlandstor', 'globalwetlandstor'))
         self._ens_wet_scale = None                      # (N,) member depth / main-rank depth, set by EnKF.run_mpi
         _wet_names = ('localwetlandstor', 'globalwetlandstor') if self._wet_upper else ()
-        if any(v in names for v in ('locallakestor', 'globallakestor', 'reservoirstor') + _wet_names):   # + reservoirs (review 260)
+        if any(v in names for v in ('locallakestor', 'globallakestor', 'reservoirstor') + _wet_names):
             from src_DA.bounds import lake_floor_fields
             lw = getattr(self._model, 'lateral_waterbalance', None)
             if lw is None:
@@ -171,7 +171,7 @@ class EnKF_localized(EnKF):
     # ------------------------------------------------------------------ analysis step
     def refresh_lake_floor(self):
         """
-        Lakes in the DA state (DA review 251): rebuild the lake bounds from the model's CURRENT maximum lake storages.
+        Lakes in the DA state: rebuild the lake bounds from the model's CURRENT maximum lake storages.
         The bounds are first built in __init__, before WaterGAP's first model day; on 1 January WaterGAP merges
         reservoirs with mean_annual_inflow = 0 into the global lakes (waterbalance_lateral.py, reservoir activation),
         which raises max_glolake_storage in those cells (4 cells worldwide in 2002-2020, e.g. Tharthar). With the
@@ -189,7 +189,7 @@ class EnKF_localized(EnKF):
         st['n_calls'] += 1
         ctx.setdefault('upper', {})
         changed = {v: int(np.sum((lower[v] != ctx['lower'][v]) |
-                                 (up_l[v] != ctx['upper'].get(v, up_l[v])))) for v in lower}   # reservoirs: capacity (review 260)
+                                 (up_l[v] != ctx['upper'].get(v, up_l[v])))) for v in lower}   # reservoirs: capacity
         if not any(changed.values()):
             return
         nv = len(self.bounds.names)
@@ -212,7 +212,7 @@ class EnKF_localized(EnKF):
         obs_cov    : R (n_obs x n_obs)
         ens_states : forecast states (n_state x N), window means
         """
-        um = getattr(self.partition, '_um_rows', None)      # AMZ-E unit_storage_mask (review 369): masked rows -> obs side
+        um = getattr(self.partition, '_um_rows', None)      # unit_storage_mask: masked rows -> obs side
         if um is not None:
             obs, ens_states, um_X = self.partition.um_before_update(self, obs, ens_states)
         R = obs_cov * self._R_scale
@@ -232,7 +232,7 @@ class EnKF_localized(EnKF):
                                                                    ens_states.shape[1])) else None
         ws = getattr(self, '_ens_wet_scale', None)
         if getattr(self, '_wet_upper', False) and ws is not None and np.size(ws) == ens_states.shape[1]:
-            '''wetland maximum of every member = main-rank maximum x (member depth / main-rank depth) (review 292)'''
+            '''wetland maximum of every member = main-rank maximum x (member depth / main-rank depth)'''
             n_cell = ens_states.shape[0] // len(self.bounds.names)
             wsc = np.broadcast_to(np.asarray(ws, dtype=float)[None, :], (n_cell, ens_states.shape[1]))
             upper_scale = dict(upper_scale or {})
@@ -256,7 +256,7 @@ class EnKF_localized(EnKF):
         self.bounds.set_window(ens_states, ens_min, ens_max,
                                upper_scale=upper_scale, upper_window=self._snow_cap_now)
         if um is not None:
-            self.partition.um_pin_bounds(self.bounds)        # AMZ-E: moved rows LB = UB = 0
+            self.partition.um_pin_bounds(self.bounds)        # unit_storage_mask: moved rows LB = UB = 0
 
         xm = np.mean(ens_states, 1)[:, None]
         A = self.inflation.prior(ens_states - xm, xm, obs, R)
@@ -269,7 +269,7 @@ class EnKF_localized(EnKF):
         dX = self.partition.split(dX, A, HA, N, X)
         Xa = self.inflation.posterior(X + dX, A, HA)
         if um is not None:
-            Xa = self.partition.um_after_update(Xa, um_X)    # AMZ-E: moved rows keep their forecast
+            Xa = self.partition.um_after_update(Xa, um_X)    # unit_storage_mask: moved rows keep their forecast
         return Xa
 
     def analysis_increment(self, X, A, HX, HA, obs, R, N):

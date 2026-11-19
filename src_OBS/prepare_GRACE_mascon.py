@@ -33,9 +33,9 @@ class GRACE_CSR_mascon(GRACE_preparation):
             co- and post-seismic signals of great earthquakes are removed from the gridded mascons (fitted on the whole
             record of the file) before the unit averaging.
         lake_leakage : None (off, default) or the path of an npz with the leakage of lakes OUTSIDE the model domain
-            (Caspian Sea, review 296): `months` ('YYYY-MM', n) and `leak_mm` (n, 360, 720) on the PyGLDA grid (row 0 =
-            89.75 N, col 0 = -179.75 E), mm water equivalent; built outside src by the review-296 script (lake mass
-            from altimetry, spread like the mascon solution). It is subtracted from every 0.5-degree cell of the month
+            (e.g. the Caspian Sea): `months` ('YYYY-MM', n) and `leak_mm` (n, 360, 720) on the PyGLDA grid (row 0 =
+            89.75 N, col 0 = -179.75 E), mm water equivalent; built outside src (lake mass from altimetry, spread like
+            the mascon solution). It is subtracted from every 0.5-degree cell of the month
             before the unit averaging (basin_TWS) and in the gridded signal (grid_TWS); a month missing in the file is
             not corrected and is reported.
         All are read from DA_setting.json -> obs.GRACE ("resample", "earthquake_correction", "lake_leakage") by

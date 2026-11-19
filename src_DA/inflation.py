@@ -250,7 +250,7 @@ class AdaptiveAdditiveInflation(AdditiveInflation):
         '''split: how sigma_j is shared among the storages. "ol_spread" (default): open-loop ensemble variance per
         calendar month (split_table). "ol_seasonal": squared open-loop seasonal amplitude of each storage in the
         sub-basin (partition.seasonal_amplitude_table), the same in every month - noise goes where the model's seasonal
-        signal is, not where its ensemble spread is (DA reviews 180-182, 1 Nov 2026)'''
+        signal is, not where its ensemble spread is'''
         if split not in ('ol_spread', 'ol_seasonal'):
             raise ValueError('adaptive_additive: split must be "ol_spread" or "ol_seasonal", got %s' % split)
         self.split_mode = split

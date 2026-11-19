@@ -50,7 +50,7 @@ class ensemble_model_daily_step(OpenLoop):
     @staticmethod
     def restart_dirs(configDA, case_dir, ensemble_id):
         """
-        Where a DA run reads its start states and saves its end states (2 Nov 2026, DA review 188).
+        Where a DA run reads its start states and saves its end states.
         Before, both were basic.Ensemble_ini_dir, so every DA run overwrote the ensemble's open-loop restart file of
         its end date (e.g. restartwatergap_2006-12-31.pickle) with its analysis states. Now:
           save: basic.DA_restart_dir if set, else <DA_output_temp_dir>/<case>/restart  (never the ensemble folder)
