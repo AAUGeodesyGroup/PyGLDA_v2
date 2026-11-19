@@ -153,6 +153,16 @@ class EnKF_localized(EnKF):
         self._n_obs_centered = 0
         self._obs_mean_shift_rms = []
 
+        '''reservoirs in the state during their filling years ("reservoir_state", sensitivity option; absent = off):
+        reservoir cells outside their filling window are moved to the observation side in every
+        analysis, exactly as in the subtraction runs, see src_DA.reservoir_state'''
+        from src_DA.reservoir_state import ReservoirSchedule
+        from pathlib import Path as _P
+        self._res_sched = ReservoirSchedule.from_setting(
+            getattr(self.DA_setting.method, 'reservoir_state', None), names, n_cell, sv.DM.local_mask,
+            out_dir=_P(self.DA_setting.basic.DA_output_temp_dir) / self.DA_setting.basic.case)
+        self._res_ctx = None
+
         self.inflation.setup(self)
         self.partition.setup(self)
         print('%s: %d states x %d observations; localization %s (mean taper weight %.3f); inflation: %s; '
@@ -212,6 +222,9 @@ class EnKF_localized(EnKF):
         obs_cov    : R (n_obs x n_obs)
         ens_states : forecast states (n_state x N), window means
         """
+        rs = getattr(self, '_res_sched', None)
+        if rs is not None:                                   # reservoirs outside their filling window -> obs side
+            obs, ens_states, self._res_ctx = rs.before_update(self, obs, ens_states, self._today)
         um = getattr(self.partition, '_um_rows', None)      # unit_storage_mask: masked rows -> obs side
         if um is not None:
             obs, ens_states, um_X = self.partition.um_before_update(self, obs, ens_states)
@@ -255,6 +268,8 @@ class EnKF_localized(EnKF):
                 ens_min[r] = ens_states[r]
         self.bounds.set_window(ens_states, ens_min, ens_max,
                                upper_scale=upper_scale, upper_window=self._snow_cap_now)
+        if rs is not None:
+            rs.pin_bounds(self.bounds, self._res_ctx)        # moved reservoir rows: LB = UB = 0
         if um is not None:
             self.partition.um_pin_bounds(self.bounds)        # unit_storage_mask: moved rows LB = UB = 0
 
@@ -268,6 +283,8 @@ class EnKF_localized(EnKF):
 
         dX = self.partition.split(dX, A, HA, N, X)
         Xa = self.inflation.posterior(X + dX, A, HA)
+        if rs is not None:                                   # moved reservoir rows keep their forecast
+            Xa = rs.after_update(Xa, self._res_ctx, self.bounds)
         if um is not None:
             Xa = self.partition.um_after_update(Xa, um_X)    # unit_storage_mask: moved rows keep their forecast
         return Xa
@@ -383,7 +400,8 @@ class EnKF_localized(EnKF):
                     obs_error_correlation=self._obs_corr, n_obs_decorrelated=self._n_obs_decorrelated,
                     obs_perturbation_centering=self._obs_centering, n_obs_centered=self._n_obs_centered,
                     mean_perturbation_removed_rms_mm=(float(np.mean(self._obs_mean_shift_rms))
-                                                      if self._obs_mean_shift_rms else None))
+                                                      if self._obs_mean_shift_rms else None),
+                    reservoir_state=None if getattr(self, '_res_sched', None) is None else self._res_sched.summary())
 
     def save_filter_log(self, out_dir):
         """filter_summary.json and, for the adaptive inflation, adaptive_inflation_log.csv (one row per window and
@@ -391,6 +409,11 @@ class EnKF_localized(EnKF):
         import json, csv
         from pathlib import Path
         out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(self, '_res_sched', None) is not None:
+            try:
+                self._res_sched.save_log()
+            except Exception as err:                         # logging must never stop the run
+                print('reservoir_state log not written: %s' % err)
         json.dump(self.filter_summary(), open(out_dir / 'filter_summary.json', 'w'), indent=1,
                   default=lambda o: np.asarray(o).tolist())
         rows = self.inflation.log_rows()
