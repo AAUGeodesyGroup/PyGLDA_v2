@@ -115,6 +115,8 @@ Options of "non_negative" (all default off):
 Order: weight cap, blend, normalisation (H S = I), storage shares, seasonal split, positive_to, boundary smoothing,
 bounds and per-cell limit, hotspot redistribution.
 """
+import os
+
 import numpy as np
 from scipy import sparse
 
@@ -209,6 +211,12 @@ class NonNegativePartition(Partition):
                 raise ValueError('seasonal_split needs tau_months >= 1 and memory_years >= 1, got %s' % sp)
             if meth != 'climatology' and (sp.get('init') or sp.get('save')):
                 raise ValueError('seasonal_split: "init" / "save" are for method "climatology" only')
+            if sp.get('init') and not os.path.isfile(str(sp['init'])):
+                raise FileNotFoundError(
+                    'seasonal_split "init" file %s not found. It is the initial climatology of the seasonal split; the '
+                    'files of the example settings (Auxiliary/seasonal_split_init/) come with the PyGLDA v2.0 '
+                    'external-data package (Zenodo): copy the file to that path under the data root, point "init" at '
+                    'the "save" file of an earlier run on the same units, or remove "init"' % sp['init'])
             frac = float(sp.get('fraction', 1.0))
             if not 0.0 <= frac <= 1.0:
                 raise ValueError('seasonal_split fraction must be in [0, 1], got %s' % frac)
