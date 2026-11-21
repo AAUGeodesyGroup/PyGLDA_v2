@@ -81,7 +81,7 @@ Options of `increment_partition` with `kind` `non_negative` (all off unless give
 | `storage_shares` | storage split from the open loop's seasonal amplitude | `storages` (`["soilmoist", "groundwstor"]`), `mix` (1.0) |
 | `boundary_smoothing` | mass-preserving smoothing across unit boundaries | `storages` (required), `length_km` (50), `n_iter` (10), `alpha` (1.0), `cutoff` (2.0) |
 | `bound_overflow` | storages that take no overflow of bounded elements | `exclude` (required), `fallback` (`false`) |
-| `seasonal_split` | seasonal part of the mean increment kept out of slow storages | `storages_slow` (`["groundwstor"]`), `method` (`lowpass` / `climatology`, default `lowpass`), `tau_months` (12), `memory_years` (3), `fraction` (1.0), `init`, `save` (climatology only) |
+| `seasonal_split` | seasonal part of the mean increment kept out of slow storages | `storages_slow` (`["groundwstor"]`), `method` (`lowpass` / `climatology`, default `lowpass`), `tau_months` (12), `memory_years` (3), `fraction` (1.0), `init`, `save` (climatology only); a missing `init` file stops the run at start. `settings/GMD_Global` reads `Auxiliary/seasonal_split_init/GMD_Global_GlobalBasins_T9.npz`, which comes with the external-data package (Zenodo) |
 | `hotspot_redistribution` | part of the groundwater increment moved to pumping hotspots | `field` (npz `pnag_mm_yr`, required), `threshold_mm_yr` (50), `p_ref_mm_yr` (20), `fraction` (1.0), `storage` (`groundwstor`) |
 | `unit_storage_mask` | a storage receives increments only in the listed units | `{storage: npz with unit_flag (n_units,)}` |
 
