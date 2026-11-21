@@ -2,8 +2,6 @@ from src_DA.EnumDA import WaterGap_storage_variables
 import numpy as np
 import h5py
 from pathlib import Path
-from datetime import datetime
-from src_auxiliary.GeoMathKit import GeoMathKit
 from src_DA.ObsDesignMatrix import DM_basin_average
 from src_DA.configure_DA import config_DA
 from src_auxiliary.shp2mask import load_mask

@@ -74,9 +74,6 @@ class config_DA:
         # 3. Safely dump the dictionary into a new JSON file
         save_path = Path(save_path)
 
-        # Automatically create the parent directory if it does not exist
-        # save_path.parent.mkdir(parents=True, exist_ok=True)
-
         with open(save_path, 'w') as f:
             json.dump(out_dict, f, indent=4)
 
@@ -118,10 +115,11 @@ class config_DA:
             }
 
     class config_obs:
-        """GRACE input; "GRACE" holds the folders and the product options (src_FlowControl.Regional_DA.get_GRACE_obs)"""
+        """GRACE input; "GRACE" holds the folders and the product options (src_FlowControl.Regional_DA.get_GRACE_obs).
+        Defaults of the optional "GRACE" entries: GRACE_DEFAULTS below."""
         def __init__(self):
             self.dir = None
-            self.GRACE = {'kind': 'Mascon_monthly'}
+            self.GRACE = {'kind': GRACE_DEFAULTS['kind']}
             self.withhold = None        # held-out validation: {"every": 4, "offset": 0} or {"epochs": [...]}, see EnKF.withhold_epochs
 
     class config_method:
@@ -145,7 +143,13 @@ class config_DA:
                                   stays within [0, smax] (src_DA.EnKF._soil_cap_config)
               increment_release   {"storages": ["riverstor"], "days": 10}: the increment of fast storages enters the
                                   next window over its first days (src_DA.EnKF._release_config)
-              snow_bounds         limits of the analysed snow (read with snow_bounds() below)'''
+              snow_bounds         limits of the analysed snow (read with snow_bounds() below)
+              wetland_bounds      {"upper": true}: wetlands in the state are kept below WaterGAP's maximum wetland
+                                  storage (src_DA.bounds); null / {} = lower bound 0 only
+              log_applied_increment  true: monthly sums of the increment that enters the model state are written
+                                  (diagnostic only, src_DA.EnKF._log_increment)
+              window_scaling      {"reference_days": 30.44}: per-window constants scaled by the window length, for
+                                  windows shorter than a month (src_DA.window_scaling); null = off'''
             self.fusion_method = FusionMethod.EnKF_localized.name
             self.localization = {'kind': 'block'}
             self.inflation = {'kind': 'none'}
@@ -158,6 +162,26 @@ class config_DA:
             self.increment_release = None
             self.snow_bounds = {}
             self.letkf = {}
+            self.wetland_bounds = None
+            self.log_applied_increment = False
+            self.window_scaling = None
+
+
+'''defaults of the optional entries of obs.GRACE (the folders have no default)'''
+GRACE_DEFAULTS = {'kind': 'Mascon_monthly',            # "Mascon_monthly" | "TUD_5daily"
+                  'resample': 'subsample',             # mascons 0.25 -> 0.5 degree: "subsample" | "block_mean"
+                  'earthquake_correction': None,       # mascons: dict of src_OBS.earthquake_correction, None = off
+                  'lake_leakage': None,                # mascons: npz of src_OBS.prepare_GRACE_mascon, None = off
+                  'ewh_file': 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc',          # TUD_5daily
+                  'unc_file': 'TUD-L3Uncorr-5dayEWH_UNC-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc',  # TUD_5daily
+                  'unit': 'cm',                        # TUD_5daily: unit of the grids
+                  'corr_length_km': 300.0,             # TUD_5daily: error correlation length of the unit covariance
+                  'add_gia': False}                    # TUD_5daily: add the static GIA field
+
+
+def grace_option(grace, key):
+    """obs.GRACE[key], or its default from GRACE_DEFAULTS"""
+    return grace.get(key, GRACE_DEFAULTS[key])
 
 
 SNOW_BOUNDS_DEFAULT = {'lower_factor': 0.5, 'upper_factor': 2.0, 'upper_offset_mm': 20.0,

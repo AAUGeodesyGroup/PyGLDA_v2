@@ -200,7 +200,7 @@ class GRACE_preparation:
 
         '''calculate the COV, monthly'''
         directory = Path(dir_in)
-        fns = os.listdir(directory)
+        fns = sorted(os.listdir(directory))  # deterministic: first match in sorted order (e.g. 2009-06_0 before _1)
         monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
 
         COV = []
@@ -218,6 +218,7 @@ class GRACE_preparation:
             for filename in fns:
                 if fn in filename:
                     tn = filename
+                    break
 
             if tn is None:
                 continue
@@ -479,7 +480,7 @@ class GRACE_global_preparation:
 
         '''calculate the basin averaged TWS, monthly'''
         directory = Path(dir_in)
-        fns = os.listdir(directory)
+        fns = sorted(os.listdir(directory))  # deterministic: first match in sorted order (e.g. 2009-06_0 before _1)
         monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
 
         print()
@@ -498,6 +499,7 @@ class GRACE_global_preparation:
             for filename in fns:
                 if fn in filename:
                     tn = filename
+                    break
 
             if tn is None:
                 continue

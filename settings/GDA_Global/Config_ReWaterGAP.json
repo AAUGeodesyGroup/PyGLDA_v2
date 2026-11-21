@@ -1,12 +1,12 @@
 {
     "FilePath": {
         "inputDir": {
-            "climate_forcing": "/work/PyGLDA_v2_external_data/Input_data/monthly_climate_forcing",
-            "water_use_data": "/work/PyGLDA_v2_external_data/Input_data/water_use/",
-            "static_land_data": "/work/PyGLDA_v2_external_data/Input_data/static_input/",
-            "parameter_path": "/work/PyGLDA_v2_external_data/Input_data/Parameters/WaterGAP_2.2e_global_parameters_gswp3_w5e5.nc"
+            "climate_forcing": "${DATA_ROOT}/Input_data/monthly_climate_forcing",
+            "water_use_data": "${DATA_ROOT}/Input_data/water_use/",
+            "static_land_data": "${DATA_ROOT}/Input_data/static_input/",
+            "parameter_path": "${DATA_ROOT}/Input_data/Parameters/WaterGAP_2.2e_global_parameters_gswp3_w5e5.nc"
         },
-        "outputDir": "/work/PyGLDA_v2_external_data/output_data/"
+        "outputDir": "${DATA_ROOT}/output_data/"
     },
     "RuntimeOptions": [
         {
@@ -26,7 +26,7 @@
             "RestartOptions": {
                 "restart": false,
                 "save_model_states_for_restart": true,
-                "save_and_read_states_dir": "/work/PyGLDA_v2_external_data/Initialization"
+                "save_and_read_states_dir": "${DATA_ROOT}/Initialization"
             }
         },
         {
@@ -46,13 +46,13 @@
         {
             "SimulationExtent": {
                 "run_basin": false,
-                "path_to_stations_file": "/work/PyGLDA_v2_external_data/Input_data/static_input/"
+                "path_to_stations_file": "${DATA_ROOT}/Input_data/static_input/"
             }
         },
         {
             "Calibrate WaterGAP": {
                 "run_calib": false,
-                "path_to_observed_discharge": "/work/PyGLDA_v2_external_data/ReWaterGAP/test_wateruse/json_annual/"
+                "path_to_observed_discharge": "${DATA_ROOT}/ReWaterGAP/test_wateruse/json_annual/"
             }
         }
     ],

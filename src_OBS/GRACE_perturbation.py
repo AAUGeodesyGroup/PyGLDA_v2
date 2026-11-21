@@ -1,8 +1,6 @@
 
 import numpy as np
 import h5py
-from src_auxiliary.GeoMathKit import GeoMathKit
-import os
 from pathlib import Path
 from datetime import datetime
 from src_OBS.obs_auxiliary import obs_auxiliary

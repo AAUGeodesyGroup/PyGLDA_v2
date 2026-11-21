@@ -1,7 +1,8 @@
 from src_auxiliary.banner import print_pyglda_banner
 from src_DA.EnumDA import Stage
+from src_DA.configure_DA import grace_option
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def _abort_with_report(comm, rank, stage):
@@ -173,7 +174,7 @@ class RDA:
         cov_dir_in = configDA.obs.GRACE['cov_dir']
         dir_out = configDA.obs.GRACE['preprocess_res']
 
-        kind = configDA.obs.GRACE.get('kind', 'Mascon_monthly')
+        kind = grace_option(configDA.obs.GRACE, 'kind')
         if kind == 'TUD_5daily':
             '''TU Delft 5-daily/weekly hybrid product (gridded EWH + per-cell uncertainty). Optional keys in
             DA_setting.json -> obs.GRACE: ewh_file, unc_file, unit ('cm'), corr_length_km (300), add_gia (false).
@@ -185,10 +186,9 @@ class RDA:
                 fn=RDA._land_mask())
             GR.generate_mask(save_dir=Path(RDA.external_data_path) / 'Basin/mask')
             GR.set_extra_info(dir_in=dir_in,
-                              ewh_file=g.get('ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'),
-                              unc_file=g.get('unc_file', 'TUD-L3Uncorr-5dayEWH_UNC-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'),
-                              unit=g.get('unit', 'cm'), corr_length_km=g.get('corr_length_km', 300.0),
-                              add_gia=g.get('add_gia', False))
+                              ewh_file=grace_option(g, 'ewh_file'), unc_file=grace_option(g, 'unc_file'),
+                              unit=grace_option(g, 'unit'), corr_length_km=grace_option(g, 'corr_length_km'),
+                              add_gia=grace_option(g, 'add_gia'))
             GR.inspect(day_begin=RDA.sim_begin_time, day_end=RDA.sim_end_time)
             GR.basin_TWS(day_begin=RDA.sim_begin_time, day_end=RDA.sim_end_time, dir_out=dir_out)
             GR.grid_TWS(day_begin=RDA.sim_begin_time, day_end=RDA.sim_end_time, dir_out=dir_out)
@@ -196,8 +196,9 @@ class RDA:
                          is_diagonal=kwargs['is_diagonal'])
             return
 
-        GR.set_options(resample=configDA.obs.GRACE.get('resample', 'subsample'),
-                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'))
+        GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
+                       earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
+                       lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.grid_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.basin_COV(month_begin=t1, month_end=t2, dir_in=cov_dir_in, dir_out=dir_out,
@@ -424,9 +425,14 @@ class RDA:
         if rank == 1:
             print('step 2/2: basin-average time series of all storages -> Res/%s/%s/Ens_k/basin_ts_%s.h5' %
                   (RDA.case, stage.name, stage.name))
+        from src_DA.obs_operator import operator_config, load_contfrac_global
+        _op = operator_config(configDA)
+        _cf = None if _op is None else load_contfrac_global(_op['contfrac_file'], _op.get('contfrac_var', 'contfrac'))
+        if rank == 1 and _cf is not None:
+            print('basin-average series with the mass-consistent operator (contfrac %s)' % _op['contfrac_file'])
         analysis = BasinAverageAnalysis(
             basin_mask_path=configDA.basic.basin_mask,
-            state_dir=configDA.basic.res_permanent, stage=stage, ens_id=rank, case_name=RDA.case)
+            state_dir=configDA.basic.res_permanent, stage=stage, ens_id=rank, case_name=RDA.case, contfrac=_cf)
 
         try:
             analysis.load_nc_files(start_date=RDA.sim_begin_time, end_date=RDA.sim_end_time).\

@@ -1,11 +1,8 @@
-import sys
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from src_GHM.Interface.Spinup import run as sp_run
 from controller import configuration_module as cm
 from src_GHM.Interface.DailyStepRun import DailyModelRun
-from termcolor import colored
 
 
 class SingleModel:

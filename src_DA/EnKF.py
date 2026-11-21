@@ -9,7 +9,6 @@ from mpi4py import MPI
 from datetime import datetime
 
 from src_DA.Threshold import model_state_threshold
-from src_DA.EnumDA import WaterGap_storage_variables
 
 
 class EnKF:
@@ -58,9 +57,9 @@ class EnKF:
         smax.nc x land fraction x this factor, applied with the land fraction in run_mpi'''
         self._smax_multiplier = self._member_smax_multiplier()
 
-        '''storages outside the DA state (lakes, reservoirs, canopy, river in v1.1/v1.2) that are subtracted from GRACE
-        (method block "excluded_storage", default = the full member anomaly, the behaviour of all runs so far): see
-        _excluded_config (DA review 243)'''
+        '''storages outside the DA state (e.g. lakes, reservoirs, canopy, river) that are subtracted from GRACE
+        (method block "excluded_storage", sensitivity option; default = the full member anomaly): see
+        _excluded_config'''
         self._excl = self._excluded_config()
         self._excl_log = []                 # OL rank: (obs date, full subtracted vector, used vector) per window
 
@@ -75,6 +74,29 @@ class EnKF:
         self._model.unit_converter= self._model.unit_converter.from_basin_mask(local_mask=self._sv.DM.local_mask,
                                                    cell_area_global=self._model.unit_converter.cell_area_global,
                                                    contfrac_global=self._model.unit_converter.contfrac_global)
+
+    def _member_wetland_depth(self):
+        """active wetland depth of this member's model, km (max wetland storage / max wetland area over the cells with a
+        wetland; WaterGAP: max_*wet_storage = area x activewetland_depth x 1e-3), None if the model has no wetland.
+        One value per member (activewetland_depth is a global parameter); a spatially varying depth raises."""
+        lw = getattr(self._model, 'lateral_waterbalance', None)
+        if lw is None:
+            return None
+        vals = []
+        for s_attr, a_attr in (('max_locwet_storage', 'max_locwet_area'), ('max_glowet_storage', 'max_glowet_area')):
+            s = np.asarray(getattr(lw, s_attr, np.nan), dtype=float)
+            a = np.asarray(getattr(lw, a_attr, np.nan), dtype=float)
+            if s.shape != a.shape:
+                continue
+            ok = np.isfinite(s) & np.isfinite(a) & (a > 0)
+            if ok.any():
+                vals.append(s[ok] / a[ok])
+        if not vals:
+            return None
+        v = np.concatenate(vals)
+        if np.ptp(v) > 1e-9 * max(abs(float(np.median(v))), 1e-12):
+            raise ValueError('wetland_bounds: activewetland_depth varies in space; the per-member scaling needs one value')
+        return float(np.median(v))
 
     def _member_smax_multiplier(self):
         """smax_multiplier of the member this rank runs (one value per member), 1.0 if the parameter file has none"""
@@ -113,16 +135,16 @@ class EnKF:
 
     def _excluded_config(self):
         """
-        "excluded_storage" in the method block of DA_setting.json (DA review 243). Absent, null or {"mode": "full"} =
-        current behaviour: each member's observation is GRACE minus the window mean of its own excluded storages
+        "excluded_storage" in the method block of DA_setting.json (sensitivity option). Absent, null or {"mode": "full"} =
+        the default: each member's observation is GRACE minus the window mean of its own excluded storages
         (trend included). Keys:
           "mode": "full" | "climatology"
               climatology: subtract clim[calendar month] instead, the open-loop calendar-month climatology of the
               excluded unit storage (same operator, same units and order as the observation vector), so that the
               trend and interannual part of lake / reservoir / river storage are neither imposed on the state nor
               removed from GRACE.
-          "clim": path of an npz with clim (12, n_obs) float (mode climatology), built by
-              temp/exp_logs/da_dev/review243/excluded_climatology.py from the log of a "full" run.
+          "clim": path of an npz with clim (12, n_obs) float (mode climatology), built from
+              the log of a "full" run (the open-loop calendar-month mean of the logged vectors).
           "layers": [..] (mode climatology, optional): only these excluded storages (e.g. ["reservoirstor"]) are
               replaced by their climatology; the other excluded storages keep the full member subtraction. Absent =
               all excluded storages. The log and the climatology then hold this part only.
@@ -374,7 +396,7 @@ class EnKF:
         """
         parallelized running with MPI4py
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         '''main process'''
         main_thread = 1
@@ -476,7 +498,7 @@ class EnKF:
             '''====================start assimilation================================'''
             print('|', end='')
             if hasattr(self, 'refresh_lake_floor'):
-                self.refresh_lake_floor()        # lakes in the state: bounds from the current max storages (review 251)
+                self.refresh_lake_floor()        # lakes in the state: bounds from the current max storages
             rr += 1
             '''get obs and cov'''
             info = self._obs_helper['AssimilationInfo'][rr]
@@ -520,6 +542,9 @@ class EnKF:
             land_ratio_cells = None if historic_land_ratio is None else \
                 historic_land_ratio[np.asarray(self._sv.DM.local_mask['basin_2d']).astype(bool)]
             ens_land_ratio = comm.gather(root=main_thread, sendobj=land_ratio_cells)
+            '''wetland upper bound: every member's active wetland depth, gathered only when it is on'''
+            _wet_on = bool(getattr(self, '_wet_upper', False))
+            ens_wet_depth = comm.gather(root=main_thread, sendobj=self._member_wetland_depth()) if _wet_on else None
             historic_min_states = None
             historic_max_states = None
 
@@ -543,6 +568,14 @@ class EnKF:
                 del ens_min[OL_thread]
                 del ens_max[OL_thread]
                 del ens_land_ratio[OL_thread]
+                if ens_wet_depth is not None:
+                    '''member depth / main-rank depth: the filter's wetland maximum (main rank's) is scaled by it'''
+                    own = ens_wet_depth[main_thread]
+                    del ens_wet_depth[OL_thread]
+                    d = np.array([np.nan if x is None else x for x in ens_wet_depth], dtype=float)
+                    self._ens_wet_scale = None if (own is None or not np.isfinite(own) or own <= 0
+                                                   or not np.isfinite(d).all()) else d / own
+                    ens_wet_depth = None
                 '''soil capacity of the members in the units of the states (cells x members), see Threshold.set_soil_scale'''
                 self._ens_soil_scale = None if any(x is None for x in ens_land_ratio) else np.array(ens_land_ratio).T
                 ens_land_ratio = None
@@ -557,6 +590,8 @@ class EnKF:
 
                 '''calendar months of the window (monthly snow cap of EnKF_localized)'''
                 self._window_months = sorted({d.month for d in info[1]})
+                '''length of the window in days (method.window_scaling, src_DA.window_scaling; unused when off)'''
+                self._window_days = len(info[1])
 
                 '''kalman filter: update step'''
                 states_update = self.update(obs=ens_obs, obs_cov=obs_cov, ens_states=ens_states)
@@ -581,8 +616,10 @@ class EnKF:
                 delta_full = states_ens_update_delta.flatten()
                 mask = self._release_mask(delta_full.size)
                 carry = self._release_pending * self._release_left if self._release_left > 0 else None
-                self._release_pending = np.where(mask, delta_full, 0.0) / self._release['days']
-                self._release_left = self._release['days']
+                from src_DA.window_scaling import release_days
+                rel_days = release_days(self, self._release['days'], len(info[1]))   # = days when window_scaling is off
+                self._release_pending = np.where(mask, delta_full, 0.0) / rel_days
+                self._release_left = rel_days
                 self._release_windows += 1
             soil_cap_now = self._soil_cap is not None and rank != OL_thread
             if soil_cap_now:

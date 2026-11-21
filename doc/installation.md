@@ -146,7 +146,7 @@ The data root holds the inputs and receives all outputs:
 | `Input_data/` | WaterGAP 2.2e input: monthly climate forcing (GSWP3-W5E5, converted with `src_auxiliary/ForcingFieldConversion.py`), water use, static land data, global parameter file |
 | `Basin/shp/`, `Basin/mask/` | unit shapefiles (GlobalBasins v2.0, Danube, Amazon) and their 0.5° / 1° masks |
 | `GRACE/` | CSR RL06.3 mascons (`SaGEA/signal_Mascon`), DDK3 Monte-Carlo error samples (`SaGEA/sample_DDK3`, produced with SaGEA), the WaterGAP land mask (`global_mask/`), and the prepared observations |
-| `Auxiliary/` | `smax.nc` (maximum soil water content of WaterGAP) |
+| `Auxiliary/` | `smax.nc` (maximum soil water content of WaterGAP); `seasonal_split_init/GMD_Global_GlobalBasins_T9.npz` (initial seasonal-split climatology read by `settings/GMD_Global`, `seasonal_split.init`), part of the external-data package (Zenodo) |
 | `Ensemble_input/`, `Ensemble_Initialization/`, `OL_output/`, `DA_output/`, `Res/`, `settings/` | written by the runs |
 
 ---

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from src_DA.configure_DA import config_DA
+from src_DA.configure_DA import config_DA, grace_option
 from src_DA.ObsDesignMatrix import DM_basin_average
 import h5py
 import numpy as np
@@ -50,7 +50,7 @@ class ensemble_model_daily_step(OpenLoop):
     @staticmethod
     def restart_dirs(configDA, case_dir, ensemble_id):
         """
-        Where a DA run reads its start states and saves its end states (2 Nov 2026, DA review 188).
+        Where a DA run reads its start states and saves its end states.
         Before, both were basic.Ensemble_ini_dir, so every DA run overwrote the ensemble's open-loop restart file of
         its end date (e.g. restartwatergap_2006-12-31.pickle) with its analysis states. Now:
           save: basic.DA_restart_dir if set, else <DA_output_temp_dir>/<case>/restart  (never the ensemble folder)
@@ -203,8 +203,7 @@ class DA_GRACE:
             '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
             return aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
-                                                     filename=configDA.obs.GRACE.get(
-                                                         'ewh_file', 'TUD-L3-5dayEWH-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc'))
+                                                     filename=grace_option(configDA.obs.GRACE, 'ewh_file'))
         raise ValueError('unknown observation kind %s (Mascon_monthly | TUD_5daily)' % kind)
 
     def make_state_envelope(self, variables=None, force=False, comm=None):
@@ -236,15 +235,23 @@ class DA_GRACE:
                                    force=force, comm=comm, monthly=monthly)
 
     def prepare_design_matrix(self):
+        '''mass-consistent operator ("obs": {"operator": {...}}, src_DA.obs_operator; absent = the default cos(lat) weights)'''
+        from src_DA.obs_operator import operator_config, load_contfrac_global, cell_factor_for_state, describe
+        op = operator_config(self.configDA)
         dm = DM_basin_average(layer=self.configDA.model.layer, is_residual=False)
         dm.configure_mask(mask_path=self.configDA.basic.basin_mask)
-        dm.vertical_aggregation().horizontal_aggregation()
+        cf = None
+        if op is not None:
+            cf = cell_factor_for_state(load_contfrac_global(op['contfrac_file'], op.get('contfrac_var', 'contfrac')),
+                                       dm.local_mask)
+            print(describe(cf))
+        dm.vertical_aggregation().horizontal_aggregation(cell_factor=cf)
         self.dm_included = dm
 
         dm2 = DM_basin_average(layer=self.configDA.model.layer, is_residual=True)
 
         dm2.configure_mask(mask_path=self.configDA.basic.basin_mask)
-        dm2.vertical_aggregation().horizontal_aggregation()
+        dm2.vertical_aggregation().horizontal_aggregation(cell_factor=cf)
         self.dm_excluded = dm2
         pass
 

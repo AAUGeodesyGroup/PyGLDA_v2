@@ -26,6 +26,7 @@ import numpy as np
 import h5py
 
 from src_FlowControl.Regional_DA import RDA
+from src_DA.configure_DA import grace_option
 
 
 class _CaseToRDA(type):
@@ -134,7 +135,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         from src_DA.configure_DA import config_DA
 
         configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
-        kind = configDA.obs.GRACE.get('kind', 'Mascon_monthly')
+        kind = grace_option(configDA.obs.GRACE, 'kind')
         if kind != 'Mascon_monthly':
             raise NotImplementedError('GDA.get_GRACE_obs: only Mascon_monthly so far, got %s' % kind)
         t1 = datetime.strptime(GDA.sim_begin_time, '%Y-%m-%d').strftime('%Y-%m')
@@ -142,8 +143,9 @@ class GDA(RDA, metaclass=_CaseToRDA):
         dir_out = configDA.obs.GRACE['preprocess_res']
 
         GR = GRACE_CSR_mascon(basin_name=GDA.basin, shp_path=GDA.shp_path)
-        GR.set_options(resample=configDA.obs.GRACE.get('resample', 'subsample'),
-                       earthquake_correction=configDA.obs.GRACE.get('earthquake_correction'))
+        GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
+                       earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
+                       lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
         GR.configure_global_land_ocean_mask(fn=RDA._land_mask())
         GR.use_mask(mask_dir=Path(configDA.basic.basin_mask).parent)
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['EWH_grid_dir'], dir_out=dir_out)

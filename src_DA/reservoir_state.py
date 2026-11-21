@@ -1,27 +1,27 @@
 """
-Reservoirs in the DA state during their filling years (DA review 280 Part B, Cowork 10 Nov 2026).
+Reservoirs in the DA state during their filling years (sensitivity option; not used in the default configuration).
 
 Why
-    With reservoirs subtracted from GRACE (all runs so far), a reservoir that fills in reality faster or further than
+    With reservoirs subtracted from GRACE (the default), a reservoir that fills in reality faster or further than
     in WaterGAP leaves a positive GRACE residual that the filter can only give to the land around it; a reservoir that
     WaterGAP fills while GRACE sees less drains the land. Boguchany (unit 662, 2013-): land DA-OL trend -14.3 mm/yr
-    while the OL land trend is -1.3. Review 280-C found 21 such units.
+    while the OL land trend is -1.3.
 
 What it does
     "reservoir_state" in the method block of the run copy of DA_setting.json switches it on. The reservoir storage
-    (reservoirstor) must then be in the DA state ("states" of the run copy), with its bounds 0 .. capacity (review 260,
-    src_DA.bounds). For every analysis window only the reservoir cells that are ACTIVE in that window (listed in the
+    (reservoirstor) must then be in the DA state ("states" of the run copy), with its bounds 0 .. capacity
+    (src_DA.bounds). For every analysis window only the reservoir cells that are ACTIVE in that window (listed in the
     schedule with start <= last day of the window <= end) are updated. Every other reservoir cell is treated exactly
     as before, i.e. as subtracted from GRACE:
         obs_n  <- obs_n - H x_n(inactive reservoir rows)       (each member its own window-mean storage)
         x_n(inactive reservoir rows) <- 0 for the analysis, pinned (LB = UB = 0), and given back unchanged afterwards
     so the run is identical to the subtraction runs wherever no reservoir is active (checked by a unit test below).
     The increment that would hit a reservoir bound goes to the other free storages of the sub-basin by the
-    bound-aware partition; with "bound_overflow": {"exclude": ["groundwstor"]} (as in LT9RL0) it does not go into
+    bound-aware partition; with "bound_overflow": {"exclude": ["groundwstor"]} it does not go into
     groundwater (the same rule as for lakes). WaterGAP's release logic is not touched: the daily reservoir balance
     continues from the analysed storage.
 
-Schedule (CSV, built offline by build_schedule from the review 280 B1 inventory and the OL storage series)
+Schedule (CSV, built offline by build_schedule from a reservoir inventory and the OL storage series)
     columns name, lat, lon, unit, capacity_km3, start, end, rule; one row per reservoir outflow cell
     (WaterGAP keeps the storage of a GRanD reservoir in its outflow cell). Dates YYYY-MM-DD.
     Filling rule (default): start = 1 January of the commissioning year (not before the run start); end = the
@@ -31,7 +31,7 @@ Schedule (CSV, built offline by build_schedule from the review 280 B1 inventory 
             plateau_min_frac (0.2) of capacity and its 12-month mean grows by less than plateau_frac (0.05) of
             capacity over the following 12 months
     plus hold_months (12). (b) is needed because WaterGAP never fills Three Gorges, Bakun and Sainte-Marguerite-3 to
-    90 % (review 280 B1). Without an OL series (e.g. GERD 2020-, after the OL record) end = start + max_fill_months
+    90 %. Without an OL series (e.g. GERD 2020-, after the OL record) end = start + max_fill_months
     (60). Reservoirs listed in whole_period are active over the whole run (Kariba / Akosombo / Nasser test).
 
 Method keys ("reservoir_state" in the method block):
@@ -39,7 +39,7 @@ Method keys ("reservoir_state" in the method block):
      "log": true}                          optional, default true: per window and active reservoir cell the ensemble-
                                            mean forecast and analysis storage, the increment, the members at a bound
                                            -> <DA_output_temp_dir>/<case>/reservoir_state_log.csv (main rank)
-Absent / null = off (bit-identical to the previous code).
+Absent / null = off.
 
 Hooks (three lines in src_DA.EnKF_localized): build in __init__, before_update / pin_bounds / after_update in
 update(). Nothing else of the filter, the model or WaterGAP changes.
@@ -263,9 +263,9 @@ def build_schedule(inventory_csv, storage_csv, out_csv, run_start='2002-01-01', 
                    min_startyear=2000, full_frac=0.9, hold_months=12, plateau_frac=0.05, plateau_min_frac=0.2,
                    max_fill_months=60, whole_period=(), min_capacity_km3=0.0, overrides=None):
     """
-    inventory_csv : review 280 B1 reservoir_inventory_2002_2024.csv (name_by_location, lat, lon, T9_unit, startyear,
+    inventory_csv : reservoir inventory CSV, e.g. reservoir_inventory_2002_2024.csv (name_by_location, lat, lon, T9_unit, startyear,
                     capacity_km3, ...)
-    storage_csv   : review 280 B1 reservoir_OL_storage_monthly_km3.csv (first column YYYY-MM, one column per
+    storage_csv   : OL reservoir storage CSV, e.g. reservoir_OL_storage_monthly_km3.csv (first column YYYY-MM, one column per
                     reservoir named <name>_<lat>_<lon>)
     whole_period  : names (or 'lat_lon' keys) active over the whole run (old reservoirs with a trend error:
                     Kariba / Akosombo / Nasser test)
