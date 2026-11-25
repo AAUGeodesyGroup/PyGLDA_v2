@@ -168,7 +168,7 @@ class config_DA:
 
 
 '''defaults of the optional entries of obs.GRACE (the folders have no default)'''
-GRACE_DEFAULTS = {'kind': 'Mascon_monthly',            # "Mascon_monthly" | "TUD_5daily"
+GRACE_DEFAULTS = {'kind': 'Mascon_monthly',            # "Mascon_monthly" | "SH_monthly" | "TUD_5daily"
                   'resample': 'subsample',             # mascons 0.25 -> 0.5 degree: "subsample" | "block_mean"
                   'earthquake_correction': None,       # mascons: dict of src_OBS.earthquake_correction, None = off
                   'lake_leakage': None,                # mascons: npz of src_OBS.prepare_GRACE_mascon, None = off
@@ -176,7 +176,9 @@ GRACE_DEFAULTS = {'kind': 'Mascon_monthly',            # "Mascon_monthly" | "TUD
                   'unc_file': 'TUD-L3Uncorr-5dayEWH_UNC-GRACEv2-Hybrid-2002_2017-0.5x0.5.nc',  # TUD_5daily
                   'unit': 'cm',                        # TUD_5daily: unit of the grids
                   'corr_length_km': 300.0,             # TUD_5daily: error correlation length of the unit covariance
-                  'add_gia': False}                    # TUD_5daily: add the static GIA field
+                  'add_gia': False,                    # TUD_5daily: add the static GIA field
+                  'nc_file': None,                     # SH_monthly: NetCDF in EWH_grid_dir (None: the only *.nc)
+                  'nc_var': 'tws'}                     # SH_monthly: EWH variable (mm, cm or m)
 
 
 def grace_option(grace, key):

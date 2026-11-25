@@ -196,9 +196,21 @@ class RDA:
                          is_diagonal=kwargs['is_diagonal'])
             return
 
-        GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
-                       earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
-                       lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
+        if kind == 'SH_monthly':
+            '''monthly product already filtered and gridded (e.g. a spherical-harmonic solution processed with SaGEA),
+            ONE CF NetCDF in EWH_grid_dir (obs.GRACE.nc_file, nc_var; src_OBS.prepare_GRACE.GRACE_preparation); cov_dir =
+            Monte-Carlo error samples as for the mascons; earthquake correction as for the mascons.'''
+            from src_OBS.prepare_GRACE import GRACE_preparation
+            GR = GRACE_preparation(basin_name=RDA.basin, shp_path=RDA.shp_path)
+            GR.set_options(nc_file=grace_option(configDA.obs.GRACE, 'nc_file'),
+                           nc_var=grace_option(configDA.obs.GRACE, 'nc_var'),
+                           earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'))
+            GR.configure_global_land_ocean_mask(fn=RDA._land_mask())
+            GR.generate_mask(save_dir=Path(RDA.external_data_path) / 'Basin/mask')
+        else:
+            GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
+                           earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
+                           lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.grid_TWS(month_begin=t1, month_end=t2, dir_in=dir_in, dir_out=dir_out)
         GR.basin_COV(month_begin=t1, month_end=t2, dir_in=cov_dir_in, dir_out=dir_out,

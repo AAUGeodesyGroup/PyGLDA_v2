@@ -7,11 +7,107 @@ import os
 from pathlib import Path
 from datetime import datetime
 import geopandas as gpd
-from src_OBS.obs_auxiliary import aux_GRACE_SH_monthly
+import netCDF4 as nc
+from src_OBS.obs_auxiliary import aux_GRACE_SH_monthly, gridded_nc_file
 from tqdm import tqdm
 
+class _GriddedNC:
+    """
+    Reading of a monthly gridded GRACE/GRACE-FO product stored as ONE CF NetCDF (e.g. a spherical-harmonic solution
+    processed with SaGEA: ITSG-Grace2018 + ITSG-Grace_operational, DDK3, 0.5 degree; obs.GRACE.kind = "SH_monthly"):
+    variables time (CF units), lat, lon and the EWH field `nc_var` (time x lat x lon) in mm, cm or m (attribute
+    "units", mm if missing); lat may run either way and lon may be -180..180 or 0..360. time_bounds, if present, give
+    the observation windows (obs_auxiliary.aux_GRACE_SH_monthly). With `earthquake_correction` set, co- and
+    post-seismic signals are fitted on the whole record of the file and removed (src_OBS.earthquake_correction), as for
+    the mascons.
+    """
+    nc_file = None
+    nc_var = 'tws'
+    earthquake_correction = None
+    _cube = None
 
-class GRACE_preparation:
+    def set_options(self, nc_file=None, nc_var='tws', earthquake_correction=None):
+        """nc_file: file name inside dir_in (None: the only *.nc file there); nc_var: EWH variable name;
+        earthquake_correction: None (off) or the settings of src_OBS.earthquake_correction.fit_and_correct"""
+        self.nc_file = nc_file
+        self.nc_var = nc_var or 'tws'
+        self.earthquake_correction = dict(earthquake_correction) if earthquake_correction else None
+        self._cube = None
+        return self
+
+    def _open(self, dir_in):
+        return nc.Dataset(gridded_nc_file(dir_in, self.nc_file), 'r')
+
+    @staticmethod
+    def _months(ds, month_begin, month_end):
+        """[(time index, 'YYYY-MM')] of the file inside [month_begin, month_end]; a repeated month is used once
+        (the same months as obs_auxiliary.aux_GRACE_SH_monthly)"""
+        t = nc.num2date(ds['time'][:], ds['time'].units, getattr(ds['time'], 'calendar', 'standard'))
+        out, seen = [], set()
+        for i, d in enumerate(t):
+            m = '%04d-%02d' % (d.year, d.month)
+            if month_begin <= m <= month_end and m not in seen:
+                seen.add(m)
+                out.append((i, m))
+        return out
+
+    def _field(self, ds, i):
+        """EWH of time index i in mm on the 0.5-degree grid, lat -90 -> 90, lon -180 -> 180 (360 x 720)"""
+        if self.earthquake_correction:
+            return self._corrected(ds)[i]
+        return self._raw(ds, i)
+
+    def _raw(self, ds, i):
+        v = ds[self.nc_var]
+        a = np.ma.filled(v[i, :, :].astype(float), np.nan)
+        lat = np.asarray(ds['lat'][:], dtype=float)
+        lon = np.asarray(ds['lon'][:], dtype=float)
+        if lat[0] > lat[-1]:
+            a, lat = a[::-1, :], lat[::-1]
+        lon = np.where(lon >= 180, lon - 360, lon)
+        o = np.argsort(lon)
+        a, lon = a[:, o], lon[o]
+        if a.shape != (360, 720) or abs(lat[0] + 89.75) > 1e-3 or abs(lon[0] + 179.75) > 1e-3:
+            raise ValueError('gridded GRACE product: expected a 0.5-degree global grid with cell centres '
+                             '(-89.75.., -179.75..), got %s, lat0 %.3f, lon0 %.3f' % (a.shape, lat[0], lon[0]))
+        unit = getattr(v, 'units', 'mm').strip().lower()
+        scale = {'mm': 1.0, 'cm': 10.0, 'm': 1000.0, 'kg m-2': 1.0, 'kg/m2': 1.0, 'kg m**-2': 1.0}.get(unit)
+        if scale is None:
+            raise ValueError('gridded GRACE product: unknown unit %s of %s' % (unit, self.nc_var))
+        return a * scale
+
+    def _corrected(self, ds):
+        """the whole record, earthquake-corrected (computed once, cached)"""
+        if self._cube is None:
+            from src_OBS.earthquake_correction import fit_and_correct
+            data = np.array([self._raw(ds, i) for i in range(len(ds['time']))])
+            t = []
+            for d in nc.num2date(ds['time'][:], ds['time'].units, getattr(ds['time'], 'calendar', 'standard')):
+                d = datetime(d.year, d.month, d.day, getattr(d, 'hour', 0))
+                y0, y1 = datetime(d.year, 1, 1), datetime(d.year + 1, 1, 1)
+                t.append(d.year + (d - y0).total_seconds() / (y1 - y0).total_seconds())
+            LAT, LON = np.meshgrid(np.arange(-89.75, 90, 0.5), np.arange(-179.75, 180, 0.5), indexing='ij')
+            eq = self.earthquake_correction
+            kw = {k: eq[k] for k in ('cap_km', 'taper_km', 'events', 'significance') if k in eq}
+            ok = np.isfinite(data)
+            data, corr, info = fit_and_correct(np.nan_to_num(data), np.array(t), LAT, LON, **kw)
+            data[~ok] = np.nan
+            self.earthquake_info = info
+            self._cube = data
+        return self._cube
+
+    def _grids(self, month_begin, month_end, dir_in):
+        """yield ('YYYY-MM', EWH grid flipped to the mask orientation: lat 90 -> -90, lon -180 -> 180)"""
+        ds = self._open(dir_in)
+        try:
+            for i, m in tqdm(self._months(ds, month_begin, month_end), desc='Processing months'):
+                yield m, np.flipud(self._field(ds, i))
+        finally:
+            ds.close()
+
+
+
+class GRACE_preparation(_GriddedNC):
 
     def __init__(self, basin_name='MDB',
                  shp_path='../data/basin/shp/MDB_4_shapefiles/MDB_4_subbasins.shp'):
@@ -77,92 +173,39 @@ class GRACE_preparation:
         self._05deg_mask = np.flipud(h5py.File(fn, 'r')['resolution_05']['mask'][:])
         return self
 
-    def basin_TWS(self, month_begin='2002-04', month_end='2002-04',
-                  dir_in=None, dir_out=None):
+    def basin_TWS(self, month_begin='2002-04', month_end='2002-04', dir_in=None, dir_out=None):
         """
-        basin averaged TWS, monthly time-series, [mm]
-        Be careful to deal with mask and TWS.
-        mask: lon: -180-->180, lat: 90--->-90
-        tws: lon: -180-->180, lat: -90--->90
+        unit-averaged TWS [mm] per month (cos-latitude weights on the 0.5-degree unit mask) of the gridded product
+        in dir_in (one NetCDF, see _GriddedNC) -> <dir_out>/<basin>_signal.hdf5
         """
         if dir_in is None or dir_out is None:
             raise ValueError('GRACE_preparation.basin_TWS: dir_in and dir_out must be given')
-        '''get a complete time list for all dataset'''
         self._aux = aux_GRACE_SH_monthly().setTimeReference(month_begin=month_begin, month_end=month_end,
-                                                            dir_in=dir_in)
-
-        '''load basin mask'''
+                                                            dir_in=dir_in, filename=self.nc_file)
         res = 0.5
-        mf = h5py.File(Path(self.save_mask_dir)/('%s_res_%s.h5' % (self.basin_name, res)), 'r')
-
+        mf = h5py.File(Path(self.save_mask_dir) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
         basins_num = len(list(mf.keys())) - 1
+        mask = {'sub_basin_%d' % i: (mf['sub_basin_%d' % i][:] * self._05deg_mask).astype(bool)
+                for i in range(1, basins_num + 1)}                                   # lat 90 -> -90
+        lat = np.arange(90 - res / 2, -90, -res)
+        w = np.cos(np.deg2rad(np.repeat(lat[:, None], 720, axis=1)))
 
-        mask = {}
-        for i in range(1, basins_num + 1):
-            key = 'sub_basin_%d' % i
-            '''flip upside down to be compatible with the TWS dataset'''
-            mask[key] = np.flipud(mf[key][:] * self._05deg_mask)
+        print('\nStart to pre-process GRACE to obtain basin-wise TWS over places of interest...')
+        TWS = {k: [] for k in mask}
+        for _, f in self._grids(month_begin, month_end, dir_in):
+            for k in TWS:
+                a, b = f[mask[k]], w[mask[k]]
+                ok = np.isfinite(a)
+                TWS[k].append(np.sum(a[ok] * b[ok]) / np.sum(b[ok]))
 
-        '''load latitude'''
-        err = res / 10
-        lat = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
-        lon = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
-        lon, lat = np.meshgrid(lon, lat)
-        '''flip upside down to be compatible with the TWS dataset'''
-        lat = np.flipud(lat)
-
-        '''calculate the basin averaged TWS, monthly'''
-        directory = Path(dir_in)
-        fns = os.listdir(directory)
-        monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
-
-        TWS = {}
-        print()
-        print('Start to pre-process GRACE to obtain basin-wise TWS over places of interest...')
-        for i in range(1, basins_num + 1):
-            TWS['sub_basin_%d' % i] = []
-            pass
-
-        for month in tqdm(monthlist, desc="Processing months"):
-
-            '''search for the file'''
-            fn = month.strftime('%Y-%m')
-            tn = None
-            for filename in fns:
-                if fn in filename:
-                    tn = filename
-
-            if tn is None:
-                continue
-
-            fn = directory / tn
-
-            tws_one_month = h5py.File(fn, 'r')['data'][:]
-
-            for i in range(1, basins_num + 1):
-                key = 'sub_basin_%d' % i
-                a = tws_one_month[mask[key].astype(bool)]
-                b = lat[mask[key].astype(bool)]
-                b = np.cos(np.deg2rad(b))
-                TWS[key].append(np.sum(a * b) / np.sum(b))
-                pass
-
-            pass
-
-        '''save it into h5'''
-        out_dir = Path(dir_out)
-        hm = h5py.File(out_dir / ('%s_signal.hdf5' % self.basin_name), 'w')
-        for i in range(1, basins_num + 1):
-            key = 'sub_basin_%d' % i
-            hm.create_dataset(key, data=np.array(TWS[key]))
-
+        hm = h5py.File(Path(dir_out) / ('%s_signal.hdf5' % self.basin_name), 'w')
+        for k in TWS:
+            hm.create_dataset(k, data=np.array(TWS[k]))
         dt = h5py.special_dtype(vlen=str)
-        ref = self._aux.getTimeReference()['time_epoch']
-        hm.create_dataset('time_epoch', data=ref, dtype=dt)
+        hm.create_dataset('time_epoch', data=self._aux.getTimeReference()['time_epoch'], dtype=dt)
         hm.create_dataset('sub_basin_area', data=self._sub_basin_area)
         hm.close()
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        pass
 
     def basin_COV(self, month_begin='2002-04', month_end='2002-04',
                   dir_in=None,
@@ -261,76 +304,29 @@ class GRACE_preparation:
 
         pass
 
-    def grid_TWS(self, month_begin='2002-04', month_end='2002-04',
-                 dir_in=None, dir_out=None):
+    def grid_TWS(self, month_begin='2002-04', month_end='2002-04', dir_in=None, dir_out=None):
         """
-        gridded TWS, monthly time-series, [mm]
-        Be careful to deal with mask and TWS.
-        mask: lon: -180-->180, lat: 90--->-90
-        tws: lon: -180-->180, lat: -90--->90
+        gridded TWS [mm] of the cells of the basin mask, per month, of the gridded product in dir_in (one NetCDF)
+        -> <dir_out>/<basin>_gridded_signal.hdf5
         """
         if dir_in is None or dir_out is None:
             raise ValueError('GRACE_preparation.grid_TWS: dir_in and dir_out must be given')
-
-        '''get a complete time list for all dataset'''
         aux = aux_GRACE_SH_monthly().setTimeReference(month_begin=month_begin, month_end=month_end,
-                                                      dir_in=dir_in)
-
-        '''load mask'''
+                                                      dir_in=dir_in, filename=self.nc_file)
         res = 0.5
-        mf = h5py.File(Path(self.save_mask_dir)/('%s_res_%s.h5' % (self.basin_name, res)), 'r')
-
-        basins_num = len(list(mf.keys())) - 1
-
-        mask = mf['basin'][:] * self._05deg_mask
-
-        '''calculate the basin averaged TWS, monthly'''
-        directory = Path(dir_in)
-        fns = os.listdir(directory)
-        monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
-
-        TWS = []
+        mf = h5py.File(Path(self.save_mask_dir) / ('%s_res_%s.h5' % (self.basin_name, res)), 'r')
+        mask = (mf['basin'][:] * self._05deg_mask).astype(bool)                         # lat 90 -> -90
         print('\nStart to pre-process GRACE to obtain gridded TWS over places of interest...')
-
-        for month in tqdm(monthlist, desc="Processing months"):
-
-            '''search for the file'''
-            fn = month.strftime('%Y-%m')
-            tn = None
-            for filename in fns:
-                if fn in filename:
-                    tn = filename
-
-            if tn is None:
-                continue
-
-            fn = directory / tn
-
-            tws_one_month = h5py.File(fn, 'r')['data'][:]
-
-            '''take care: GRACE is -90 90; model TWS and mask is 90 -90'''
-            '''flip upside down to be compatible with the mask'''
-            tws_one_month = np.flipud(tws_one_month)
-            a = tws_one_month[mask.astype(bool)]
-
-            TWS.append(a)
-            pass
-
-        '''save it into h5'''
-        out_dir = Path(dir_out)
-        hm = h5py.File(out_dir / ('%s_gridded_signal.hdf5' % self.basin_name), 'w')
-
+        TWS = [f[mask] for _, f in self._grids(month_begin, month_end, dir_in)]
+        hm = h5py.File(Path(dir_out) / ('%s_gridded_signal.hdf5' % self.basin_name), 'w')
         hm.create_dataset(name='tws', data=np.array(TWS))
-
         dt = h5py.special_dtype(vlen=str)
         hm.create_dataset('time_epoch', data=aux.getTimeReference()['time_epoch'], dtype=dt)
-
         hm.close()
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        pass
 
 
-class GRACE_global_preparation:
+class GRACE_global_preparation(_GriddedNC):
 
     def __init__(self):
         pass
@@ -374,92 +370,36 @@ class GRACE_global_preparation:
 
         return self
 
-    def basin_TWS(self, month_begin='2002-04', month_end='2002-04',
-                  dir_in=None, dir_out=None):
+    def basin_TWS(self, month_begin='2002-04', month_end='2002-04', dir_in=None, dir_out=None):
         """
-        basin averaged TWS, monthly time-series, [mm]
-        Be careful to deal with mask and TWS.
-        mask: lon: -180-->180, lat: 90--->-90
-        tws: lon: -180-->180, lat: -90--->90
+        unit-averaged TWS [mm] of every tile, monthly, from the gridded product in dir_in (one NetCDF, see _GriddedNC)
+        -> <dir_out>/<tile>_signal.hdf5
         """
         if dir_in is None or dir_out is None:
             raise ValueError('GRACE_global_preparation.basin_TWS: dir_in and dir_out must be given')
-
-        '''load mask'''
         res = 0.5
         mask = self.valid_mask['05']
+        lat = np.arange(90 - res / 2, -90, -res)
+        area = np.cos(np.deg2rad(np.repeat(lat[:, None], 720, axis=1)))
 
-        '''load latitude'''
-        err = res / 10
-        lat = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
-        lon = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
-        lon, lat = np.meshgrid(lon, lat)
-        area = np.cos(np.deg2rad(lat))
-
-        '''calculate the basin averaged TWS, monthly'''
-        directory = Path(dir_in)
-        fns = os.listdir(directory)
-        monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
-
-        print()
-        print('Start to pre-process GRACE to obtain signal over places of interest...')
-
-        TWS = {}
-        for tile, tile_mask in mask.items():
-            TWS[tile] = {}
-
+        print('\nStart to pre-process GRACE to obtain signal over places of interest...')
+        TWS = {tile: {} for tile in mask}
         time_epoch = []
-        for month in tqdm(monthlist, desc="Processing months"):
-
-            '''search for the file'''
-            fn = month.strftime('%Y-%m')
-            tn = None
-            for filename in fns:
-                if fn in filename:
-                    tn = filename
-
-            if tn is None:
-                continue
-
-            fn = directory / tn
-            date = tn.split('.')[0]
-            if len(date.split('-')) == 2:
-                time_epoch.append(
-                    date + '-15')  # assumed to be the mid day of the month
-            else:
-                time_epoch.append(date)
-
-            '''flip the data to be compatible with the mask'''
-            tws_one_month = np.flipud(h5py.File(fn, 'r')['data'][:])
-
-            '''loop for the tile'''
+        for m, tws_one_month in self._grids(month_begin, month_end, dir_in):
+            time_epoch.append(m + '-15')
             for tile, tile_mask in mask.items():
-                basins_num = len(list(tile_mask.keys())) - 1
-                '''loop for the subbasins'''
-                for i in range(1, basins_num + 1):
-                    a = tws_one_month[tile_mask[i]]
-                    b = area[tile_mask[i]]
-                    c = np.sum(a * b) / np.sum(b)
-                    if 'sub_basin_%d' % i in TWS[tile].keys():
-                        TWS[tile]['sub_basin_%d' % i].append(c)
-                    else:
-                        TWS[tile]['sub_basin_%d' % i] = [c]
-            pass
+                for i in range(1, len(list(tile_mask.keys()))):
+                    a, b = tws_one_month[tile_mask[i]], area[tile_mask[i]]
+                    TWS[tile].setdefault('sub_basin_%d' % i, []).append(np.sum(a * b) / np.sum(b))
 
-        '''save it into h5'''
         for tile, vv in TWS.items():
-            out_dir = Path(dir_out)
-            hm = h5py.File(out_dir / ('%s_signal.hdf5' % tile), 'w')
+            hm = h5py.File(Path(dir_out) / ('%s_signal.hdf5' % tile), 'w')
             for key, item in vv.items():
                 hm.create_dataset(key, data=np.array(item))
-
             dt = h5py.special_dtype(vlen=str)
             hm.create_dataset('time_epoch', data=time_epoch, dtype=dt)
-
             hm.close()
-
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        pass
 
     def basin_COV(self, month_begin='2002-04', month_end='2002-04',
                   dir_in=None,
@@ -539,81 +479,27 @@ class GRACE_global_preparation:
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         pass
 
-    def grid_TWS(self, month_begin='2002-04', month_end='2002-04',
-                 dir_in=None, dir_out=None):
+    def grid_TWS(self, month_begin='2002-04', month_end='2002-04', dir_in=None, dir_out=None):
         """
-        gridded TWS of every tile, monthly time-series, [mm]
-        Be careful to deal with mask and TWS.
-        mask: lon: -180-->180, lat: 90--->-90
-        tws: lon: -180-->180, lat: -90--->90
+        gridded TWS [mm] of every tile, monthly, from the gridded product in dir_in (one NetCDF)
+        -> <dir_out>/<tile>_gridded_signal.hdf5
         """
         if dir_in is None or dir_out is None:
             raise ValueError('GRACE_global_preparation.grid_TWS: dir_in and dir_out must be given')
-
-        '''load mask'''
-        res = 0.5
         mask = self.valid_mask['05']
-
-        '''load latitude'''
-        err = res / 10
-        lat = np.arange(90 - res / 2, -90 + res / 2 - err, -res)
-        lon = np.arange(-180 + res / 2, 180 - res / 2 + err, res)
-        lon, lat = np.meshgrid(lon, lat)
-        area = np.cos(np.deg2rad(lat))
-
-        '''calculate the basin averaged TWS, monthly'''
-        directory = Path(dir_in)
-        fns = os.listdir(directory)
-        monthlist = GeoMathKit.monthListByMonth(begin=month_begin, end=month_end)
-
-        print()
-        print('Start to pre-process GRACE to obtain signal over places of interest...')
-
-        TWS = {}
-        for tile, tile_mask in mask.items():
-            TWS[tile] = []
-
+        print('\nStart to pre-process GRACE to obtain signal over places of interest...')
+        TWS = {tile: [] for tile in mask}
         time_epoch = []
-        for month in tqdm(monthlist, desc="Processing months"):
-
-            '''search for the file'''
-            fn = month.strftime('%Y-%m')
-            tn = None
-            for filename in fns:
-                if fn in filename:
-                    tn = filename
-
-            if tn is None:
-                continue
-
-            fn = directory / tn
-            date = tn.split('.')[0]
-            if len(date.split('-')) == 2:
-                time_epoch.append(date + '-15')  # assumed to be the mid day of the month
-            else:
-                time_epoch.append(date)
-
-            '''flip the data to be compatible with the mask'''
-            tws_one_month = np.flipud(h5py.File(fn, 'r')['data'][:])
-
-            '''loop for the tile'''
+        for m, tws_one_month in self._grids(month_begin, month_end, dir_in):
+            time_epoch.append(m + '-15')
             for tile, tile_mask in mask.items():
-                a = tws_one_month[tile_mask[0]]
-                TWS[tile].append(a)
+                TWS[tile].append(tws_one_month[tile_mask[0]])
 
-            pass
-
-        '''save it into h5'''
         for tile, vv in TWS.items():
-            out_dir = Path(dir_out)
-            hm = h5py.File(out_dir / ('%s_gridded_signal.hdf5' % tile), 'w')
-
+            hm = h5py.File(Path(dir_out) / ('%s_gridded_signal.hdf5' % tile), 'w')
             hm.create_dataset(name='tws', data=np.array(vv))
-
             dt = h5py.special_dtype(vlen=str)
             hm.create_dataset('time_epoch', data=time_epoch, dtype=dt)
             hm.close()
-
         print('Finished: %s' % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        pass
 

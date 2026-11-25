@@ -1,6 +1,7 @@
 """
 Removal of co- and post-seismic gravity changes of great earthquakes from gridded GRACE / GRACE-FO mass anomalies
-(CSR mascons), before the unit averaging of the observations (applied to the CSR mascons only, not to an SH product).
+(CSR mascons, obs.GRACE.kind "Mascon_monthly", and gridded products in one NetCDF, "SH_monthly"), before the unit
+averaging of the observations.
 
 Method (as Tanaka & Heki 2014 GRL and GravIS, Boergens et al. 2025 ESSD): for every grid cell within `cap_km` of an
 event's rupture trace, the full monthly record is fitted by least squares with

@@ -188,7 +188,7 @@ class DA_GRACE:
     def _obs_aux(self):
         """time reference (epochs and observation windows) of the observation kind in DA_setting.json for the
         assimilation period; used by gather_OLmean and generate_perturbed_GRACE_obs"""
-        from src_OBS.obs_auxiliary import aux_GRACE_mascon_monthly, aux_TUD_5daily
+        from src_OBS.obs_auxiliary import aux_GRACE_mascon_monthly, aux_TUD_5daily, aux_GRACE_SH_monthly
 
         configDA = self.configDA
         begin_day = configDA.basic.fromdate
@@ -199,12 +199,19 @@ class DA_GRACE:
             t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
             return aux_GRACE_mascon_monthly().setTimeReference(month_begin=t1, month_end=t2,
                                                                dir_in=configDA.obs.GRACE['aux_for_time_epochs'])
+        if kind == 'SH_monthly':
+            '''monthly product gridded beforehand in one NetCDF: aux_for_time_epochs = folder holding it'''
+            t1 = datetime.strptime(begin_day, '%Y-%m-%d').strftime('%Y-%m')
+            t2 = datetime.strptime(end_day, '%Y-%m-%d').strftime('%Y-%m')
+            return aux_GRACE_SH_monthly().setTimeReference(month_begin=t1, month_end=t2,
+                                                         dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
+                                                         filename=grace_option(configDA.obs.GRACE, 'nc_file'))
         if kind == 'TUD_5daily':
             '''TU Delft 5-daily/weekly hybrid product: aux_for_time_epochs = folder holding the netCDF files'''
             return aux_TUD_5daily().setTimeReference(day_begin=begin_day, day_end=end_day,
                                                      dir_in=configDA.obs.GRACE['aux_for_time_epochs'],
                                                      filename=grace_option(configDA.obs.GRACE, 'ewh_file'))
-        raise ValueError('unknown observation kind %s (Mascon_monthly | TUD_5daily)' % kind)
+        raise ValueError('unknown observation kind %s (Mascon_monthly | SH_monthly | TUD_5daily)' % kind)
 
     def make_state_envelope(self, variables=None, force=False, comm=None):
         """

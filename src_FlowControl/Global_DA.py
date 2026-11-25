@@ -129,23 +129,36 @@ class GDA(RDA, metaclass=_CaseToRDA):
                                         from the 0.5-degree one, shp2mask.mask_05_to_1)
           <basin>_gridded_signal.hdf5   gridded TWS of the unit cells
         The frozen mask is used as it is (GRACE_preparation.use_mask), not rasterised again from the shapefile, which
-        would lose the model land and the removed units. Only the monthly CSR mascons ('Mascon_monthly') for now.
+        would lose the model land and the removed units. Kinds: the monthly CSR mascons ('Mascon_monthly') and monthly
+        products gridded beforehand in one NetCDF ('SH_monthly', src_OBS.prepare_GRACE.GRACE_preparation).
         """
         from src_OBS.prepare_GRACE_mascon import GRACE_CSR_mascon
+        from src_OBS.prepare_GRACE import GRACE_preparation
         from src_DA.configure_DA import config_DA
 
         configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
         kind = grace_option(configDA.obs.GRACE, 'kind')
-        if kind != 'Mascon_monthly':
-            raise NotImplementedError('GDA.get_GRACE_obs: only Mascon_monthly so far, got %s' % kind)
+        if kind not in ('Mascon_monthly', 'SH_monthly'):
+            raise NotImplementedError('GDA.get_GRACE_obs: Mascon_monthly or SH_monthly, got %s' % kind)
         t1 = datetime.strptime(GDA.sim_begin_time, '%Y-%m-%d').strftime('%Y-%m')
         t2 = datetime.strptime(GDA.sim_end_time, '%Y-%m-%d').strftime('%Y-%m')
         dir_out = configDA.obs.GRACE['preprocess_res']
 
-        GR = GRACE_CSR_mascon(basin_name=GDA.basin, shp_path=GDA.shp_path)
-        GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
-                       earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
-                       lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
+        if kind == 'SH_monthly':
+            '''monthly product already filtered and gridded (e.g. a spherical-harmonic solution processed with SaGEA),
+            ONE CF NetCDF in EWH_grid_dir (obs.GRACE.nc_file, nc_var; src_OBS.prepare_GRACE.GRACE_preparation); the earthquake
+            correction applies as for the mascons; resample and lake_leakage are mascon-only.'''
+            if grace_option(configDA.obs.GRACE, 'lake_leakage'):
+                print('GDA.get_GRACE_obs: lake_leakage is a mascon option and is ignored for SH_monthly')
+            GR = GRACE_preparation(basin_name=GDA.basin, shp_path=GDA.shp_path)
+            GR.set_options(nc_file=grace_option(configDA.obs.GRACE, 'nc_file'),
+                           nc_var=grace_option(configDA.obs.GRACE, 'nc_var'),
+                           earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'))
+        else:
+            GR = GRACE_CSR_mascon(basin_name=GDA.basin, shp_path=GDA.shp_path)
+            GR.set_options(resample=grace_option(configDA.obs.GRACE, 'resample'),
+                           earthquake_correction=grace_option(configDA.obs.GRACE, 'earthquake_correction'),
+                           lake_leakage=grace_option(configDA.obs.GRACE, 'lake_leakage'))
         GR.configure_global_land_ocean_mask(fn=RDA._land_mask())
         GR.use_mask(mask_dir=Path(configDA.basic.basin_mask).parent)
         GR.basin_TWS(month_begin=t1, month_end=t2, dir_in=configDA.obs.GRACE['EWH_grid_dir'], dir_out=dir_out)

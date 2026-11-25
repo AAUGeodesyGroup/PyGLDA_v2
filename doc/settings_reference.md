@@ -28,15 +28,16 @@ Settings written for an older code version: `python -m src_auxiliary.translate_s
 |---|---|---|---|
 | `dir` | folder of the observation file of a run | path | required |
 | `withhold` | GRACE epochs not assimilated (held-out validation) | `{"every": n, "offset": k}` or `{"epochs": [...]}` | `null` (all assimilated) |
-| `GRACE.kind` | GRACE product | `Mascon_monthly`, `TUD_5daily` | `Mascon_monthly` |
+| `GRACE.kind` | GRACE product | `Mascon_monthly`, `SH_monthly` (monthly product filtered and gridded beforehand, e.g. a spherical-harmonic solution processed with SaGEA, as ONE CF NetCDF in `EWH_grid_dir`: `time`, `lat`, `lon`, EWH variable `nc_var` in mm/cm/m on the 0.5° grid, optional `time_bounds`; error samples in `cov_dir` and `earthquake_correction` as for the mascons; `resample`, `lake_leakage` ignored), `TUD_5daily` (regional only) | `Mascon_monthly` |
 | `GRACE.EWH_grid_dir` | gridded product | path | required |
 | `GRACE.aux_for_time_epochs` | folder from which epochs and windows are read | path | required |
 | `GRACE.cov_dir` | mascons: monthly error samples (not used by `TUD_5daily`) | path | required for mascons |
 | `GRACE.preprocess_res` | unit signal, gridded signal and covariance of `get_GRACE_obs` | path | required |
 | `GRACE.OL_mean` | open-loop mean per case (datum of the GRACE anomalies) | path | required |
 | `GRACE.resample` | mascons 0.25° → 0.5° | `subsample`, `block_mean` | `subsample` |
-| `GRACE.earthquake_correction` | mascons: co-/post-seismic signals removed | `{"cap_km", "taper_km", "events", "significance": {"n_placebo", "z_lo", "z_hi"}}` | `null` (off); inside: 1000, 200, the four events listed in `doc/configuration.md`, `significance` `null` (no placebo test; values inside default to 10, 2.0, 4.0) |
+| `GRACE.earthquake_correction` | mascons and `SH_monthly`: co-/post-seismic signals removed | `{"cap_km", "taper_km", "events", "significance": {"n_placebo", "z_lo", "z_hi"}}` | `null` (off); inside: 1000, 200, the four events listed in `doc/configuration.md`, `significance` `null` (no placebo test; values inside default to 10, 2.0, 4.0) |
 | `GRACE.lake_leakage` | mascons: leakage of water bodies outside the model domain subtracted | npz path (`months`, `leak_mm`) | `null` (off) |
+| `GRACE.nc_file`, `nc_var` | `SH_monthly`: NetCDF file name in `EWH_grid_dir` and EWH variable | text | `null` (the only `*.nc` there), `tws` |
 | `GRACE.ewh_file`, `unc_file` | `TUD_5daily`: file names | text | the TU Delft v2 hybrid files |
 | `GRACE.unit`, `corr_length_km`, `add_gia` | `TUD_5daily`: grid unit, error correlation length, static GIA | `cm` / km / bool | `cm`, 300, `false` |
 
