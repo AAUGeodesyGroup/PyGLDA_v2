@@ -31,8 +31,16 @@ PyGLDA_v2/
 ├── settings/              # templates (GDA_Global, RDA_Regional) and the GMD paper cases: DA_setting.json,
 │                          #   perturbation.json, Config_ReWaterGAP.json
 ├── doc/                   # installation and configuration guides, settings reference
-├── installation/          # environment files and setup script
-└── parallel_logs/         # MPI run logs (written at run time)
+└── installation/          # environment files and setup script
+```
+
+Nothing is written into the code folder at run time. Logs go to the data root (see
+[doc/installation.md](doc/installation.md#6-data)):
+
+```
+<data root>/logs/
+├── errors_YYYY-MM.log     # every error of every case, job and MPI rank, time-stamped (kept)
+└── <case>/                # <step>_<YYYYmmdd-HHMMSS>[_rank<k>].log of the case's jobs (deletable)
 ```
 
 ## Modifications to WaterGAP 2.2e

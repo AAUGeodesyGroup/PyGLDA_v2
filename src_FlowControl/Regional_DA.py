@@ -3,26 +3,38 @@ from src_DA.EnumDA import Stage
 from src_DA.configure_DA import grace_option
 from pathlib import Path
 from datetime import datetime
+from src_FlowControl import error_log, run_summary
 
 
 def _abort_with_report(comm, rank, stage):
     """
     Call from an `except` block inside an MPI stage.
     Writes the full traceback to this rank's current stdout (its log file, or the terminal
-    for the rank that owns it), then - if this rank's output has been redirected to a log -
-    echoes a one-line summary to the real terminal (sys.__stderr__) so a failure on any
-    rank is visible without opening the log files. Finally aborts the whole MPI job.
+    for the rank that owns it), adds one entry to <data root>/logs/errors_YYYY-MM.log
+    (src_FlowControl.error_log) and the failure to DA_output/<case>/run_summary.json, then -
+    if this rank's output has been redirected to a log - echoes a one-line summary to the
+    real terminal (sys.__stderr__) so a failure on any rank is visible without opening the
+    log files. Finally aborts the whole MPI job.
     """
     import sys, traceback
     exc_type, exc, _ = sys.exc_info()
     print(f"[ERROR] Rank {rank} encountered an exception: {exc}")
     traceback.print_exc()
     sys.stdout.flush()
+    error_log.report_exception(step=stage)
+    if stage in RDA.SUMMARY_STEPS:
+        run_summary.finish(RDA.case, RDA.external_data_path, stage, status='failed',
+                           error='rank %s: %s: %s' % (rank, exc_type.__name__, exc))
     if sys.stdout is not sys.__stdout__:          # output redirected -> terminal has seen nothing yet
         print(f"[ERROR] rank {rank} ({stage}): {exc_type.__name__}: {exc}  "
-              f"-- full traceback in parallel_logs/{stage}/rank_{rank}.log",
+              f"-- full traceback in {getattr(sys.stdout, 'name', 'the rank log')}",
               file=sys.__stderr__, flush=True)
     comm.Abort(1)
+
+
+def _install(step):
+    """error_log.install for a stage of the current case: entries of errors_YYYY-MM.log carry case and step"""
+    error_log.install(RDA.case, step, RDA.external_data_path)
 
 
 class RDA:
@@ -49,6 +61,7 @@ class RDA:
     sim_end_time = '2006-12-31'
 
     SETTING_FILES = ('DA_setting.json', 'perturbation.json', 'Config_ReWaterGAP.json')
+    SUMMARY_STEPS = ('DA', 'collect_OL', 'collect_DA')      # job steps recorded in DA_output/<case>/run_summary.json
 
     @staticmethod
     def prepare_settings(source_dir, write=True):
@@ -60,6 +73,7 @@ class RDA:
         written. write=False only sets setting_dir (the other MPI ranks, after rank 0 has written).
         """
         import shutil
+        _install('settings')
         src = Path(source_dir)
         run_dir = Path(RDA.external_data_path) / 'settings' / RDA.case
         RDA.setting_dir = str(run_dir)
@@ -153,6 +167,7 @@ class RDA:
         import numpy as np
         import h5py
         from src_auxiliary.shp2mask import basin_shp_process, mask_05_to_1
+        _install('prepare')
 
         '''for WaterGAP'''
         basin_shp = basin_shp_process(save_dir=Path(RDA.external_data_path) / 'Basin/mask',
@@ -171,6 +186,7 @@ class RDA:
         """preparation for GRACE and forcing fields for global tiles"""
         from src_OBS.prepare_GRACE_mascon import GRACE_CSR_mascon
         from src_DA.configure_DA import config_DA
+        _install('prepare')
         GR = GRACE_CSR_mascon(basin_name=RDA.basin, shp_path=RDA.shp_path)
 
         GR.configure_global_land_ocean_mask(
@@ -235,7 +251,8 @@ class RDA:
         """
         Global perturbation of parameters and forcing -> Ensemble_input/Ens_k (k = 0..ens, Ens_0 unperturbed).
         MPI stage (mpiexec -n ens+1): each rank writes its own member; rank 0 draws the random numbers and
-        broadcasts them. Rank 1 prints the progress, the other ranks log to parallel_logs/perturbation/.
+        broadcasts them. Rank 1 prints the progress, the other ranks log to
+        <data root>/logs/<case>/perturbation_<stamp>_rank<k>.log.
         """
         from mpi4py import MPI
         import sys, os
@@ -246,13 +263,11 @@ class RDA:
         rank = comm.Get_rank()
         size = comm.Get_size()
 
+        _install('perturbation')
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
-        if rank != 1:
-            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'perturbation')
-            os.makedirs(log_dir, exist_ok=True)
-            sys.stdout = open(os.path.join(log_dir, f"rank_{rank}.log"), 'w', encoding='utf-8', buffering=1)
-            sys.stderr = sys.stdout
+        '''every rank but rank 1 -> <data root>/logs/<case>/perturbation_<stamp>_rank<k>.log (line-buffered)'''
+        error_log.redirect_rank('perturbation', rank, comm, terminal_rank=1)
 
         dp = Path(RDA.setting_dir) / 'perturbation.json'
 
@@ -287,18 +302,12 @@ class RDA:
         rank = comm.Get_rank()
         size = comm.Get_size()
 
+        _install('spin_up')
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
-        if rank != 0:
-            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'spin_up')
-            os.makedirs(log_dir, exist_ok=True)
-
-            log_path = os.path.join(log_dir, f"rank_{rank}.log")
-
-            # buffering=1 enables line-buffering so every print is flushed
-            # immediately — errors are captured even if comm.Abort(1) fires
-            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            sys.stderr = sys.stdout
+        '''every rank but rank 0 -> <data root>/logs/<case>/spin_up_<stamp>_rank<k>.log, line-buffered so that
+        every print is flushed immediately and errors are captured even if comm.Abort(1) fires'''
+        error_log.redirect_rank('spin_up', rank, comm, terminal_rank=0)
 
         '''banner AFTER the redirect: rank 0 -> terminal (colour), every other rank -> top of its own log (plain)'''
         print_pyglda_banner()
@@ -336,18 +345,12 @@ class RDA:
         rank = comm.Get_rank()
         size = comm.Get_size()
 
+        _install('OL')
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
-        if rank != 0:
-            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'OL')
-            os.makedirs(log_dir, exist_ok=True)
-
-            log_path = os.path.join(log_dir, f"rank_{rank}.log")
-
-            # buffering=1 enables line-buffering so every print is flushed
-            # immediately — errors are captured even if comm.Abort(1) fires
-            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            sys.stderr = sys.stdout
+        '''every rank but rank 0 -> <data root>/logs/<case>/OL_<stamp>_rank<k>.log, line-buffered so that every
+        print is flushed immediately and errors are captured even if comm.Abort(1) fires'''
+        error_log.redirect_rank('OL', rank, comm, terminal_rank=0)
 
         '''banner AFTER the redirect: rank 0 -> terminal (colour), every other rank -> top of its own log (plain)'''
         print_pyglda_banner()
@@ -398,20 +401,18 @@ class RDA:
         rank = comm.Get_rank()
         size = comm.Get_size()
 
+        step = 'collect_%s' % stage.name
+        _install(step)
         assert size == (RDA.ens + 1), 'Not enough threads for parallelization! Required threads are %s' % (RDA.ens + 1)
 
-        if rank != 1:
-            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'collect')
-            os.makedirs(log_dir, exist_ok=True)
-
-            log_path = os.path.join(log_dir, f"rank_{rank}.log")
-
-            # buffering=1 enables line-buffering so every print is flushed
-            # immediately - otherwise the log is empty if the process is killed
-            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            sys.stderr = sys.stdout
+        '''every rank but rank 1 -> <data root>/logs/<case>/collect_<OL|DA>_<stamp>_rank<k>.log, line-buffered so
+        that the log is complete even if the process is killed'''
+        error_log.redirect_rank(step, rank, comm, terminal_rank=1)
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
+        if rank == 1:
+            run_summary.start(RDA.case, RDA.external_data_path, step, setting_dir=RDA.setting_dir, ens=RDA.ens,
+                              period=[RDA.sim_begin_time, RDA.sim_end_time], log_dir=error_log.case_log_dir(RDA.case))
 
         '''the first stage: reorganize the data over specific area'''
         state_dir = configDA.basic.OL_output_temp_dir if stage == Stage.OL else configDA.basic.DA_output_temp_dir
@@ -439,7 +440,7 @@ class RDA:
                 pass
 
         except Exception:
-            _abort_with_report(comm, rank, 'collect')
+            _abort_with_report(comm, rank, step)
 
         comm.barrier()
 
@@ -461,7 +462,7 @@ class RDA:
                 select_variables().get_basin_average()
             pass
         except Exception:
-            _abort_with_report(comm, rank, 'collect')
+            _abort_with_report(comm, rank, step)
 
         comm.barrier()
         if rank == 1:
@@ -494,6 +495,14 @@ class RDA:
                           'RDA.post_processing(stages=[Stage.%s])' % (stage.name, stage.name), flush=True)
             comm.barrier()
 
+        if rank == 1:
+            '''end record in DA_output/<case>/run_summary.json: md5 of the collected files of this stage'''
+            res_case = Path(configDA.basic.res_permanent) / RDA.case
+            outs = run_summary.list_outputs(res_case / stage.name)
+            outs['case_files'] = {f.name: run_summary.md5(f) for f in sorted(res_case.glob('*'))
+                                  if f.is_file() and f.suffix in ('.h5', '.nc') and
+                                  (stage.name in f.name or (stage == Stage.DA and f.name.startswith('GRACE_')))}
+            run_summary.finish(RDA.case, RDA.external_data_path, step, outputs=outs)
         pass
 
     @staticmethod
@@ -511,6 +520,7 @@ class RDA:
         """
         from src_DA.configure_DA import config_DA
         from src_auxiliary.clean_temp_output import clean_daily_output
+        _install('clean')
 
         if stage not in (Stage.OL, Stage.DA):
             raise ValueError('clean_temp_output: stage must be Stage.OL or Stage.DA, got %r' % (stage,))
@@ -531,6 +541,7 @@ class RDA:
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
+        _install('DA')
 
         # banner is printed inside da.run_DA(), after each rank's stdout redirect,
         # so it reaches the terminal (rank 1) and the top of every rank log
@@ -555,6 +566,14 @@ class RDA:
 
                 da.generate_perturbed_GRACE_obs()
 
+                '''DA_output/<case>/run_summary.json: start record of this DA job (src_FlowControl.run_summary)'''
+                obs = Path(da.configDA.obs.dir) / ('%s_obs_GRACE.hdf5' % RDA.basin)
+                run_summary.start(RDA.case, RDA.external_data_path, 'DA', setting_dir=RDA.setting_dir, ens=RDA.ens,
+                                  period=[RDA.sim_begin_time, RDA.sim_end_time],
+                                  log_dir=error_log.case_log_dir(RDA.case))
+                run_summary.update(RDA.case, RDA.external_data_path, 'DA',
+                                   obs_file=dict(path=str(obs), md5=run_summary.md5(obs) if obs.is_file() else None))
+
             comm.barrier()
 
             '''open-loop envelope of the bounded storages (see src_DA.Threshold), rebuilt at every DA start on all ranks:
@@ -567,6 +586,12 @@ class RDA:
         except Exception:
             _abort_with_report(comm, rank, 'DA')
 
+        comm.barrier()
+        if rank == 0:
+            '''end record: filter statistics (chi^2, innovation RMS) and the files of DA_output/<case>'''
+            d = Path(da.configDA.basic.DA_output_temp_dir) / RDA.case
+            run_summary.finish(RDA.case, RDA.external_data_path, 'DA', filter_stats=run_summary.filter_stats(d),
+                               outputs=run_summary.list_outputs(d))
         pass
 
     @staticmethod
@@ -679,7 +704,8 @@ class RDA:
           fig1..fig6                   basin series, seasonal correction per storage, groundwater drift,
                                        sub-basins, filter health, increments per window
           DA_setting.json, logs/       copies of the configuration and of the filter / clipping / adaptive-inflation
-                                       logs and the DA rank logs (parallel_logs/DA/rank_k.log); DA_output/<case> is
+                                       logs and the rank logs of the case's latest DA job
+                                       (<data root>/logs/<case>/DA_<stamp>_rank<k>.log); DA_output/<case> is
                                        temporary and overwritten by the next run
         and one row in Res/<case>/evaluation/runs_index.csv.
         tag       : name of the run, e.g. 'run1' (None: date and time)
@@ -687,6 +713,7 @@ class RDA:
         """
         from src_DA.configure_DA import config_DA
         from src_postprocessing.da_evaluation import evaluate_run
+        _install('evaluate')
 
         configDA = config_DA.loadjson(Path(RDA.setting_dir) / 'DA_setting.json').process()
         res_dir = Path(configDA.basic.res_permanent) / RDA.case
@@ -697,7 +724,7 @@ class RDA:
                             start=datetime.strptime(RDA.sim_begin_time, '%Y-%m-%d').date(),
                             thresholds=thresholds, figures_dir=res_dir / 'figures', diagnosis=diagnosis,
                             extra_files=list(extra_files or []) +
-                            sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
+                            error_log.latest_logs('DA', case=RDA.case, root=RDA.external_data_path))
 
     @staticmethod
     def export_product(version='v1.0'):
@@ -712,6 +739,7 @@ class RDA:
         Further options (output folder, anomaly baseline): src_postprocessing.export_product.product_export
         """
         from src_postprocessing.export_product import product_export
+        _install('export')
 
         return product_export(setting_dir=RDA.setting_dir, version=version).run()
 

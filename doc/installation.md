@@ -133,7 +133,8 @@ python global_run.py evaluate
   care of both (they pass the run copy of `Config_ReWaterGAP.json` and change to `src_demo/`).
 
 Rank 0 is the unperturbed control member and is never updated; one rank prints to the terminal, every other rank
-logs to `parallel_logs/<stage>/rank_k.log` at the repository root.
+logs to `<data root>/logs/<case>/<step>_<YYYYmmdd-HHMMSS>_rank<k>.log` (see §6). Nothing is written into the code
+folder at run time.
 
 ---
 
@@ -147,7 +148,13 @@ The data root holds the inputs and receives all outputs:
 | `Basin/shp/`, `Basin/mask/` | unit shapefiles (GlobalBasins v2.0, Danube, Amazon) and their 0.5° / 1° masks |
 | `GRACE/` | CSR RL06.3 mascons (`SaGEA/signal_Mascon`), DDK3 Monte-Carlo error samples (`SaGEA/sample_DDK3`, produced with SaGEA), the WaterGAP land mask (`global_mask/`), and the prepared observations |
 | `Auxiliary/` | `smax.nc` (maximum soil water content of WaterGAP); `seasonal_split_init/GMD_Global_GlobalBasins_T9.npz` (initial seasonal-split climatology read by `settings/GMD_Global`, `seasonal_split.init`), part of the external-data package (Zenodo) |
-| `Ensemble_input/`, `Ensemble_Initialization/`, `OL_output/`, `DA_output/`, `Res/`, `settings/` | written by the runs |
+| `Ensemble_input/`, `Ensemble_Initialization/`, `OL_output/`, `DA_output/`, `Res/`, `settings/` | written by the runs; `DA_output/<case>/run_summary.json` records each job step of a case (settings md5, git commit + dirty flag, observation-file md5, ensemble size, host / job, start / end, exit status, filter chi² and innovation RMS, output files with md5) |
+| `logs/` | run-time logs, written by the runs (`src_FlowControl/error_log.py`): `logs/<case>/<step>_<YYYYmmdd-HHMMSS>[_rank<k>].log` (MPI rank logs of perturbation, spin_up, OL, DA, collect_OL / collect_DA; WaterGAP's own log files `watergap-<module>_<stamp>.log`), several jobs of a case in one folder; `logs/errors_YYYY-MM.log` collects every error of every case, job and rank (uncaught exceptions, MPI rank failures before the abort, `logging` ERROR / CRITICAL, failed subprocesses with their last stderr lines, `sys.exit` with a message), one time-stamped entry per error, written under a file lock |
+
+**Retention of `logs/`.** Delete `logs/<case>/` once the case is verified and its `DA_output/<case>/run_summary.json`
+exists; keep the logs of failed runs until the cause is understood. Keep the monthly `errors_YYYY-MM.log` files (they
+are small). The data root's top level stays clean: experiment material goes under a case name inside an existing
+folder, never into a new top-level folder.
 
 ---
 

@@ -26,6 +26,7 @@ import numpy as np
 import h5py
 
 from src_FlowControl.Regional_DA import RDA
+from src_FlowControl import error_log
 from src_DA.configure_DA import grace_option
 
 
@@ -61,6 +62,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         import hashlib
         import geopandas as gpd
         from src_DA.configure_DA import config_DA
+        error_log.install(GDA.case, 'prepare', GDA.external_data_path)
 
         '''step-1: mask (the one in DA_setting.json, written by read_config_and_save)'''
         configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
@@ -139,6 +141,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         from src_OBS.prepare_GRACE_mascon import GRACE_CSR_mascon
         from src_OBS.prepare_GRACE import GRACE_preparation
         from src_DA.configure_DA import config_DA
+        error_log.install(GDA.case, 'prepare', GDA.external_data_path)
 
         configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
         kind = grace_option(configDA.obs.GRACE, 'kind')
@@ -186,6 +189,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         """
         from src_DA.configure_DA import config_DA
         from src_postprocessing.global_evaluation import evaluate_global_run
+        error_log.install(GDA.case, 'evaluate', GDA.external_data_path)
 
         configDA = config_DA.loadjson(Path(GDA.setting_dir) / 'DA_setting.json').process()
         res_dir = Path(configDA.basic.res_permanent) / GDA.case
@@ -197,7 +201,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
                                    start=datetime.strptime(GDA.sim_begin_time, '%Y-%m-%d').date(),
                                    thresholds=thresholds,
                                    extra_files=list(extra_files or []) +
-                                   sorted((Path(__file__).resolve().parents[1] / 'parallel_logs' / 'DA').glob('*.log')))
+                                   error_log.latest_logs('DA', case=GDA.case, root=GDA.external_data_path))
 
     @staticmethod
     def visualization(tag, dpi=200):

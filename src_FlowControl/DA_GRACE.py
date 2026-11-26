@@ -281,12 +281,13 @@ class DA_GRACE:
         from src_DA.observations import GRACE_obs
         from src_DA.filter_factory import build_filter
 
-        if rank != 1:
-            log_dir = str(Path(__file__).resolve().parent.parent / 'parallel_logs' / 'DA')
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, f"rank_{rank}.log")
-            sys.stdout = open(log_path, 'w', encoding='utf-8', buffering=1)
-            sys.stderr = sys.stdout
+        '''every rank but rank 1 -> <data root>/logs/<case>/DA_<stamp>_rank<k>.log (src_FlowControl.error_log; the
+        data root is the one of RDA.DA_run, else PYGLDA_DATA, else the parent of DA_output_temp_dir)'''
+        from mpi4py import MPI
+        from src_FlowControl import error_log
+        if error_log.data_root() is None:
+            error_log.install(self.case, 'DA', Path(self.configDA.basic.DA_output_temp_dir).parent)
+        error_log.redirect_rank('DA', rank, MPI.COMM_WORLD, terminal_rank=1, case=self.case)
 
         # banner AFTER the redirect: rank 1 -> terminal (colour), every other rank -> top of its own log (plain)
         print_pyglda_banner()

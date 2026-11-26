@@ -1,0 +1,28 @@
+--- upstream/watergap_logger.py
++++ local/watergap_logger.py
+@@ -2,6 +2,7 @@
+ """Logger Function."""
+ import logging
+ import datetime
++import os
+ 
+ 
+ # ===============================================================
+@@ -39,7 +40,16 @@
+     # be printed to the same log file
+     formatter = logging.Formatter('%(asctime)s:%(name)s:%(message)s',
+                                   datefmt='%Y-%m-%d %H:%M:%S')
+-    file_handler = logging.FileHandler(modname+'_'+logdate+".log")
++    # PyGLDA (review 469): with PYGLDA_LOG_DIR set (src_FlowControl.error_log.install) the log file goes to
++    # <data root>/logs/<case>/watergap-<module>_<YYYYmmdd-HHMMSS>.log instead of the working directory (src_demo/)
++    log_dir = os.environ.get('PYGLDA_LOG_DIR')
++    if log_dir:
++        os.makedirs(log_dir, exist_ok=True)
++        log_file = os.path.join(log_dir, 'watergap-%s_%s.log' % (
++            os.path.splitext(modname)[0], datetime.datetime.now().strftime('%Y%m%d-%H%M%S')))
++    else:
++        log_file = modname+'_'+logdate+".log"
++    file_handler = logging.FileHandler(log_file)
+     file_handler.setFormatter(formatter)
+     stream_handler = logging.StreamHandler()
+     stream_handler.setFormatter(formatter)

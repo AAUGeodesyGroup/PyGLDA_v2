@@ -253,4 +253,8 @@ The drivers set the case on the class `RDA` (`GDA` for the global case) and run 
 | evaluation | `da_evaluation(tag)`, `visualization(...)` | one |
 | house-keeping | `clean_temp_output(Stage.DA, dry_run=True)` | one |
 
-Logs of the MPI stages are written to `parallel_logs/<stage>/rank_k.log`; one rank prints to the terminal.
+Logs of the MPI stages are written to `<data root>/logs/<case>/<step>_<YYYYmmdd-HHMMSS>_rank<k>.log`; one rank prints
+to the terminal. Every error (any case, job or rank) is also appended, time-stamped, to `<data root>/logs/errors_YYYY-MM.log`,
+and each job step of a case is recorded in `DA_output/<case>/run_summary.json` (`src_FlowControl/error_log.py`,
+`src_FlowControl/run_summary.py`; retention rules in `doc/installation.md` §6). Own driver scripts get the errors file
+with one line at their start: `from src_FlowControl import error_log; error_log.install(case, step, data_root)`.

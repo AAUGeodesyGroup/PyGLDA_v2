@@ -13,6 +13,7 @@ Run from any folder; the case and the stage are chosen on the command line:
     mpiexec -n 31 python -u regional_run.py Danube assimilate   data assimilation and its collection
     python regional_run.py Danube evaluate                      evaluation report and figures
 The data root (inputs, GRACE, masks, outputs) is taken from the environment variable PYGLDA_DATA.
+Logs: <data root>/logs/<case>/<step>_<stamp>[_rank<k>].log; every error also goes to <data root>/logs/errors_YYYY-MM.log.
 """
 import os
 import sys
@@ -23,6 +24,7 @@ CODE_ROOT = HERE.parent
 sys.path.insert(0, str(CODE_ROOT))
 
 from src_FlowControl.Regional_DA import RDA
+from src_FlowControl import error_log
 from src_DA.EnumDA import Stage
 
 DATA_ROOT = os.environ.get('PYGLDA_DATA')
@@ -66,6 +68,7 @@ def settings(source, mpi):
 
 
 def main(name, stage, tag=None):
+    error_log.install(CASES[name]['case'], stage, DATA_ROOT)     # errors -> <data root>/logs/errors_YYYY-MM.log
     os.chdir(HERE)                                  # WaterGAP reads cf_conv.json from the working directory
     settings(configure(name), mpi=stage in ('open_loop', 'ensemble', 'assimilate'))
     sys.argv = [sys.argv[0], str(Path(RDA.setting_dir) / 'Config_ReWaterGAP.json')]   # WaterGAP's own CLI
@@ -90,4 +93,5 @@ def main(name, stage, tag=None):
 if __name__ == '__main__':
     if len(sys.argv) < 3 or sys.argv[1] not in CASES or sys.argv[2] not in STAGES:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2], tag=sys.argv[3] if len(sys.argv) > 3 else 'run')
+    with error_log.catch():
+        main(sys.argv[1], sys.argv[2], tag=sys.argv[3] if len(sys.argv) > 3 else 'run')

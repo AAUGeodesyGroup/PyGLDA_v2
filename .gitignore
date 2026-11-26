@@ -33,8 +33,8 @@ Thumbs.db
 .stversions/
 .claude/
 
-# Experiment logs, run folders and MPI logs (kept outside the repository;
-# parallel_logs/.gitkeep stays tracked)
+# Experiment logs and run folders (kept outside the repository). Run-time logs go to <data root>/logs/
+# (reviews 469 / 470); parallel_logs/ is the old location of the MPI logs (old files stay there for now)
 temp/
 parallel_logs/
 installation/env_setup.log

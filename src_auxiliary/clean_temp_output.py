@@ -95,4 +95,6 @@ if __name__ == '__main__':
     p.add_argument('--yes', action='store_true', help='actually delete (default: dry run)')
     p.add_argument('--force', action='store_true')
     a = p.parse_args()
+    from src_FlowControl import error_log          # errors -> <data root>/logs/errors_YYYY-MM.log
+    error_log.install(a.case, 'clean', Path(a.temp_dir).resolve().parent)
     clean_daily_output(a.temp_dir, a.res_dir, Stage[a.stage], case=a.case, dry_run=not a.yes, force=a.force)

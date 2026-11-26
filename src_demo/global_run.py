@@ -8,6 +8,7 @@ Run from any folder; the stages are chosen on the command line:
     mpiexec -n 31 python -u global_run.py assimilate   data assimilation and its collection
     python global_run.py evaluate                      evaluation report and figures (Res/GDA_Global/evaluation_global)
 The data root (inputs, GRACE, masks, outputs) is taken from the environment variable PYGLDA_DATA.
+Logs: <data root>/logs/<case>/<step>_<stamp>[_rank<k>].log; every error also goes to <data root>/logs/errors_YYYY-MM.log.
 """
 import os
 import sys
@@ -18,6 +19,7 @@ CODE_ROOT = HERE.parent
 sys.path.insert(0, str(CODE_ROOT))
 
 from src_FlowControl.Global_DA import GDA
+from src_FlowControl import error_log
 from src_DA.EnumDA import Stage
 
 DATA_ROOT = os.environ.get('PYGLDA_DATA')
@@ -59,6 +61,7 @@ def settings(mpi):
 
 
 def main(stage, tag=None):
+    error_log.install(GDA.case, stage, DATA_ROOT)   # errors -> <data root>/logs/errors_YYYY-MM.log
     os.chdir(HERE)                                  # WaterGAP reads cf_conv.json from the working directory
     settings(mpi=stage in ('ensemble', 'assimilate'))
     sys.argv = [sys.argv[0], str(Path(GDA.setting_dir) / 'Config_ReWaterGAP.json')]   # WaterGAP's own CLI
@@ -81,4 +84,5 @@ def main(stage, tag=None):
 if __name__ == '__main__':
     if len(sys.argv) < 2 or sys.argv[1] not in STAGES:
         sys.exit(__doc__)
-    main(sys.argv[1], tag=sys.argv[2] if len(sys.argv) > 2 else 'run')
+    with error_log.catch():
+        main(sys.argv[1], tag=sys.argv[2] if len(sys.argv) > 2 else 'run')
