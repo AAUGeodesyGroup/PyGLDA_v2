@@ -134,6 +134,16 @@ class RDA:
         configDA.basic.fromdate = RDA.sim_begin_time
         configDA.basic.todate = RDA.sim_end_time
 
+        '''seasonal_split "save" follows the case: <external_data_path>/DA_output/<case>/<file name of the setting>
+        (the settings name the file; the folder is the case's DA_output folder, created here), so two cases on the
+        same settings never overwrite each other's state and a fresh data root does not stop at the first save'''
+        ip = getattr(configDA.method, 'increment_partition', None)
+        sp = ip.get('seasonal_split') if isinstance(ip, dict) else None
+        if isinstance(sp, dict) and sp.get('save'):
+            out = Path(RDA.external_data_path) / 'DA_output' / RDA.case
+            out.mkdir(parents=True, exist_ok=True)
+            sp['save'] = str(out / Path(sp['save']).name)
+
         configDA.save_json(save_path=Path(RDA.setting_dir) / 'DA_setting.json')
 
         pass

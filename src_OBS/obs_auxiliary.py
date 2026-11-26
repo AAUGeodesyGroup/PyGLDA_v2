@@ -38,6 +38,34 @@ def gridded_nc_file(dir_in, filename=None):
     return fns[0]
 
 
+def sh_monthly_epochs(ds):
+    """
+    The solutions of a monthly gridded product (one CF NetCDF, obs.GRACE.kind = "SH_monthly") as
+    [(time index, 'YYYY-MM', first day, last day)], in file order.
+    The month of a solution is the month of the MIDPOINT of its time_bounds when the file has them (CF: upper bound
+    exclusive), else the month of its time value. Products that stamp a solution with the mean day of its data
+    (e.g. C3S/GFZ: the 11/2011 solution at 2011-10-31, the 05/2015 one at 2015-04-27) are labelled by their window,
+    not by the stamp. Without bounds the window is the calendar month.
+    """
+    cal = getattr(ds['time'], 'calendar', 'standard')
+    t = nc.num2date(ds['time'][:], ds['time'].units, cal)
+    bname = getattr(ds['time'], 'bounds', None) or 'time_bounds'
+    tb = nc.num2date(ds[bname][:], ds['time'].units, cal) if bname in ds.variables else None
+    out = []
+    for i, d in enumerate(t):
+        if tb is None:
+            first = datetime(d.year, d.month, 1)
+            last = datetime(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+            mid = first
+        else:
+            first = datetime(tb[i][0].year, tb[i][0].month, tb[i][0].day)
+            end = datetime(tb[i][1].year, tb[i][1].month, tb[i][1].day)      # exclusive
+            last = max(first, end - timedelta(days=1))
+            mid = first + (end - first) / 2
+        out.append((i, '%04d-%02d' % (mid.year, mid.month), first, last))
+    return out
+
+
 class obs_auxiliary:
     """
     1. provide a list of observation's time reference: which days the obs stand for.
@@ -125,31 +153,22 @@ class aux_GRACE_mascon_monthly(obs_auxiliary):
 class aux_GRACE_SH_monthly(obs_auxiliary):
     """time reference of a monthly gridded GRACE product (e.g. a spherical-harmonic solution gridded with SaGEA) in one
     CF NetCDF (obs.GRACE.kind = "SH_monthly"; read by prepare_GRACE.GRACE_preparation):
-    epoch = the 15th of the month of each time value, window = time_bounds if present (CF: upper bound exclusive),
-    else the calendar month; a month that occurs twice is used once"""
+    month of a solution and its window from sh_monthly_epochs (time_bounds if present, else the calendar month of the
+    time value); epoch = the 15th of that month; a month that occurs twice is used once"""
 
     def setTimeReference(self, month_begin='2002-04', month_end='2023-05', dir_in=None, filename=None):
         self._need(dir_in, 'aux_GRACE_SH_monthly')
         ds = nc.Dataset(gridded_nc_file(dir_in, filename), 'r')
-        cal = getattr(ds['time'], 'calendar', 'standard')
-        t = nc.num2date(ds['time'][:], ds['time'].units, cal)
-        bname = getattr(ds['time'], 'bounds', None) or 'time_bounds'
-        tb = nc.num2date(ds[bname][:], ds['time'].units, cal) if bname in ds.variables else None
+        sol = sh_monthly_epochs(ds)
         ds.close()
 
         time_epoch, duration, seen = [], [], set()
-        for i, d in enumerate(t):
-            m = '%04d-%02d' % (d.year, d.month)
+        for i, m, first, last in sol:
             if not (month_begin <= m <= month_end) or m in seen:
                 continue
             seen.add(m)
             time_epoch.append(m + '-15')
-            if tb is None:
-                duration.append(_month_window(d.year, d.month))
-            else:
-                first = datetime(tb[i][0].year, tb[i][0].month, tb[i][0].day)
-                last = max(first, datetime(tb[i][1].year, tb[i][1].month, tb[i][1].day) - timedelta(days=1))
-                duration.append(_window(first, last))
+            duration.append(_window(first, last))
         return self._set(time_epoch, duration)
 
 

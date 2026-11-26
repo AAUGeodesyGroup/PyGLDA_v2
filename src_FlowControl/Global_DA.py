@@ -54,7 +54,8 @@ class GDA(RDA, metaclass=_CaseToRDA):
     def check_units():
         """
         Consistency of the frozen unit set (replaces RDA.config_basin_mask: the global mask is never rebuilt here):
-        sub_basin_k of the mask = ID k of the shapefile, no empty unit, no cell in two units, mask area vs SUB_AREA,
+        sub_basin_k of the mask = ID k of the shapefile, no empty unit, no cell in two units, mask area vs the unit area
+        (column AREA of the frozen unit sets, SUB_AREA of older ones),
         md5 against <name>_settings.txt next to the shapefile (if present).
         """
         import hashlib
@@ -87,7 +88,10 @@ class GDA(RDA, metaclass=_CaseToRDA):
         with h5py.File(mp, 'r') as f:
             for k in ids:
                 area_mask[k] = float((f['sub_basin_%d' % k][:] * cell_km2).sum())
-        sub_area = units.set_index('ID').SUB_AREA
+        acol = next((c for c in ('AREA', 'SUB_AREA') if c in units.columns), None)
+        if acol is None:
+            raise KeyError('%s: no unit-area column (AREA or SUB_AREA)' % GDA.shp_path)
+        sub_area = units.set_index('ID')[acol]
         ratio = np.array([area_mask[k] / sub_area[k] for k in ids])
 
         '''step-4: md5'''
@@ -111,7 +115,7 @@ class GDA(RDA, metaclass=_CaseToRDA):
         print('units     : %d in the mask, %d in the shapefile, IDs equal: %s' % (len(ids), len(shp_ids), ids == shp_ids))
         print('cells     : %d in the mask, %d in two units, %d empty units' %
               (int(basin.sum()), int((count > 1).sum()), sum(v == 0 for v in n_cell.values())))
-        print('mask area / SUB_AREA : median %.2f, 5-95 %% %.2f-%.2f' % (np.median(ratio), *np.percentile(ratio, [5, 95])))
+        print('mask area / %s : median' % acol + ' %.2f, 5-95 %% %.2f-%.2f' % (np.median(ratio), *np.percentile(ratio, [5, 95])))
         print('md5 vs %s : %s' % (txt[0].name if txt else '(no settings file)', md5_ok))
         ok = ids == shp_ids and (count > 1).sum() == 0 and all(v > 0 for v in n_cell.values()) and md5_ok is not False
         if not ok:

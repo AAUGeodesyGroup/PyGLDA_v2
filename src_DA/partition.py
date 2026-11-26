@@ -734,6 +734,7 @@ class NonNegativePartition(Partition):
             a = max(r / self._sp_cnt[month], per_window(1.0 / sp['memory_years'], r))
         self._sp_clim[:, month] += a * (m - self._sp_clim[:, month])
         if sp.get('save'):
+            os.makedirs(os.path.dirname(os.path.abspath(sp['save'])), exist_ok=True)
             if sp.get('interannual') and self._sp_ia is not None:
                 np.savez(sp['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
             else:
@@ -779,6 +780,7 @@ class NonNegativePartition(Partition):
             b = ia['fraction'] * (r - self._sp_ia)
             self.stats['sp_ia_abs_sum'] += float(np.abs(b).sum())
             if self.seasonal_split.get('save') and self._sp_clim is not None:
+                os.makedirs(os.path.dirname(os.path.abspath(self.seasonal_split['save'])), exist_ok=True)
                 np.savez(self.seasonal_split['save'], clim=self._sp_clim, count=self._sp_cnt, ia_lp=self._sp_ia)
             c = c + b
         else:

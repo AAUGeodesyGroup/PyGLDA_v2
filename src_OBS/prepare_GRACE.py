@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import geopandas as gpd
 import netCDF4 as nc
-from src_OBS.obs_auxiliary import aux_GRACE_SH_monthly, gridded_nc_file
+from src_OBS.obs_auxiliary import aux_GRACE_SH_monthly, gridded_nc_file, sh_monthly_epochs
 from tqdm import tqdm
 
 class _GriddedNC:
@@ -41,11 +41,9 @@ class _GriddedNC:
     @staticmethod
     def _months(ds, month_begin, month_end):
         """[(time index, 'YYYY-MM')] of the file inside [month_begin, month_end]; a repeated month is used once
-        (the same months as obs_auxiliary.aux_GRACE_SH_monthly)"""
-        t = nc.num2date(ds['time'][:], ds['time'].units, getattr(ds['time'], 'calendar', 'standard'))
+        (the same months as obs_auxiliary.aux_GRACE_SH_monthly, labelled by sh_monthly_epochs)"""
         out, seen = [], set()
-        for i, d in enumerate(t):
-            m = '%04d-%02d' % (d.year, d.month)
+        for i, m, _, _ in sh_monthly_epochs(ds):
             if month_begin <= m <= month_end and m not in seen:
                 seen.add(m)
                 out.append((i, m))
@@ -248,29 +246,23 @@ class GRACE_preparation(_GriddedNC):
 
         COV = []
 
-        '''acquire time reference: cov must be consistent wih the time reference of EWH'''
+        '''acquire time reference: one covariance per observed month, in the order of the observations (EWH). The
+        sample folder may hold more months than the product (e.g. sample_DDK3 has 2016-11..2017-06, which ITSG lacks):
+        those are skipped. An observed month without samples stops here with the list of such months.'''
         time_epochs_ref = self._aux.getTimeReference()['time_epoch']
+        obs_months = [datetime.strptime(e, '%Y-%m-%d').strftime('%Y-%m') for e in time_epochs_ref]
+        in_range = {m.strftime('%Y-%m') for m in monthlist}
+        files = {}
+        for m in obs_months:
+            files[m] = next((f for f in fns if m in f), None)      # first match in sorted order
+        missing = [m for m in obs_months if m in in_range and files[m] is None]
+        if missing:
+            raise FileNotFoundError('GRACE_preparation.basin_COV: no error samples in %s for the observed month(s) %s'
+                                    % (directory, ', '.join(missing)))
 
         print('\nStart to pre-process GRACE to obtain COV over places of interest...')
-        m_index = -1
-        for month in tqdm(monthlist, desc="Processing months"):
-
-            '''search for the file'''
-            fn = month.strftime('%Y-%m')
-            tn = None
-            for filename in fns:
-                if fn in filename:
-                    tn = filename
-                    break
-
-            if tn is None:
-                continue
-
-            '''to ensure consistence with the EWH'''
-            m_index += 1
-            assert fn == datetime.strptime(time_epochs_ref[m_index], '%Y-%m-%d').strftime('%Y-%m'), '1: %s; 2: %s' % (
-                fn, datetime.strptime(time_epochs_ref[m_index], '%Y-%m-%d').strftime('%Y-%m'))
-
+        for fn in tqdm([m for m in obs_months if m in in_range], desc="Processing months"):
+            tn = files[fn]
             fn = directory / tn
 
             tws_one_month = np.load(str(fn))
