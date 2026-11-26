@@ -1,4 +1,4 @@
-"""watergap_logger.py (logs step 1, reviews 469 / 470): without PYGLDA_LOG_DIR the log file is written to the working
+"""watergap_logger.py, log folder: without PYGLDA_LOG_DIR the log file is written to the working
 directory exactly as upstream; with it, to $PYGLDA_LOG_DIR/watergap-<module>_<stamp>.log. Same message in both.
 usage: python test_watergap_logger_logdir.py <code root>        exit 0 = pass"""
 import logging, os, sys, tempfile, glob

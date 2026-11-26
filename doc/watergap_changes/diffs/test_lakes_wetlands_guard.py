@@ -1,4 +1,4 @@
-"""DA review 246: test of the lake / wetland guard. (1) _limit_ratio == plain ratio bit for bit on every input a free
+"""Test of the lake / wetland guard. (1) _limit_ratio == plain ratio bit for bit on every input a free
 run can produce (petgwr > petgwr_max >= 0); (2) 0 / 0 and negative cases return 0 instead of raising; (3) the whole
 numba function compiles and, on states at / below the floor with zero area, runs instead of raising; the original
 raises ZeroDivisionError on the same input; (4) on random free-run inputs both versions give identical outputs."""

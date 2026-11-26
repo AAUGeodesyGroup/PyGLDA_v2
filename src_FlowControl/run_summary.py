@@ -1,5 +1,5 @@
 """
-DA_output/<case>/run_summary.json (review 469): a small record of every job step of a case, kept with the outputs (not
+DA_output/<case>/run_summary.json: a small record of every job step of a case, kept with the outputs (not
 in logs/<case>/, so it survives the deletion of the logs). One entry per step (DA, collect_DA, ...), the latest job of
 that step replacing the earlier one:
 

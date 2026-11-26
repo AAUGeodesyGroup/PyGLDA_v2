@@ -7,7 +7,7 @@
 +def _limit_ratio(petgwr_max, petgwr):
 +    """
 +    Share of the outgoing fluxes (open-water evaporation, point recharge, net abstraction) that the storage can
-+    still supply when they exceed petgwr_max (PyGLDA guard, DA review 246).
++    still supply when they exceed petgwr_max (PyGLDA guard against division by zero at the storage floor).
 +
 +    In a free model run the storage never lies below its floor (-max_storage for lakes, 0 for wetlands), so
 +    petgwr_max >= 0 and petgwr > petgwr_max >= 0 whenever this is called: the ratio is petgwr_max / petgwr in

@@ -1,5 +1,5 @@
 """
-Run-time logs of PyGLDA v2 (reviews 469 / 470): everything goes to the data root, nothing into the code folder.
+Run-time logs of PyGLDA v2: everything goes to the data root, nothing into the code folder.
 
     <data root>/logs/
         errors_YYYY-MM.log                      every error of every case / job / rank, appended, one file per month

@@ -40,7 +40,7 @@ def config_logger(level, modname, msg, debug=False):
     # be printed to the same log file
     formatter = logging.Formatter('%(asctime)s:%(name)s:%(message)s',
                                   datefmt='%Y-%m-%d %H:%M:%S')
-    # PyGLDA (review 469): with PYGLDA_LOG_DIR set (src_FlowControl.error_log.install) the log file goes to
+    # PyGLDA: with PYGLDA_LOG_DIR set (src_FlowControl.error_log.install) the log file goes to
     # <data root>/logs/<case>/watergap-<module>_<YYYYmmdd-HHMMSS>.log instead of the working directory (src_demo/)
     log_dir = os.environ.get('PYGLDA_LOG_DIR')
     if log_dir:
